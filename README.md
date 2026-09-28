@@ -1,32 +1,17 @@
-# React + TypeScript + Vite
+# Crawler
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A DM dungeon mapper. Host a table in the browser; players join the same origin over WebSockets.
 
-Currently, two official plugins are available:
+## Scripts
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # Vite + Workers runtime (table relay included)
+npm run build
+npm run preview  # local Workers preview of the production build
+npm run deploy   # build, then wrangler deploy
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Deploy uses [Cloudflare Workers](https://developers.cloudflare.com/workers/) and Wrangler 4. The React app is static assets; `/crawler-sync` is a Durable Object room so every connected client sees the same path and token slide.
+
+First deploy: `npx wrangler login`, then `npm run deploy`.

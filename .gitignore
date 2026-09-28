@@ -25,3 +25,6 @@ dist-ssr
 
 # Chrome extension signing key — never commit
 *.pem
+
+.wrangler
+.dev.vars*
