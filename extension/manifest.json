@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Crawler Dice Bridge",
+  "description": "Forwards D&D Beyond characters and rolls into Crawler, including shared tables.",
+  "version": "0.2.4",
+  "host_permissions": [
+    "https://*.dndbeyond.com/*",
+    "https://character-service.dndbeyond.com/*",
+    "https://*.cursecdn.com/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.dndbeyond.com/*"],
+      "js": ["page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://*.dndbeyond.com/*"],
+      "js": ["ddb.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["crawler.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
