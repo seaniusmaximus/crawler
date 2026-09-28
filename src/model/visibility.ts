@@ -8,7 +8,7 @@ export function roomRevealed(room: Room): boolean {
 }
 
 export function tokenRevealed(player: Player): boolean {
-  return player.visible !== false
+  return player.visible === true
 }
 
 export function shownRooms(rooms: readonly Room[], mode: ViewMode): Room[] {

@@ -16,11 +16,13 @@ import { linkedGroup, makeLink, roomsThrough, sameLink } from '../model/links.ts
 import {
   anchorFromGrid,
   canPlacePlayer,
+  isMonster,
   MAX_TOKEN_HOVER,
   MAX_TOKEN_SIZE,
   MIN_TOKEN_HOVER,
   MIN_TOKEN_SIZE,
   nextCharacterName,
+  nextMonsterName,
   nextPlayerColor,
   nextPlayerName,
   normalizePlayer,
@@ -267,6 +269,7 @@ interface DungeonState {
   setOpeningOpen: (floorId: string, spots: readonly OpeningSpot[], open: boolean) => void
   toggleConnectedOpenings: (floorId: string, roomId: string, x: number, y: number) => void
   addPlayer: (floorId: string) => string | null
+  addMonster: (floorId: string) => string | null
   movePlayer: (playerId: string, floorId: string, x: number, y: number) => boolean
   renamePlayer: (playerId: string, name: string) => void
   renameCharacter: (playerId: string, characterName: string) => void
@@ -655,6 +658,46 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             stats: emptyStats(),
             statsManual: {},
             initiativeRoll: null,
+            kind: 'player',
+          },
+        ],
+      },
+    })
+    return id
+  },
+
+  addMonster: (floorId) => {
+    const dungeon = get().dungeon
+    const floor = dungeon.floors.find((item) => item.id === floorId)
+    if (!floor) return null
+    const tokens = dungeon.players ?? []
+    const spot = standOnFloor(floor, tokens)
+    if (!spot) return null
+    const id = uid()
+    const name = nextMonsterName(tokens)
+    set({
+      dungeon: {
+        ...dungeon,
+        players: [
+          ...tokens,
+          {
+            id,
+            name,
+            characterName: name,
+            portrait: null,
+            color: nextPlayerColor(tokens),
+            floorId,
+            x: spot.x,
+            y: spot.y,
+            visible: false,
+            size: 1,
+            hover: 0,
+            statuses: [],
+            characterId: null,
+            stats: emptyStats(),
+            statsManual: {},
+            initiativeRoll: null,
+            kind: 'monster',
           },
         ],
       },
@@ -841,9 +884,10 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     const characterId = info.characterId.trim()
     const name = info.name.trim()
     const match =
-      players.find((player) => characterId && player.characterId === characterId) ??
+      players.find((player) => !isMonster(player) && characterId && player.characterId === characterId) ??
       players.find(
-        (player) => name && player.characterName.toLowerCase() === name.toLowerCase(),
+        (player) =>
+          !isMonster(player) && name && player.characterName.toLowerCase() === name.toLowerCase(),
       )
     if (match) {
       const claimedName = name || match.characterName
@@ -900,6 +944,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             stats: mergeDdbStats(emptyStats(), info.stats),
             statsManual: {},
             initiativeRoll: null,
+            kind: 'player',
           },
         ],
       },

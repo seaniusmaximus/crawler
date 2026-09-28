@@ -229,6 +229,7 @@ export class MapEngine {
       movePath: this.liveMovePath(),
       ghost: this.ghostToken(players),
       tokenPose: this.liveTokenPose(dungeon.travel),
+      turnPlayerId: dungeon.combat?.turnPlayerId ?? null,
       badges: this.badges(),
       hoverLink: this.hoverLink,
       viewMode: editor.viewMode,

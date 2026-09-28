@@ -2,7 +2,13 @@ import { useRef, useState } from 'react'
 import { sortByInitiative } from '../../model/combat.ts'
 import { rollLocal } from '../../model/dice.ts'
 import { readPortraitFile } from '../../model/portrait.ts'
-import { characterNameOf, occupantRoom, playerInitials } from '../../model/players.ts'
+import {
+  characterNameOf,
+  monsterMembers,
+  occupantRoom,
+  partyMembers,
+  playerInitials,
+} from '../../model/players.ts'
 import { normalizeStats } from '../../model/stats.ts'
 import type { Player } from '../../model/types.ts'
 import { roomRevealed, tokenRevealed } from '../../model/visibility.ts'
@@ -15,98 +21,140 @@ import { MenuIcon } from '../menus/radialIcons.tsx'
 import { PlayerStats } from './PlayerStats.tsx'
 
 export function PartyList({ leftInset }: { leftInset: number }) {
-  const players = useDungeonStore((state) => state.dungeon.players ?? [])
+  const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
   const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
   const floors = useDungeonStore((state) => state.dungeon.floors)
   const viewMode = useEditorStore((state) => state.viewMode)
   const role = useSessionStore((state) => state.role)
-  const ordered = sortByInitiative(players)
-  const listed =
-    viewMode === 'player'
-      ? ordered.filter((player) => {
-          if (!tokenRevealed(player)) return false
-          const floor = floors.find((item) => item.id === player.floorId)
-          if (!floor) return false
-          const room = occupantRoom(floor.rooms, player.x, player.y)
-          return !room || roomRevealed(room)
-        })
-      : ordered
+  const ordered = sortByInitiative(tokens)
+  const ranks = new Map(ordered.map((token, index) => [token.id, index + 1]))
+  const visibleOnMap = (player: Player): boolean => {
+    if (viewMode !== 'player') return true
+    if (!tokenRevealed(player)) return false
+    const floor = floors.find((item) => item.id === player.floorId)
+    if (!floor) return false
+    const room = occupantRoom(floor.rooms, player.x, player.y)
+    return !room || roomRevealed(room)
+  }
+  const party = partyMembers(ordered).filter(visibleOnMap)
+  const monsters = monsterMembers(ordered).filter(visibleOnMap)
   const canRun = role !== 'guest'
-  const hasRolls = players.some((player) => player.initiativeRoll != null)
+  const hasRolls = tokens.some((token) => token.initiativeRoll != null)
+  const showMonsters = viewMode !== 'player' || monsters.length > 0
 
-  function add(): void {
+  function addPlayer(): void {
     const id = useDungeonStore.getState().addPlayer(getActiveFloor().id)
     if (id) useEditorStore.getState().selectPlayer(id)
   }
 
+  function addMonster(): void {
+    const id = useDungeonStore.getState().addMonster(getActiveFloor().id)
+    if (id) useEditorStore.getState().selectPlayer(id)
+  }
+
   function rollOutstanding(): void {
-    for (const player of players) {
-      if (player.initiativeRoll != null) continue
-      const bonus = normalizeStats(player.stats).initiative ?? 0
+    for (const token of tokens) {
+      if (token.initiativeRoll != null) continue
+      const bonus = normalizeStats(token.stats).initiative ?? 0
       const roll = rollLocal(1, 20, bonus)
       useDiceStore.getState().ingest({
         ...roll,
         title: 'Initiative',
         kind: 'initiative',
-        character: characterNameOf(player),
-        characterId: player.characterId ?? undefined,
+        character: characterNameOf(token),
+        characterId: token.characterId ?? undefined,
       })
     }
   }
 
   return (
-    <section className="party">
-      <header className="party-head">
-        <span>Party</span>
-        {viewMode === 'player' ? null : (
-          <button type="button" className="party-add" onClick={add}>
-            Add
-          </button>
-        )}
-      </header>
-      {canRun && players.length > 0 ? (
-        <div className="party-turn">
-          <button type="button" className="party-add" onClick={rollOutstanding}>
-            Roll init
-          </button>
-          <button type="button" className="party-add" onClick={() => useDungeonStore.getState().advanceTurn()}>
-            Next
-          </button>
-          {hasRolls ? (
-            <button type="button" className="party-add" onClick={() => useDungeonStore.getState().clearInitiative()}>
-              Clear
+    <>
+      <section className="party">
+        <header className="party-head">
+          <span>Party</span>
+          {viewMode === 'player' ? null : (
+            <button type="button" className="party-add" onClick={addPlayer}>
+              Add
             </button>
-          ) : null}
-        </div>
+          )}
+        </header>
+        {canRun && tokens.length > 0 ? (
+          <div className="party-turn">
+            <button type="button" className="party-add" onClick={rollOutstanding}>
+              Roll init
+            </button>
+            <button type="button" className="party-add" onClick={() => useDungeonStore.getState().advanceTurn()}>
+              Next
+            </button>
+            {hasRolls ? (
+              <button type="button" className="party-add" onClick={() => useDungeonStore.getState().clearInitiative()}>
+                Clear
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {party.length === 0 ? (
+          <p className="party-empty">
+            {viewMode === 'player'
+              ? 'No visible players'
+              : 'Add a player, then drag their token onto a floor tile'}
+          </p>
+        ) : (
+          party.map((player) => (
+            <PlayerCard
+              key={player.id}
+              player={player}
+              variant="player"
+              rank={hasRolls ? ranks.get(player.id) ?? null : null}
+              active={turnPlayerId === player.id}
+              leftInset={leftInset}
+            />
+          ))
+        )}
+      </section>
+      {showMonsters ? (
+        <section className="party">
+          <header className="party-head">
+            <span>Monsters</span>
+            {viewMode === 'player' ? null : (
+              <button type="button" className="party-add" onClick={addMonster}>
+                Add
+              </button>
+            )}
+          </header>
+          {monsters.length === 0 ? (
+            <p className="party-empty">
+              {viewMode === 'player'
+                ? 'No visible monsters'
+                : 'Add a monster — hidden from players until you reveal it'}
+            </p>
+          ) : (
+            monsters.map((player) => (
+              <PlayerCard
+                key={player.id}
+                player={player}
+                variant="monster"
+                rank={hasRolls ? ranks.get(player.id) ?? null : null}
+                active={turnPlayerId === player.id}
+                leftInset={leftInset}
+              />
+            ))
+          )}
+        </section>
       ) : null}
-      {listed.length === 0 ? (
-        <p className="party-empty">
-          {viewMode === 'player'
-            ? 'No visible players'
-            : 'Add a player, then drag their token onto a floor tile'}
-        </p>
-      ) : (
-        listed.map((player, index) => (
-          <PlayerCard
-            key={player.id}
-            player={player}
-            rank={hasRolls ? index + 1 : null}
-            active={turnPlayerId === player.id}
-            leftInset={leftInset}
-          />
-        ))
-      )}
-    </section>
+    </>
   )
 }
 
 function PlayerCard({
   player,
+  variant,
   rank,
   active,
   leftInset,
 }: {
   player: Player
+  variant: 'player' | 'monster'
   rank: number | null
   active: boolean
   leftInset: number
@@ -117,12 +165,13 @@ function PlayerCard({
   const fileRef = useRef<HTMLInputElement>(null)
   const [editing, setEditing] = useState<null | 'player' | 'character'>(null)
   const [draft, setDraft] = useState('')
-  const visible = player.visible !== false
+  const visible = player.visible === true
   const character = characterNameOf(player)
   const initials = playerInitials(character)
   const mine = useSessionStore((state) => state.myPlayerId === player.id)
   const role = useSessionStore((state) => state.role)
-  const canEditNames = role !== 'guest' || mine
+  const canEditNames = variant === 'monster' ? role !== 'guest' : role !== 'guest' || mine
+  const monster = variant === 'monster'
 
   function focus(): void {
     useEditorStore.getState().focusPlayer(player.id, leftInset)
@@ -142,7 +191,10 @@ function PlayerCard({
 
   function commitEdit(): void {
     if (editing === 'player') useDungeonStore.getState().renamePlayer(player.id, draft)
-    if (editing === 'character') useDungeonStore.getState().renameCharacter(player.id, draft)
+    if (editing === 'character') {
+      useDungeonStore.getState().renameCharacter(player.id, draft)
+      if (monster) useDungeonStore.getState().renamePlayer(player.id, draft)
+    }
     setEditing(null)
   }
 
@@ -166,7 +218,7 @@ function PlayerCard({
 
   return (
     <fieldset
-      className={`player-card${selected ? ' is-selected' : ''}${hovered ? ' is-hovered' : ''}${active ? ' is-turn' : ''}`}
+      className={`player-card${monster ? ' is-monster' : ''}${selected ? ' is-selected' : ''}${hovered ? ' is-hovered' : ''}${active ? ' is-turn' : ''}`}
       onPointerEnter={() => useEditorStore.getState().setHoverPlayer(player.id)}
       onPointerLeave={() => useEditorStore.getState().setHoverPlayer(null)}
     >
@@ -202,26 +254,27 @@ function PlayerCard({
           }}
         />
         <div className="player-copy">
-          {editing === 'player' ? (
-            nameInput('player')
-          ) : (
-            <button
-              type="button"
-              className="player-user-btn"
-              title={canEditNames ? 'Player name — double-click to edit' : 'Player name'}
-              onClick={focus}
-              onDoubleClick={() => beginEdit('player')}
-            >
-              {player.name}
-            </button>
-          )}
+          {!monster &&
+            (editing === 'player' ? (
+              nameInput('player')
+            ) : (
+              <button
+                type="button"
+                className="player-user-btn"
+                title={canEditNames ? 'Player name — double-click to edit' : 'Player name'}
+                onClick={focus}
+                onDoubleClick={() => beginEdit('player')}
+              >
+                {player.name}
+              </button>
+            ))}
           {editing === 'character' ? (
             nameInput('character')
           ) : (
             <button
               type="button"
               className="player-char-btn"
-              title={canEditNames ? 'Character name — double-click to edit' : 'Character name'}
+              title={canEditNames ? `${monster ? 'Monster' : 'Character'} name — double-click to edit` : 'Name'}
               onClick={focus}
               onDoubleClick={() => beginEdit('character')}
             >
@@ -249,7 +302,7 @@ function PlayerCard({
               type="button"
               className="icon-btn is-danger"
               aria-label={`Remove ${character}`}
-              title="Remove player"
+              title={monster ? 'Remove monster' : 'Remove player'}
               onClick={(event) => {
                 event.stopPropagation()
                 useDungeonStore.getState().deletePlayer(player.id)

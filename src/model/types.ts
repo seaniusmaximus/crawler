@@ -131,6 +131,8 @@ export interface Player {
   statsManual: StatsManual
   /** Latest initiative check total (d20 + bonus). Null until they roll. */
   initiativeRoll: number | null
+  /** Monsters share the token and initiative pool but are DM-owned. */
+  kind: 'player' | 'monster'
 }
 
 /** Quarter-turns clockwise of a 2:1 iso view. Continuous yaw would stop being isometric. */

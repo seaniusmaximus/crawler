@@ -548,6 +548,10 @@ body,
   margin-bottom: 0;
 }
 
+.player-card.is-monster {
+  border-color: rgba(196, 92, 38, 0.45);
+}
+
 .player-head,
 .floor-head {
   display: flex;

@@ -255,6 +255,8 @@ function wireSync(): void {
 
 export function canControlPlayer(playerId: string): boolean {
   const session = useSessionStore.getState()
+  const token = useDungeonStore.getState().dungeon.players.find((player) => player.id === playerId)
+  if (token?.kind === 'monster') return session.role !== 'guest'
   if (session.role !== 'guest') return true
   return session.myPlayerId === playerId
 }

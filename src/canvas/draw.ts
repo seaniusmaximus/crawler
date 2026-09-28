@@ -102,6 +102,7 @@ export interface DrawView {
   movePath: { playerId: string; cells: readonly Cell[]; feet: number } | null
   ghost: { player: Player; x: number; y: number } | null
   tokenPose: { playerId: string; x: number; y: number; tilt: number } | null
+  turnPlayerId: string | null
   viewMode: ViewMode
   tileCache: TileCache
 }
@@ -993,6 +994,14 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
       drawAirShadow(ctx, ground, standee)
       drawAirColumn(ctx, ground, pos, standee)
     }
+    const turnWreath =
+      player.id === view.turnPlayerId && (view.viewMode !== 'player' || player.visible)
+    if (turnWreath) {
+      ctx.save()
+      ctx.globalAlpha = 1
+      drawTurnWreath(ctx, pos.x, pos.y, standee.rx, standee.ry, 'back')
+      ctx.restore()
+    }
     drawStandee(
       ctx,
       pos,
@@ -1006,6 +1015,12 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
       statuses,
       cell.tilt,
     )
+    if (turnWreath) {
+      ctx.save()
+      ctx.globalAlpha = 1
+      drawTurnWreath(ctx, pos.x, pos.y, standee.rx, standee.ry, 'front')
+      ctx.restore()
+    }
     if (air > 0) {
       drawAirChip(ctx, `${air} ft`, pos.x + standee.width / 2 + 6, pos.y - standee.height * 0.55)
     }
@@ -1023,6 +1038,181 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
     ctx.globalAlpha = 1
   }
   drawGhostToken(ctx, view)
+}
+
+function wreathArcSpan(start: number, end: number, dir: number): number {
+  let span = end - start
+  if (dir > 0) {
+    while (span <= 0) span += Math.PI * 2
+  } else {
+    while (span >= 0) span -= Math.PI * 2
+  }
+  return span
+}
+
+function wreathLeafAngles(
+  start: number,
+  end: number,
+  dir: number,
+  count: number,
+  rx: number,
+  ry: number,
+): number[] {
+  const span = wreathArcSpan(start, end, dir)
+  const samples = 48
+  const angles: number[] = [start]
+  const lens: number[] = [0]
+  let dist = 0
+  let px = Math.cos(start) * rx
+  let py = Math.sin(start) * ry
+  for (let i = 1; i <= samples; i++) {
+    const a = start + (span * i) / samples
+    const x = Math.cos(a) * rx
+    const y = Math.sin(a) * ry
+    dist += Math.hypot(x - px, y - py)
+    angles.push(a)
+    lens.push(dist)
+    px = x
+    py = y
+  }
+  const total = dist || 1
+  const slots: number[] = []
+  for (let i = 0; i < count; i++) {
+    const target = ((i + 0.12) / Math.max(1, count - 0.25)) * total
+    let k = 1
+    while (k < lens.length && lens[k] < target) k++
+    const before = lens[k - 1] ?? 0
+    const after = lens[k] ?? before
+    const t = (target - before) / Math.max(1e-6, after - before)
+    slots.push((angles[k - 1] ?? start) + ((angles[k] ?? end) - (angles[k - 1] ?? start)) * t)
+  }
+  return slots
+}
+
+function wrapAngleDelta(delta: number): number {
+  let value = delta
+  while (value > Math.PI) value -= Math.PI * 2
+  while (value < -Math.PI) value += Math.PI * 2
+  return value
+}
+
+function drawLaurelLeaf(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  angle: number,
+  length: number,
+  width: number,
+  fill: string,
+): void {
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.rotate(angle)
+  ctx.beginPath()
+  ctx.moveTo(length * 0.04, 0)
+  ctx.bezierCurveTo(length * 0.3, width, length * 0.66, width * 0.95, length, 0)
+  ctx.bezierCurveTo(length * 0.66, -width * 0.95, length * 0.3, -width, length * 0.04, 0)
+  ctx.closePath()
+  ctx.fillStyle = fill
+  ctx.fill()
+  ctx.restore()
+}
+
+function drawWreathBranch(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rx: number,
+  ry: number,
+  start: number,
+  end: number,
+  dir: number,
+  leafLen: number,
+): void {
+  const leafWidth = leafLen * 0.4
+  const angles = wreathLeafAngles(start, end, dir, 17, rx, ry)
+  for (let i = 0; i < angles.length; i++) {
+    const a = angles[i]
+    if (a == null) continue
+    const outer = i % 2 === 0
+    const tx = -rx * Math.sin(a) * dir
+    const ty = ry * Math.cos(a) * dir
+    let nx = Math.cos(a) / rx
+    let ny = Math.sin(a) / ry
+    const nlen = Math.hypot(nx, ny) || 1
+    nx /= nlen
+    ny /= nlen
+    const along = Math.atan2(ty, tx)
+    const flare = wrapAngleDelta(Math.atan2(ny, nx) - along)
+    const tip = Math.abs(Math.cos(a))
+    const tilt = (outer ? 0.5 : 0.14) * (1 - tip * 0.4)
+    const angle = along + Math.sign(flare || dir) * tilt
+    const offset = (outer ? leafLen * 0.26 : -leafLen * 0.12) * (1 - tip * 0.2)
+    const px = x + Math.cos(a) * rx + nx * offset
+    const py = y + Math.sin(a) * ry + ny * offset
+    const scale = (outer ? 1 : 0.86) * (1 - tip * 0.36)
+    drawLaurelLeaf(
+      ctx,
+      px,
+      py,
+      angle,
+      leafLen * scale,
+      leafWidth * scale,
+      outer ? 'rgba(120, 211, 155, 0.62)' : 'rgba(86, 168, 118, 0.55)',
+    )
+  }
+}
+
+function drawTurnWreath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  rx: number,
+  ry: number,
+  half: 'back' | 'front',
+): void {
+  const gap = Math.max(5, ry * 0.55)
+  const leafLen = Math.max(5.8, ry * 0.82)
+  const stemRx = rx + gap + leafLen * 0.22
+  const stemRy = ry + gap + leafLen * 0.22
+  const extent = Math.max(stemRx, stemRy) + leafLen + 4
+  ctx.save()
+  ctx.beginPath()
+  if (half === 'back') ctx.rect(x - extent, y - extent, extent * 2, extent + 1.2)
+  else ctx.rect(x - extent, y - 1.2, extent * 2, extent)
+  ctx.clip()
+  const join = 0.28
+  const opening = 0.52
+  drawWreathBranch(
+    ctx,
+    x,
+    y,
+    stemRx,
+    stemRy,
+    Math.PI / 2 + join,
+    Math.PI * 1.5 - opening,
+    1,
+    leafLen,
+  )
+  drawWreathBranch(
+    ctx,
+    x,
+    y,
+    stemRx,
+    stemRy,
+    Math.PI / 2 - join,
+    -Math.PI / 2 + opening,
+    -1,
+    leafLen,
+  )
+  if (half === 'front') {
+    const dotRx = Math.max(1.5, ry * 0.12)
+    ctx.beginPath()
+    ctx.ellipse(x, y + stemRy, dotRx, dotRx * 0.55, 0, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(120, 211, 155, 0.72)'
+    ctx.fill()
+  }
+  ctx.restore()
 }
 
 function drawGhostToken(ctx: CanvasRenderingContext2D, view: DrawView): void {

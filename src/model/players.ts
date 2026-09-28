@@ -69,13 +69,33 @@ export function playerStatuses(player: Pick<Player, 'statuses'>): StatusId[] {
   return uniqueStatuses(player.statuses)
 }
 
+export function tokenKind(player: Pick<Player, 'kind'>): 'player' | 'monster' {
+  return player.kind === 'monster' ? 'monster' : 'player'
+}
+
+export function isMonster(player: Pick<Player, 'kind'>): boolean {
+  return tokenKind(player) === 'monster'
+}
+
+export function partyMembers(tokens: readonly Player[]): Player[] {
+  return tokens.filter((token) => !isMonster(token))
+}
+
+export function monsterMembers(tokens: readonly Player[]): Player[] {
+  return tokens.filter(isMonster)
+}
+
 export function normalizePlayer(player: Player): Player {
+  const kind = tokenKind(player)
+  const fallback = kind === 'monster' ? 'Monster' : 'Player'
+  const characterFallback = kind === 'monster' ? fallback : 'Character'
   return {
     ...player,
-    name: player.name || 'Player',
-    characterName: player.characterName || player.name || 'Character',
+    kind,
+    name: player.name || fallback,
+    characterName: player.characterName || player.name || characterFallback,
     portrait: player.portrait ?? null,
-    visible: player.visible !== false,
+    visible: kind === 'monster' ? player.visible === true : player.visible !== false,
     size: playerSize(player),
     hover: playerHover(player),
     statuses: player.statuses ?? [],
@@ -190,17 +210,24 @@ export function findStandable(
 }
 
 export function nextPlayerName(players: readonly Player[]): string {
-  const used = new Set(players.map((player) => player.name))
+  const used = new Set(partyMembers(players).map((player) => player.name))
   let n = 1
   while (used.has(`Player ${n}`)) n++
   return `Player ${n}`
 }
 
 export function nextCharacterName(players: readonly Player[]): string {
-  const used = new Set(players.map((player) => player.characterName))
+  const used = new Set(partyMembers(players).map((player) => player.characterName))
   let n = 1
   while (used.has(`Character ${n}`)) n++
   return `Character ${n}`
+}
+
+export function nextMonsterName(tokens: readonly Player[]): string {
+  const used = new Set(monsterMembers(tokens).map((token) => characterNameOf(token)))
+  let n = 1
+  while (used.has(`Monster ${n}`)) n++
+  return `Monster ${n}`
 }
 
 export function characterNameOf(player: Player): string {
