@@ -3,6 +3,7 @@ import { MapStage } from '../canvas/MapStage.tsx'
 import { FloorPanel, PANEL_WIDTH } from '../features/floors/FloorPanel.tsx'
 import { FloorSwitcher } from '../features/floors/FloorSwitcher.tsx'
 import { RadialMenu } from '../features/menus/RadialMenu.tsx'
+import { StairUsePrompt } from '../features/stairs/StairUsePrompt.tsx'
 import { StairsPrompt } from '../features/stairs/StairsPrompt.tsx'
 import { CameraControls } from '../features/tools/CameraControls.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
@@ -53,6 +54,7 @@ export function EditorPage() {
       )}
       <RadialMenu />
       <StairsPrompt />
+      <StairUsePrompt />
     </div>
   )
 }

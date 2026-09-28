@@ -35,6 +35,13 @@ function glyph(id: string): ReactNode {
           <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" strokeWidth="2" />
         </>
       )
+    case 'look':
+      return (
+        <>
+          <circle cx="12" cy="12" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" />
+          <path {...stroke} d="M12 4v3M12 17v3M4 12h3M17 12h3" />
+        </>
+      )
     case 'hide':
       return (
         <>

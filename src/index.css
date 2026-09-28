@@ -1300,11 +1300,30 @@ span.party-portrait {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
+.radial-core.is-action {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.radial-core.is-action span {
+  white-space: normal;
+}
+
+.radial-core.is-action:hover,
+.radial-core.is-action:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
 .radial-core span {
   max-width: 56px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
 }
 
 .radial-core small {
@@ -1468,6 +1487,7 @@ span.party-portrait {
 
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -1521,10 +1541,17 @@ span.party-portrait {
   pointer-events: none;
 }
 
-.dice-tab {
+.dice-tabs {
   position: absolute;
   left: 100%;
   top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.dice-tab {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1539,7 +1566,6 @@ span.party-portrait {
   color: var(--text);
   font: inherit;
   cursor: pointer;
-  pointer-events: auto;
 }
 
 .dice-tab:hover {
@@ -1565,18 +1591,6 @@ span.party-portrait {
   color: var(--accent);
 }
 
-.dice-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  box-sizing: border-box;
-  width: 100%;
-  gap: 8px;
-  padding: 2px 2px 8px;
-  font-size: 13px;
-  font-weight: 650;
-}
-
 .dice-pip {
   width: 7px;
   height: 7px;
@@ -1593,33 +1607,6 @@ span.party-portrait {
   min-width: 1.5em;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
-}
-
-.dice-head-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.dice-text-btn {
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 11px;
-  padding: 3px 7px;
-  cursor: pointer;
-}
-
-.dice-text-btn:hover,
-.dice-text-btn.is-active {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.dice-text-btn.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 .dice-body {

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { rotateAt } from '../canvas/camera.ts'
 import type { DoorStyle, Tool } from '../model/tools.ts'
-import type { StairLanding } from '../model/stairs.ts'
+import type { StairLanding, StairUsePrompt } from '../model/stairs.ts'
 import type { ViewMode } from '../model/visibility.ts'
 import type { Camera, StairsDir } from '../model/types.ts'
 
@@ -57,6 +57,7 @@ interface EditorState {
   menu: Menu | null
   focus: FocusRequest | null
   stairsPrompt: StairLanding[] | null
+  stairUse: StairUsePrompt | null
   viewMode: ViewMode
   setCamera: (camera: Camera) => void
   setViewport: (width: number, height: number) => void
@@ -78,6 +79,8 @@ interface EditorState {
   focusPlayer: (playerId: string, leftInset: number) => void
   promptStairLandings: (landings: StairLanding[]) => void
   closeStairsPrompt: () => void
+  promptStairUse: (prompt: StairUsePrompt) => void
+  closeStairUse: () => void
   setViewMode: (mode: ViewMode) => void
 }
 
@@ -97,6 +100,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   menu: null,
   focus: null,
   stairsPrompt: null,
+  stairUse: null,
   viewMode: 'dm',
   setCamera: (camera) => set({ camera }),
   setViewport: (width, height) => set({ viewport: { width, height } }),
@@ -165,6 +169,8 @@ export const useEditorStore = create<EditorState>((set) => ({
     }),
   promptStairLandings: (landings) => set({ stairsPrompt: landings.length > 0 ? landings : null }),
   closeStairsPrompt: () => set({ stairsPrompt: null }),
+  promptStairUse: (stairUse) => set({ stairUse: stairUse.exits.length > 0 ? stairUse : null }),
+  closeStairUse: () => set({ stairUse: null }),
   setViewMode: (viewMode) =>
     set({ viewMode, menu: null, resizeRoomId: null, linkRoomId: null, hoverRoomId: null }),
 }))

@@ -3,6 +3,7 @@ import { normalizeRect, resizeRect, topmostRoomAt, translateRect } from '../mode
 import { featureAt, isFeatureTool, pendingFeature, stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import type { FeatureDraft, FeatureTool, Tool } from '../model/tools.ts'
 import { pathFeet, tokenTrail } from '../model/movement.ts'
+import { stairsEnteredOnPath, stairExits } from '../model/stairs.ts'
 import { travelPose } from '../model/travel.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import {
@@ -815,6 +816,24 @@ export class MapEngine {
     useDungeonStore.getState().finishTravel()
     useSessionStore.getState().reportMove(travel.playerId, travel.floorId, travel.ghostX, travel.ghostY)
     useSessionStore.getState().reportTravel(null)
+    this.offerStairs(travel)
+  }
+
+  private offerStairs(travel: TokenTravel): void {
+    const dungeon = useDungeonStore.getState().dungeon
+    const floor = dungeon.floors.find((item) => item.id === travel.floorId)
+    const player = (dungeon.players ?? []).find((item) => item.id === travel.playerId)
+    if (!floor || !player) return
+    const hit = stairsEnteredOnPath(floor.rooms, travel.cells, playerSize(player))
+    if (!hit) return
+    const exits = stairExits(dungeon.floors, floor, hit.room, hit.x, hit.y)
+    if (exits.length === 0) return
+    useEditorStore.getState().promptStairUse({
+      playerId: travel.playerId,
+      x: hit.x,
+      y: hit.y,
+      exits,
+    })
   }
 
   private liveMovePath(): MovePath | null {
@@ -1107,7 +1126,8 @@ export class MapEngine {
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    if (useEditorStore.getState().stairsPrompt && event.code !== 'Escape') return
+    const blocked = useEditorStore.getState()
+    if ((blocked.stairsPrompt || blocked.stairUse) && event.code !== 'Escape') return
     if (event.code === 'Space') {
       if (isTyping(event.target)) return
       this.spaceDown = true
@@ -1132,6 +1152,7 @@ export class MapEngine {
       editor.endResize()
       editor.setLinkRoom(null)
       editor.closeStairsPrompt()
+      editor.closeStairUse()
       if (editor.viewMode !== 'player') editor.setTool('select')
       this.markDirty()
     }
@@ -1201,7 +1222,7 @@ export class MapEngine {
       if (isTyping(event.target)) return
       const editor = useEditorStore.getState()
       if (editor.viewMode === 'player') return
-      if (editor.stairsPrompt) return
+      if (editor.stairsPrompt || editor.stairUse) return
       if (editor.selectedPlayerId) {
         useDungeonStore.getState().deletePlayer(editor.selectedPlayerId)
         editor.selectPlayer(null)

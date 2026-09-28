@@ -15,32 +15,31 @@ export function DiceTray() {
 
   return (
     <aside className={`dice-tray${open ? '' : ' is-collapsed'}`} data-dice-tray="1">
-      <button
-        type="button"
-        className="dice-tab"
-        onClick={() => useDiceStore.getState().setOpen(!open)}
-        aria-expanded={open}
-        aria-label={open ? 'Collapse dice tray' : 'Expand dice tray'}
-      >
-        <span className={`dice-pip${bridge === 'connected' ? ' is-on' : ''}`} />
-        <span className="dice-tab-label">Dice</span>
-        {!open && latest ? <span className="dice-mini-total">{latest.total}</span> : null}
-        <span className="dice-tab-caret" aria-hidden="true">
-          {open ? '‹' : '›'}
-        </span>
-      </button>
-
-      {open ? (
-        <header className="dice-head">
-          {rolls.length > 0 ? (
-            <div className="dice-head-actions">
-              <button type="button" className="dice-text-btn" onClick={() => useDiceStore.getState().clear()}>
-                Clear
-              </button>
-            </div>
-          ) : null}
-        </header>
-      ) : null}
+      <div className="dice-tabs">
+        <button
+          type="button"
+          className="dice-tab"
+          onClick={() => useDiceStore.getState().setOpen(!open)}
+          aria-expanded={open}
+          aria-label={open ? 'Collapse dice tray' : 'Expand dice tray'}
+        >
+          <span className={`dice-pip${bridge === 'connected' ? ' is-on' : ''}`} />
+          <span className="dice-tab-label">Dice</span>
+          {!open && latest ? <span className="dice-mini-total">{latest.total}</span> : null}
+          <span className="dice-tab-caret" aria-hidden="true">
+            {open ? '‹' : '›'}
+          </span>
+        </button>
+        {rolls.length > 0 ? (
+          <button
+            type="button"
+            className="dice-tab"
+            onClick={() => useDiceStore.getState().clear()}
+          >
+            <span className="dice-tab-label">Clear</span>
+          </button>
+        ) : null}
+      </div>
 
       {open ? (
         <div className="dice-body">

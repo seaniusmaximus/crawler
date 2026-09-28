@@ -10,6 +10,8 @@ import type { Player, Room } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import type { OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
+import { useSessionStore } from '../../state/sessionStore.ts'
+import { PANEL_WIDTH } from '../floors/FloorPanel.tsx'
 import {
   RadialWheel,
   WHEEL_INNER,
@@ -105,6 +107,13 @@ function RoomRadial({
     setRenaming(true)
   }
 
+  function lookHere(): void {
+    useDungeonStore.getState().setRoomVisible(floorId, room.id, true)
+    useEditorStore.getState().focusRoom(floorId, room.id, PANEL_WIDTH)
+    useSessionStore.getState().reportFocus(floorId, room.id)
+    closeMenu()
+  }
+
   function commitRename(): void {
     useDungeonStore.getState().renameRoom(floorId, room.id, draftName)
     setRenaming(false)
@@ -119,8 +128,8 @@ function RoomRadial({
       onContextMenu={(event) => event.preventDefault()}
     >
       {renaming ? null : <RadialWheel slices={slices} onChoose={(id) => choose(id as ItemId)} />}
-      <div className={`radial-core${renaming ? ' is-editing' : ''}`} title={room.name}>
-        {renaming ? (
+      {renaming ? (
+        <div className="radial-core is-editing" title={room.name}>
           <input
             ref={inputRef}
             className="radial-input"
@@ -133,10 +142,20 @@ function RoomRadial({
             }}
             onBlur={commitRename}
           />
-        ) : (
-          <span>{room.name}</span>
-        )}
-      </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="radial-core is-action"
+          title={`Pull player vision to ${room.name}`}
+          onClick={lookHere}
+        >
+          <span>
+            Look here
+            <small>{room.name}</small>
+          </span>
+        </button>
+      )}
     </div>
   )
 }

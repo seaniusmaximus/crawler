@@ -37,6 +37,7 @@ interface SessionState {
   reportPlayer: (playerId: string) => void
   reportOpening: (floorId: string, roomId: string, x: number, y: number) => void
   reportTravel: (travel: TokenTravel | null) => void
+  reportFocus: (floorId: string, roomId: string) => void
 }
 
 const clientId = crypto.randomUUID()
@@ -83,12 +84,24 @@ function scheduleSnapshot(): void {
 }
 
 function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void {
+  const session = useSessionStore.getState()
+  const mine = session.myPlayerId ?? message.you?.[clientId] ?? null
+  const prevFloor = mine
+    ? useDungeonStore.getState().dungeon.players.find((player) => player.id === mine)?.floorId
+    : null
   applyRemote(() => {
     useDungeonStore.getState().replaceDungeon(message.dungeon)
     useDiceStore.getState().replaceRolls(message.rolls)
-    const mine = message.you?.[clientId]
-    if (mine) useSessionStore.setState({ myPlayerId: mine })
+    const claimed = message.you?.[clientId]
+    if (claimed) useSessionStore.setState({ myPlayerId: claimed })
   })
+  const playerId = useSessionStore.getState().myPlayerId
+  const player = playerId
+    ? useDungeonStore.getState().dungeon.players.find((item) => item.id === playerId)
+    : null
+  if (player && prevFloor && player.floorId !== prevFloor) {
+    useEditorStore.getState().focusPlayer(player.id, 260)
+  }
 }
 
 function upsertPeer(peers: SessionPeer[], next: SessionPeer): SessionPeer[] {
@@ -155,6 +168,10 @@ function handleGuestMessage(message: NetMessage): void {
   }
   if (message.type === 'dice') {
     applyRemote(() => useDiceStore.getState().ingest(message.rolls))
+    return
+  }
+  if (message.type === 'focus') {
+    useEditorStore.getState().focusRoom(message.floorId, message.roomId, 260)
   }
 }
 
@@ -382,6 +399,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reportTravel: (travel) => {
     if (get().role !== 'guest') return
     send({ type: 'travel', travel })
+  },
+
+  reportFocus: (floorId, roomId) => {
+    if (get().role === 'guest') return
+    send({ type: 'focus', floorId, roomId })
   },
 }))
 

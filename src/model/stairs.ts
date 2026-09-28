@@ -1,6 +1,8 @@
 import { floorAtOrder } from './floors.ts'
+import { occupantRoom, playerFootprint } from './players.ts'
 import { rectsOverlap } from './rect.ts'
-import type { CellRect, Floor, Room, StairsBlock, StairsDir } from './types.ts'
+import { stairsAt } from './tiles.ts'
+import type { Cell, CellRect, Floor, Room, StairsBlock, StairsDir } from './types.ts'
 
 export function linkedFloors(dir: StairsDir): Array<{ delta: number; inverse: StairsDir }> {
   if (dir === 'up') return [{ delta: 1, inverse: 'down' }]
@@ -79,6 +81,82 @@ export function roomStairLandings(
     }
   }
   return found
+}
+
+export interface StairExit {
+  dir: 'up' | 'down'
+  floorId: string
+  floorName: string
+  roomId: string
+  roomName: string
+}
+
+export interface StairUsePrompt {
+  playerId: string
+  x: number
+  y: number
+  exits: StairExit[]
+}
+
+/** Stairs the token landed on, if the move started off a staircase. */
+export function stairsEnteredOnPath(
+  rooms: readonly Room[],
+  cells: readonly Cell[],
+  size = 1,
+): {
+  x: number
+  y: number
+  room: Room
+} | null {
+  const start = cells[0]
+  const end = cells[cells.length - 1]
+  if (!start || !end) return null
+  if (stairFoot(rooms, start.x, start.y, size)) return null
+  return stairFoot(rooms, end.x, end.y, size)
+}
+
+function stairFoot(
+  rooms: readonly Room[],
+  x: number,
+  y: number,
+  size: number,
+): { x: number; y: number; room: Room } | null {
+  for (const foot of playerFootprint(x, y, size)) {
+    const room = occupantRoom(rooms, foot.x, foot.y)
+    if (room && stairsAt(room, foot.x, foot.y)) return { x: foot.x, y: foot.y, room }
+  }
+  return null
+}
+
+/** Floors a staircase at `x,y` can actually deliver a token to. */
+export function stairExits(
+  floors: readonly Floor[],
+  source: Floor,
+  room: Room,
+  x: number,
+  y: number,
+): StairExit[] {
+  const block = stairsAt(room, x, y)
+  if (!block) return []
+  const exits: StairExit[] = []
+  for (const link of linkedFloors(block.dir)) {
+    const floor = floorAtOrder(floors, source.order + link.delta)
+    if (!floor) continue
+    const dest =
+      floor.rooms.find((other) => {
+        const twin = stairsAt(other, x, y)
+        return Boolean(twin && (twin.dir === link.inverse || twin.dir === 'both'))
+      }) ?? occupantRoom(floor.rooms, x, y)
+    if (!dest) continue
+    exits.push({
+      dir: link.delta > 0 ? 'up' : 'down',
+      floorId: floor.id,
+      floorName: floor.name,
+      roomId: dest.id,
+      roomName: dest.name,
+    })
+  }
+  return exits
 }
 
 /** Drop the connection that pointed at the erased stairs; a lone leftover vanishes. */

@@ -25,6 +25,7 @@ export type NetMessage =
   | { type: 'opening'; floorId: string; roomId: string; x: number; y: number }
   | { type: 'dice'; rolls: DiceRoll[] }
   | { type: 'travel'; travel: TokenTravel | null }
+  | { type: 'focus'; floorId: string; roomId: string }
 
 export function isNetMessage(value: unknown): value is NetMessage {
   return Boolean(value && typeof value === 'object' && 'type' in value)
