@@ -3,6 +3,9 @@
   "name": "Crawler Dice Bridge",
   "description": "Forwards D&D Beyond characters and rolls into Crawler, including shared tables.",
   "version": "0.2.4",
+  "icons": {
+    "128": "icon-128.png"
+  },
   "host_permissions": [
     "https://*.dndbeyond.com/*",
     "https://character-service.dndbeyond.com/*",

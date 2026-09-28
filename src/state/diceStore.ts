@@ -16,12 +16,10 @@ export type BridgeStatus = 'disconnected' | 'connected'
 interface DiceState {
   rolls: DiceRoll[]
   open: boolean
-  help: boolean
   count: number
   modifier: number
   bridge: BridgeStatus
   setOpen: (open: boolean) => void
-  setHelp: (help: boolean) => void
   setCount: (count: number) => void
   setModifier: (modifier: number) => void
   roll: (faces: number) => void
@@ -38,12 +36,10 @@ export function getDiceBridge(): Pick<DiceState, 'ingest' | 'markBridge'> {
 export const useDiceStore = create<DiceState>((set) => ({
   rolls: [],
   open: true,
-  help: false,
   count: 1,
   modifier: 0,
   bridge: 'disconnected',
-  setOpen: (open) => set(open ? { open } : { open, help: false }),
-  setHelp: (help) => set(help ? { help, open: true } : { help }),
+  setOpen: (open) => set({ open }),
   setCount: (count) =>
     set({ count: Math.max(1, Math.min(MAX_DIE_COUNT, Math.round(count) || 1)) }),
   setModifier: (modifier) =>
