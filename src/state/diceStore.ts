@@ -19,6 +19,8 @@ interface DiceState {
   count: number
   modifier: number
   bridge: BridgeStatus
+  // True once the extension has announced itself this page load; stays true if it later goes stale.
+  bridgeSeen: boolean
   setOpen: (open: boolean) => void
   setCount: (count: number) => void
   setModifier: (modifier: number) => void
@@ -39,6 +41,7 @@ export const useDiceStore = create<DiceState>((set) => ({
   count: 1,
   modifier: 0,
   bridge: 'disconnected',
+  bridgeSeen: false,
   setOpen: (open) => set({ open }),
   setCount: (count) =>
     set({ count: Math.max(1, Math.min(MAX_DIE_COUNT, Math.round(count) || 1)) }),
@@ -71,7 +74,7 @@ export const useDiceStore = create<DiceState>((set) => ({
     }),
   replaceRolls: (rolls) => set({ rolls: rolls.slice(0, MAX_ROLL_LOG), open: true }),
   markBridge: (connected) =>
-    set({ bridge: connected ? 'connected' : 'disconnected' }),
+    set(connected ? { bridge: 'connected', bridgeSeen: true } : { bridge: 'disconnected' }),
   clear: () => set({ rolls: [] }),
 }))
 

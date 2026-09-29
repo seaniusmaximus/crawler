@@ -1577,6 +1577,11 @@ span.party-portrait {
   background: rgba(36, 37, 45, 0.98);
 }
 
+.dice-tab.is-install {
+  color: var(--accent);
+  text-decoration: none;
+}
+
 .dice-tab-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);

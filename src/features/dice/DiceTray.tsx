@@ -1,7 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { DIE_FACES, formatModifier, rollAccent, type DiceRoll } from '../../model/dice.ts'
 import { useDiceStore } from '../../state/diceStore.ts'
 import { startDiceBridge } from './bridge.ts'
+
+const EXTENSION_URL =
+  'https://chromewebstore.google.com/detail/crawler-dice-bridge/bpgbfbpckmbljndpmoncdjpeniepplbb'
+// The extension announces itself within ~1s of the tray mounting; give it some slack.
+const BRIDGE_GRACE_MS = 5000
 
 export function DiceTray() {
   const open = useDiceStore((state) => state.open)
@@ -11,7 +16,14 @@ export function DiceTray() {
   const bridge = useDiceStore((state) => state.bridge)
   const latest = rolls[0] ?? null
 
+  const bridgeSeen = useDiceStore((state) => state.bridgeSeen)
+  const [graceOver, setGraceOver] = useState(false)
+
   useEffect(() => startDiceBridge(), [])
+  useEffect(() => {
+    const timer = window.setTimeout(() => setGraceOver(true), BRIDGE_GRACE_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   return (
     <aside className={`dice-tray${open ? '' : ' is-collapsed'}`} data-dice-tray="1">
@@ -38,6 +50,20 @@ export function DiceTray() {
           >
             <span className="dice-tab-label">Clear</span>
           </button>
+        ) : null}
+        {graceOver && !bridgeSeen ? (
+          <a
+            className="dice-tab is-install"
+            href={EXTENSION_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Install the Crawler Dice Bridge extension to send D&D Beyond rolls here"
+          >
+            <span className="dice-tab-label">Get Bridge</span>
+            <span className="dice-tab-caret" aria-hidden="true">
+              ↗
+            </span>
+          </a>
         ) : null}
       </div>
 
