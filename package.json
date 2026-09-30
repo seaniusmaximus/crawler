@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "tiles": "node tools/tilesets/build.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -131,7 +131,9 @@ function buildFormula(dice: DieResult[], modifier: number | null): string {
     .sort((a, b) => a[0] - b[0])
     .map(([faces, count]) => `${count}d${faces}`)
     .join('+')
-  return `${body || 'roll'}${formatModifier(modifier ?? 0)}`
+  // A roll reported by total alone (the D&D Beyond notification) has no dice to describe.
+  if (!body) return ''
+  return `${body}${formatModifier(modifier ?? 0)}`
 }
 
 function finiteNumber(value: unknown): number | null {

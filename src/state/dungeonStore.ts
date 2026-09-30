@@ -44,7 +44,7 @@ import {
 import type { DiceRoll } from '../model/dice.ts'
 import { normalizeTravel, sameTravel } from '../model/travel.ts'
 import type { TokenTravel } from '../model/travel.ts'
-import { emptyStats, mergeDdbStats, normalizeStats } from '../model/stats.ts'
+import { emptyStats, isTextStat, mergeDdbStats, normalizeStats } from '../model/stats.ts'
 import type { CharacterStats, StatKey } from '../model/stats.ts'
 import type { StatusId } from '../model/status.ts'
 import { shiftRamp } from '../model/ramps.ts'
@@ -293,6 +293,7 @@ interface DungeonState {
   advanceTurn: () => void
   clearInitiative: () => void
   setTravel: (travel: TokenTravel | null) => void
+  setTileset: (id: string) => void
   playTravel: () => void
   finishTravel: () => void
 }
@@ -959,9 +960,11 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         players: (get().dungeon.players ?? []).map((player) => {
           if (player.id !== playerId) return player
           const stats = normalizeStats(player.stats)
-          if (key === 'klass') stats.klass = String(value ?? '').trim()
-          else stats[key] = value == null || value === '' ? null : Math.round(Number(value))
-          if (key !== 'klass' && !Number.isFinite(stats[key] as number)) stats[key] = null
+          if (isTextStat(key)) stats[key] = String(value ?? '').trim()
+          else {
+            stats[key] = value == null || value === '' ? null : Math.round(Number(value))
+            if (!Number.isFinite(stats[key] as number)) stats[key] = null
+          }
           return {
             ...player,
             stats,
@@ -1008,6 +1011,12 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         players: (dungeon.players ?? []).map((player) => ({ ...player, initiativeRoll: null })),
       },
     })
+  },
+
+  setTileset: (id) => {
+    const dungeon = get().dungeon
+    if (dungeon.tileset === id) return
+    set({ dungeon: { ...dungeon, tileset: id } })
   },
 
   setTravel: (travel) => {

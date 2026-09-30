@@ -13,6 +13,11 @@ function spot(degrees: number): { x: number; y: number } {
   }
 }
 
+/** `count` evenly spaced seats, clockwise from twelve o'clock, so a ring with fewer actions has no gaps. */
+export function ringSeats(count: number): Array<{ x: number; y: number }> {
+  return Array.from({ length: count }, (_, index) => spot((index * 360) / count))
+}
+
 /** Five evenly spaced seats, clockwise from twelve o'clock, as in the design's token ring. */
 export const RING_SPOTS = {
   top: spot(0),

@@ -14,6 +14,7 @@ import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
 import { hpTone } from './tokenInfo.ts'
+import { rollAbilityCheck } from './tokenRolls.ts'
 import type { Editing } from './useStatEditing.ts'
 
 const PASSIVE_NAME: Record<(typeof PASSIVE_KEYS)[number], string> = {
@@ -60,71 +61,73 @@ export function EditableValue({
   )
 }
 
+/** Damage and healing for tokens Crawler owns outright, such as monsters. */
+export function HpAdjust({ player, stats }: { player: Player; stats: CharacterStats }) {
+  const [amount, setAmount] = useState('')
+  const temp = stats.hpTemp != null && stats.hpTemp > 0 ? stats.hpTemp : 0
+  if (stats.hp == null) return null
+  const hp = stats.hp
+
+  function apply(sign: 1 | -1): void {
+    const value = Math.abs(Math.round(Number(amount)))
+    if (!value) return
+    const store = useDungeonStore.getState()
+    if (sign < 0) {
+      const absorbed = Math.min(temp, value)
+      if (absorbed > 0) store.setPlayerStat(player.id, 'hpTemp', temp - absorbed)
+      store.setPlayerStat(player.id, 'hp', Math.max(0, hp - (value - absorbed)))
+    } else {
+      const healed = hp + value
+      store.setPlayerStat(player.id, 'hp', stats.hpMax != null ? Math.min(stats.hpMax, healed) : healed)
+    }
+    setAmount('')
+  }
+
+  return (
+    <form
+      className="hp-adjust"
+      onSubmit={(event) => {
+        event.preventDefault()
+        apply(-1)
+      }}
+    >
+      <button type="button" className="soft-btn is-damage" onClick={() => apply(-1)}>
+        Damage
+      </button>
+      <label className="hp-amount">
+        <span className="sr-only">Amount</span>
+        <input
+          inputMode="numeric"
+          value={amount}
+          placeholder="0"
+          onChange={(event) => setAmount(event.target.value.replace(/[^0-9]/g, ''))}
+          onKeyDown={(event) => event.stopPropagation()}
+        />
+      </label>
+      <button type="button" className="soft-btn is-heal" onClick={() => apply(1)}>
+        Heal
+      </button>
+    </form>
+  )
+}
+
+/** Hit points as a readout and bar; the numbers themselves are click-to-edit. */
 export function HpBlock({
   player,
   stats,
   editable,
   editing,
   setEditing,
-  compact = false,
 }: {
   player: Player
   stats: CharacterStats
   editable: boolean
   editing: Editing
   setEditing: (key: Editing) => void
-  compact?: boolean
 }) {
-  const [amount, setAmount] = useState('')
   const ratio = hpRatio(stats.hp, stats.hpMax)
   const tone = hpTone(stats.hp, stats.hpMax)
   const temp = stats.hpTemp != null && stats.hpTemp > 0 ? stats.hpTemp : 0
-
-  function apply(sign: 1 | -1): void {
-    const value = Math.abs(Math.round(Number(amount)))
-    if (!value || stats.hp == null) return
-    const store = useDungeonStore.getState()
-    if (sign < 0) {
-      const absorbed = Math.min(temp, value)
-      if (absorbed > 0) store.setPlayerStat(player.id, 'hpTemp', temp - absorbed)
-      store.setPlayerStat(player.id, 'hp', Math.max(0, stats.hp - (value - absorbed)))
-    } else {
-      const healed = stats.hp + value
-      store.setPlayerStat(player.id, 'hp', stats.hpMax != null ? Math.min(stats.hpMax, healed) : healed)
-    }
-    setAmount('')
-  }
-
-  const adjust =
-    editable && stats.hp != null ? (
-      <form
-        className="hp-adjust"
-        onSubmit={(event) => {
-          event.preventDefault()
-          apply(-1)
-        }}
-      >
-        <button type="button" className="soft-btn is-damage" onClick={() => apply(-1)}>
-          Damage
-        </button>
-        <label className="hp-amount">
-          <span className="sr-only">Amount</span>
-          <input
-            inputMode="numeric"
-            value={amount}
-            placeholder="0"
-            onChange={(event) => setAmount(event.target.value.replace(/[^0-9]/g, ''))}
-            onKeyDown={(event) => event.stopPropagation()}
-          />
-        </label>
-        <button type="button" className="soft-btn is-heal" onClick={() => apply(1)}>
-          Heal
-        </button>
-      </form>
-    ) : null
-
-  // A stat block already lists its hit points; it only needs the damage row.
-  if (compact) return adjust
 
   return (
     <div className="hp-block">
@@ -170,18 +173,19 @@ export function HpBlock({
       <span className="hp-bar is-thick">
         <span className={`hp-fill is-${tone}`} style={{ width: `${(ratio ?? 0) * 100}%` }} />
       </span>
-      {adjust}
     </div>
   )
 }
 
 export function AbilityGrid({
+  player,
   stats,
   editable,
   editing,
   setEditing,
   commit,
 }: {
+  player: Player
   stats: CharacterStats
   editable: boolean
   editing: Editing
@@ -193,21 +197,39 @@ export function AbilityGrid({
       {ABILITY_KEYS.map((key) => {
         const mod = displayedAbilityMod(stats, key)
         const modKey = ABILITY_MOD_KEY[key]
+        const label = ABILITY_LABEL[key]
+        // Whoever may edit the sheet may roll from it; the roll lands in the shared dice log.
+        const canRoll = editable && mod != null
         return (
           <div key={key} className="ability">
-            <span className="kicker">{ABILITY_LABEL[key]}</span>
-            <EditableValue
-              label={`${ABILITY_LABEL[key]} modifier`}
-              value={mod}
-              display={mod == null ? '–' : formatSigned(mod)}
-              editing={editing === modKey}
-              editable={editable}
-              className="ability-mod"
-              onEdit={() => setEditing(modKey)}
-              onCommit={(value) => commit(modKey, value)}
-              onCancel={() => setEditing(null)}
-            />
-            <span className="ability-score">{stats[key] ?? ''}</span>
+            <button
+              type="button"
+              className="ability-roll"
+              disabled={!canRoll}
+              onClick={() => mod != null && rollAbilityCheck(player, key, mod)}
+              title={canRoll ? `Roll ${label} check (d20 ${mod < 0 ? '−' : '+'} ${Math.abs(mod)})` : label}
+            >
+              <span className="kicker">{label}</span>
+              <span className="ability-mod">{mod == null ? '–' : formatSigned(mod)}</span>
+            </button>
+            {editable && editing === modKey ? (
+              <StatInput
+                label={`${label} modifier`}
+                value={mod}
+                onCommit={(value) => commit(modKey, value)}
+                onCancel={() => setEditing(null)}
+              />
+            ) : (
+              <button
+                type="button"
+                className="ability-score"
+                disabled={!editable}
+                onClick={() => setEditing(modKey)}
+                title={editable ? `Edit ${label} modifier` : undefined}
+              >
+                {stats[key] ?? (editable ? 'edit' : '')}
+              </button>
+            )}
           </div>
         )
       })}

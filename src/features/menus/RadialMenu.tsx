@@ -21,7 +21,7 @@ import { useEditorStore } from '../../state/editorStore.ts'
 import type { OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Ring, RingButton, RingCore, RingStepper } from './Ring.tsx'
-import { RING_SIZE, RING_SPOTS, RING_SPOTS_SIX } from './ringLayout.ts'
+import { RING_SIZE, RING_SPOTS, RING_SPOTS_SIX, ringSeats } from './ringLayout.ts'
 
 /** Right-click menus for tokens, rooms and doors, laid out as a ring around the click. */
 export function RadialMenu() {
@@ -182,6 +182,8 @@ function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
   const store = useDungeonStore.getState()
   // Players never open a foe's stat block.
   const canOpenSheet = player.kind !== 'monster' || viewMode !== 'player'
+  // Visibility is the DM's call; a player at the table cannot hide their own token.
+  const canHide = useSessionStore((state) => state.role !== 'guest')
 
   if (pickingStatus) {
     return (
@@ -216,62 +218,83 @@ function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
     )
   }
 
+  // Clockwise from twelve o'clock; each control takes the next evenly spaced seat.
+  type Seat = { x: number; y: number }
+  const controls: Array<(spot: Seat) => ReactNode> = []
+  if (canOpenSheet) {
+    controls.push((spot) => (
+      <RingButton
+        key="sheet"
+        spot={spot}
+        icon="person"
+        label="Sheet"
+        title={player.kind === 'monster' ? 'Open stat block' : 'Open character sheet'}
+        onClick={() => {
+          const editor = useEditorStore.getState()
+          editor.openSheet(player.id)
+          editor.closeMenu()
+        }}
+      />
+    ))
+  }
+  controls.push((spot) => (
+    <RingButton
+      key="status"
+      spot={spot}
+      icon="heart"
+      label="Status"
+      active={statuses.length > 0}
+      title={statuses.length > 0 ? `${statuses.length} active` : 'Set conditions'}
+      onClick={() => setPickingStatus(true)}
+    />
+  ))
+  controls.push((spot) => (
+    <RingStepper
+      key="height"
+      spot={spot}
+      label="Height above floor"
+      value={`${hover * FEET_PER_TILE} ft`}
+      caption="HEIGHT"
+      incLabel={`Raise ${FEET_PER_TILE} ft`}
+      decLabel={`Lower ${FEET_PER_TILE} ft`}
+      onInc={() => store.nudgePlayerHover(player.id, 1)}
+      onDec={() => store.nudgePlayerHover(player.id, -1)}
+      incDisabled={hover >= MAX_TOKEN_HOVER}
+      decDisabled={hover <= MIN_TOKEN_HOVER}
+    />
+  ))
+  controls.push((spot) => (
+    <RingStepper
+      key="size"
+      spot={spot}
+      label="Token size"
+      value={`${size * FEET_PER_TILE} ft`}
+      caption="SIZE"
+      incLabel={`Larger (+${FEET_PER_TILE} ft)`}
+      decLabel={`Smaller (−${FEET_PER_TILE} ft)`}
+      onInc={() => store.nudgePlayerSize(player.id, 1)}
+      onDec={() => store.nudgePlayerSize(player.id, -1)}
+      incDisabled={size >= MAX_TOKEN_SIZE}
+      decDisabled={size <= MIN_TOKEN_SIZE}
+    />
+  ))
+  if (canHide) {
+    controls.push((spot) => (
+      <RingButton
+        key="visible"
+        spot={spot}
+        icon={visible ? 'eyeOff' : 'eye'}
+        label={visible ? 'Hide' : 'Reveal'}
+        title={visible ? 'Hide from players' : 'Reveal to players'}
+        onClick={() => store.setPlayerVisible(player.id, !visible)}
+      />
+    ))
+  }
+  const seats = ringSeats(controls.length)
+
   return (
     <RingFrame menu={menu}>
-      <Ring>
-        {canOpenSheet ? (
-          <RingButton
-            spot={RING_SPOTS.top}
-            icon="person"
-            label="Sheet"
-            title={player.kind === 'monster' ? 'Open stat block' : 'Open character sheet'}
-            onClick={() => {
-              const editor = useEditorStore.getState()
-              editor.openSheet(player.id)
-              editor.closeMenu()
-            }}
-          />
-        ) : null}
-        <RingButton
-          spot={RING_SPOTS.upperRight}
-          icon="heart"
-          label="Status"
-          active={statuses.length > 0}
-          title={statuses.length > 0 ? `${statuses.length} active` : 'Set conditions'}
-          onClick={() => setPickingStatus(true)}
-        />
-        <RingButton
-          spot={RING_SPOTS.upperLeft}
-          icon={visible ? 'eyeOff' : 'eye'}
-          label={visible ? 'Hide' : 'Reveal'}
-          title={visible ? 'Hide from players' : 'Reveal to players'}
-          onClick={() => store.setPlayerVisible(player.id, !visible)}
-        />
-        <RingStepper
-          spot={RING_SPOTS.lowerRight}
-          label="Height above floor"
-          value={`${hover * FEET_PER_TILE} ft`}
-          caption="HEIGHT"
-          incLabel={`Raise ${FEET_PER_TILE} ft`}
-          decLabel={`Lower ${FEET_PER_TILE} ft`}
-          onInc={() => store.nudgePlayerHover(player.id, 1)}
-          onDec={() => store.nudgePlayerHover(player.id, -1)}
-          incDisabled={hover >= MAX_TOKEN_HOVER}
-          decDisabled={hover <= MIN_TOKEN_HOVER}
-        />
-        <RingStepper
-          spot={RING_SPOTS.lowerLeft}
-          label="Token size"
-          value={`${size * FEET_PER_TILE} ft`}
-          caption="SIZE"
-          incLabel={`Larger (+${FEET_PER_TILE} ft)`}
-          decLabel={`Smaller (−${FEET_PER_TILE} ft)`}
-          onInc={() => store.nudgePlayerSize(player.id, 1)}
-          onDec={() => store.nudgePlayerSize(player.id, -1)}
-          incDisabled={size >= MAX_TOKEN_SIZE}
-          decDisabled={size <= MIN_TOKEN_SIZE}
-        />
-      </Ring>
+      <Ring>{controls.map((render, index) => render(seats[index]))}</Ring>
     </RingFrame>
   )
 }

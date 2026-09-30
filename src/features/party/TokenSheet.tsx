@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { readPortraitFile } from '../../model/portrait.ts'
 import { characterNameOf, playerStatuses } from '../../model/players.ts'
 import { formatSigned, hpRatio, normalizeStats, type CharacterStats } from '../../model/stats.ts'
@@ -9,8 +9,8 @@ import { useEditorStore } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Divider, Icon } from '../../ui/Icon.tsx'
-import { rollInitiativeFor } from './initiative.ts'
-import { AbilityGrid, EditableValue, HpBlock, Passives } from './PlayerStats.tsx'
+import { rollInitiativeFor } from './tokenRolls.ts'
+import { AbilityGrid, EditableValue, HpAdjust, HpBlock, Passives } from './PlayerStats.tsx'
 import { useStatEditing } from './useStatEditing.ts'
 import { hpTone, placeLabel, tokenPlace } from './tokenInfo.ts'
 
@@ -46,35 +46,48 @@ function CharacterSheet({ player }: { player: Player }) {
   const { editing, setEditing, commit } = useStatEditing(player)
   const role = useSessionStore((state) => state.role)
   const dm = viewMode !== 'player' && role !== 'guest'
-  const subline = [stats.klass, stats.level != null ? `Lv ${stats.level}` : '', player.name].filter(Boolean)
+  const identity = [stats.race, stats.klass].filter(Boolean).join(' ')
+  const subline = [identity, stats.level != null ? `Lv ${stats.level}` : ''].filter(Boolean)
+  const textKeys = (event: KeyboardEvent<HTMLInputElement>) => {
+    event.stopPropagation()
+    if (event.key === 'Enter') event.currentTarget.blur()
+    if (event.key === 'Escape') setEditing(null)
+  }
 
   return (
     <aside className="panel sheet is-party" aria-label={`${characterNameOf(player)} character sheet`}>
       <SheetHead player={player} editable={editable} size={50}>
         <span className="sheet-sub">
           {editable && editing === 'klass' ? (
-            <input
-              className="stat-input is-wide"
-              defaultValue={stats.klass}
-              autoFocus
-              aria-label="Class"
-              placeholder="Class"
-              onBlur={(event) => commit('klass', event.target.value)}
-              onKeyDown={(event) => {
-                event.stopPropagation()
-                if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
-                if (event.key === 'Escape') setEditing(null)
-              }}
-            />
+            <span className="sheet-sub-edit">
+              <input
+                className="stat-input is-race"
+                defaultValue={stats.race}
+                autoFocus
+                aria-label="Race"
+                placeholder="Race"
+                // Saved without closing, so Tab moves on to the class field.
+                onBlur={(event) => useDungeonStore.getState().setPlayerStat(player.id, 'race', event.target.value)}
+                onKeyDown={textKeys}
+              />
+              <input
+                className="stat-input is-wide"
+                defaultValue={stats.klass}
+                aria-label="Class"
+                placeholder="Class"
+                onBlur={(event) => commit('klass', event.target.value)}
+                onKeyDown={textKeys}
+              />
+            </span>
           ) : (
             <button
               type="button"
               className="link-text"
               disabled={!editable}
               onClick={() => setEditing('klass')}
-              title={editable ? 'Edit class' : undefined}
+              title={editable ? 'Edit race and class' : undefined}
             >
-              {subline.join(' · ') || (editable ? 'Add class' : '')}
+              {subline.join(' · ') || (editable ? 'Add race and class' : '')}
             </button>
           )}
         </span>
@@ -122,7 +135,7 @@ function CharacterSheet({ player }: { player: Player }) {
 
       <Divider />
 
-      <AbilityGrid stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
+      <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
       <Passives stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
 
       <Conditions player={player} />
@@ -249,9 +262,9 @@ function StatBlock({ player }: { player: Player }) {
 
       <Divider tone="foe" />
 
-      <AbilityGrid stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
+      <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
 
-      <HpBlock player={player} stats={stats} editable={editable} editing={null} setEditing={setEditing} compact />
+      {editable ? <HpAdjust player={player} stats={stats} /> : null}
 
       <Conditions player={player} />
 

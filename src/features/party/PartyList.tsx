@@ -10,7 +10,7 @@ import { useSessionStore } from '../../state/sessionStore.ts'
 import { getActiveFloor } from '../../state/selectors.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
-import { rollInitiativeFor } from './initiative.ts'
+import { rollInitiativeFor } from './tokenRolls.ts'
 import { hpTone, tokenPlace, tokenShown, woundLabel } from './tokenInfo.ts'
 
 function toggleSheet(player: Player): void {
@@ -37,7 +37,6 @@ export function PartyCard() {
   const role = useSessionStore((state) => state.role)
   const party = partyMembers(useOrderedTokens())
   const canRun = role !== 'guest' && viewMode !== 'player'
-  const hasRolls = tokens.some((token) => token.initiativeRoll != null)
 
   function addPlayer(): void {
     const id = useDungeonStore.getState().addPlayer(getActiveFloor().id)
@@ -51,30 +50,9 @@ export function PartyCard() {
           <Diamond />
           <span>The Party</span>
         </h2>
-        {canRun && tokens.length > 0 ? (
-          <div className="panel-head-tools">
-            {hasRolls ? (
-              <button
-                type="button"
-                className="text-btn"
-                onClick={() => useDungeonStore.getState().clearInitiative()}
-                title="Clear every initiative roll"
-              >
-                Clear
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="icon-btn is-accent"
-              aria-label="Next turn"
-              title="Next turn"
-              onClick={() => useDungeonStore.getState().advanceTurn()}
-            >
-              <Icon id="nextTurn" />
-            </button>
-          </div>
-        ) : null}
       </header>
+
+      {canRun && tokens.length > 0 ? <InitiativeBar tokens={tokens} turnPlayerId={turnPlayerId} /> : null}
 
       <div className="token-list">
         {party.length === 0 ? (
@@ -94,15 +72,84 @@ export function PartyCard() {
             <Icon id="plus" size={15} />
             Add player
           </button>
-          {tokens.length > 0 ? (
-            <button type="button" className="dashed-btn" onClick={() => rollInitiativeFor(tokens)}>
-              <Icon id="d20" size={15} />
-              Roll initiative
-            </button>
-          ) : null}
         </div>
       ) : null}
     </section>
+  )
+}
+
+/**
+ * The DM's combat controls, spelled out: what state initiative is in, and the
+ * one or two actions that make sense from there.
+ */
+function InitiativeBar({ tokens, turnPlayerId }: { tokens: readonly Player[]; turnPlayerId: string | null }) {
+  const current = tokens.find((token) => token.id === turnPlayerId)
+  const rolled = tokens.filter((token) => token.initiativeRoll != null).length
+  const unrolled = tokens.length - rolled
+  const store = useDungeonStore.getState()
+
+  if (rolled === 0) {
+    return (
+      <div className="init-bar">
+        <div className="init-status">
+          <span className="kicker">Initiative</span>
+          <span className="init-state">Not rolled</span>
+        </div>
+        <div className="init-actions">
+          <button type="button" className="init-primary" onClick={() => rollInitiativeFor(tokens)}>
+            <Icon id="d20" size={15} />
+            Roll initiative
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`init-bar${current ? ' is-live' : ''}`}>
+      <div className="init-status">
+        <span className="kicker">{current ? 'In combat' : 'Initiative'}</span>
+        {current ? (
+          <span className="init-state">
+            <Avatar player={current} size={22} turn />
+            <span>
+              <strong>{characterNameOf(current)}</strong>&apos;s turn
+            </span>
+          </span>
+        ) : (
+          <span className="init-state">Ready to start</span>
+        )}
+        {unrolled > 0 ? (
+          <button
+            type="button"
+            className="init-link"
+            onClick={() => rollInitiativeFor(tokens)}
+            title="Roll for everyone who has not rolled yet"
+          >
+            Roll {unrolled} more
+          </button>
+        ) : null}
+      </div>
+      <div className="init-actions">
+        <button
+          type="button"
+          className="init-primary"
+          onClick={() => store.advanceTurn()}
+          title={current ? 'Pass the turn to the next in initiative order' : 'Begin with the highest initiative'}
+        >
+          {current ? 'Next turn' : 'Start'}
+          <Icon id="nextTurn" size={15} />
+        </button>
+        <button
+          type="button"
+          className="init-secondary"
+          onClick={() => store.clearInitiative()}
+          title="End the encounter and clear everyone's initiative"
+        >
+          End combat
+        </button>
+      </div>
+    </div>
   )
 }
 

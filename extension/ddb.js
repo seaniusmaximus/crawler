@@ -265,15 +265,21 @@ function scrapePassives() {
 
 function scrapeStats() {
   const levelText = firstText([
+    '.ddbc-character-progression-summary__level',
+    '[class*="progression-summary__level"]',
     '.ddbc-character-tidbits__level',
     '.ct-character-tidbits__level',
     '[class*="character-tidbits__level"]',
   ])
+  // e.g. "Fighter 11 / Barbarian 4"
   const klass = firstText([
+    '.ddbc-character-summary__classes',
+    '[class*="character-summary__classes"]',
     '.ddbc-character-tidbits__classes',
     '.ct-character-tidbits__classes',
     '[class*="character-tidbits__classes"]',
   ])
+  const race = firstText(['.ddbc-character-summary__race', '[class*="character-summary__race"]'])
   return {
     ...scrapeHp(),
     ac: firstNumber([
@@ -298,6 +304,7 @@ function scrapeStats() {
     ]),
     level: num(levelText.replace(/level/i, '').match(/\d+/)?.[0]),
     klass: klass || null,
+    race: race || null,
     ...scrapeAbilities(),
     ...scrapePassives(),
   }
@@ -336,99 +343,62 @@ function requestCharacter() {
   characterTimer = window.setTimeout(() => void sendCharacter(), 250)
 }
 
-// ---------- Rolls from the sheet's result popups ----------
+// ---------- Rolls from the sheet's roll notifications ----------
 
-const CARD_SELECTOR = '.dice_result, [class*="dice_result"], [class*="DiceResult"]'
-/** How long a popup's text must hold still before it counts, so a total that animates in is read once. */
+// D&D Beyond announces each roll in a small notification, e.g.
+// "Ronoabar Oathsworn Rolled [Frozen Mercury Greatsword to hit] [27]".
+// Its class names are generated ("tss-6qmmpv-MessageTotal"), so match on the
+// readable suffix. It shows the action and total only: no formula or dice.
+const MESSAGE_SELECTOR = '[class*="-MessageContent"]'
+const ACTION_SELECTOR = '[class*="-RollAction"]'
+const TOTAL_SELECTOR = '[class*="-MessageTotal"]'
+const ROLL_KINDS = /\b(to hit|damage|healing|heal|check|save|saving throw|attack|roll)\s*$/i
+
+/** How long a notification's text must hold still before it counts, so a total that animates in is read once. */
 const SETTLE_MS = 300
-/** Per popup: the text last sent, and text seen but not yet settled. */
+/** Per notification: the text last sent, and text seen but not yet settled. */
 const cardState = new WeakMap()
 let baselineTaken = false
 
-/**
- * Pairs the popup's breakdown ("17+7", or "17,4+7" with advantage) with the
- * formula's dice, so Crawler gets each die's face and can spot a natural 20.
- * Returns [] when the two do not line up rather than guessing.
- */
-function diceFromBreakdown(formula, breakdown) {
-  const groups = [...String(formula).matchAll(/(\d*)d(\d+)(k[hl]1)?/gi)].map((match) => ({
-    count: Number(match[1] || 1),
-    faces: Number(match[2]),
-    keep: (match[3] || '').toLowerCase(),
-  }))
-  const values = (String(breakdown).match(/\d+/g) || []).map(Number)
-  const wanted = groups.reduce((sum, group) => sum + group.count, 0)
-  if (!groups.length || values.length < wanted) return []
-
-  const dice = []
-  let at = 0
-  for (const group of groups) {
-    const rolled = values.slice(at, at + group.count).map((value) => ({ faces: group.faces, value }))
-    at += group.count
-    // A face the die cannot show means the text was not a per-die breakdown.
-    if (rolled.some((die) => die.value < 1 || die.value > die.faces)) return []
-    if (group.keep && rolled.length > 1) {
-      const best = group.keep === 'kh1' ? Math.max(...rolled.map((die) => die.value)) : Math.min(...rolled.map((die) => die.value))
-      let kept = false
-      for (const die of rolled) {
-        if (!kept && die.value === best) kept = true
-        else die.discarded = true
-      }
-    }
-    dice.push(...rolled)
-  }
-  return dice
+function readMessage(node) {
+  const action = textOf(node, ACTION_SELECTOR)
+  const total = num(textOf(node, TOTAL_SELECTOR).replace(/,/g, '').match(/-?\d+/)?.[0])
+  if (total == null) return null
+  // Everything before "Rolled" is who rolled.
+  const who = clean(node.textContent).match(/^(.*?)\s+rolled\b/i)?.[1] || ''
+  const kind = action.match(ROLL_KINDS)?.[1]?.toLowerCase() || ''
+  return { who, action, kind, total }
 }
 
-function readCard(card) {
-  const title = textOf(card, '.dice_result__info__title, .dice_result__info__rolldetail, [class*="rolldetail"], [class*="RollDetail"]')
-  const formula = textOf(card, '.dice_result__info__dicenotation, [class*="dicenotation"], [class*="DiceNotation"]')
-  const breakdown = textOf(card, '.dice_result__info__breakdown, [class*="breakdown"], [class*="Breakdown"]')
-  const kind = textOf(card, '.dice_result__rolltype, [class*="rolltype"], [class*="RollType"]')
-  const totalText = textOf(card, '.dice_result__total-result, .dice_result__total, [class*="total-result"], [class*="TotalResult"]')
-  const total = num(totalText.match(/-?\d+/)?.[0])
-  if (total == null && !formula) return null
-  return { title, formula, breakdown, kind, total }
-}
-
-function cardsIn(root) {
-  const cards = new Set()
-  const scope = root?.querySelectorAll ? root : document
-  for (const node of scope.querySelectorAll(CARD_SELECTOR)) {
-    const card = node.closest(CARD_SELECTOR) || node
-    if (card instanceof HTMLElement) cards.add(card)
-  }
-  if (root instanceof HTMLElement && root.matches?.(CARD_SELECTOR)) {
-    cards.add(root.closest(CARD_SELECTOR) || root)
-  }
-  // Only the outermost card counts; its children match the loose selectors too.
-  return [...cards].filter((card) => !card.parentElement?.closest(CARD_SELECTOR))
+function sameName(a, b) {
+  return clean(a).toLowerCase() === clean(b).toLowerCase()
 }
 
 let rollCounter = 0
 
 /**
- * A popup is a new roll when it is a new element, or when an existing one now
- * shows different text. Identical repeat rolls still count because each one
- * gets its own popup. Text must settle first so an animating total is read once.
+ * A notification is a new roll when it is a new element, or when an existing
+ * one now shows different text. Identical repeat rolls still count because
+ * each one gets its own notification. Text must settle first.
  */
-function scanRolls(root) {
+function scanRolls() {
   const rolls = []
   const now = Date.now()
+  const sheetName = characterName()
   let unsettled = false
-  for (const card of cardsIn(root)) {
-    const info = readCard(card)
+  for (const node of document.querySelectorAll(MESSAGE_SELECTOR)) {
+    const info = readMessage(node)
     if (!info) continue
-    const key = `${info.title}|${info.kind}|${info.formula}|${info.breakdown}|${info.total}`
-    const state = cardState.get(card)
-    // Popups already on screen when the sheet loads are history, not new rolls.
+    const key = `${info.who}|${info.action}|${info.total}`
+    const state = cardState.get(node)
+    // Notifications already on screen when the sheet loads are history, not new rolls.
     if (!baselineTaken) {
-      cardState.set(card, { sent: key, pending: null, since: 0 })
+      cardState.set(node, { sent: key, pending: null, since: 0 })
       continue
     }
     if (state?.sent === key) continue
     if (state?.pending !== key) {
-      cardState.set(card, { sent: state?.sent ?? null, pending: key, since: now })
+      cardState.set(node, { sent: state?.sent ?? null, pending: key, since: now })
       unsettled = true
       continue
     }
@@ -436,36 +406,36 @@ function scanRolls(root) {
       unsettled = true
       continue
     }
-    cardState.set(card, { sent: key, pending: null, since: 0 })
+    cardState.set(node, { sent: key, pending: null, since: 0 })
+    // In a shared game other players' rolls show here too; they send their own.
+    if (info.who && sheetName && !sameName(info.who, sheetName)) continue
     rollCounter += 1
-    const dice = diceFromBreakdown(info.formula, info.breakdown)
     rolls.push({
-      id: `ddb-page:${sheetCharacterId()}:${Date.now()}:${rollCounter}`,
+      id: `ddb-page:${sheetCharacterId()}:${now}:${rollCounter}`,
       source: 'ddb',
-      character: characterName(),
+      character: info.who || sheetName,
       characterId: sheetCharacterId() || undefined,
-      title: [info.title, info.kind].filter(Boolean).join(' · ') || 'Roll',
-      formula: info.formula || `total ${info.total}`,
-      total: info.total ?? 0,
-      dice,
+      title: info.action || 'Roll',
+      total: info.total,
+      dice: [],
       kind: info.kind || undefined,
-      at: Date.now(),
+      at: now,
     })
   }
   if (rolls.length) sendRuntime({ type: 'DICE_ROLL', rolls })
-  if (unsettled) window.setTimeout(() => scanRolls(document), SETTLE_MS + 20)
+  if (unsettled) window.setTimeout(scanRolls, SETTLE_MS + 20)
 }
 
 let scanTimer = 0
 function requestScan() {
   window.clearTimeout(scanTimer)
-  scanTimer = window.setTimeout(() => scanRolls(document), 40)
+  scanTimer = window.setTimeout(scanRolls, 40)
 }
 
 // ---------- Start watching ----------
 
 function start() {
-  scanRolls(document)
+  scanRolls()
   baselineTaken = true
   void sendCharacter()
 
@@ -476,7 +446,7 @@ function start() {
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
 
   // Safety nets for changes the observer coalesces away; both only read the page.
-  window.setInterval(() => scanRolls(document), ROLL_SCAN_MS)
+  window.setInterval(scanRolls, ROLL_SCAN_MS)
   window.setInterval(() => void sendCharacter(), CHARACTER_POLL_MS)
 }
 

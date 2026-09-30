@@ -7,6 +7,7 @@ export const STAT_KEYS = [
   'initiative',
   'level',
   'klass',
+  'race',
   'str',
   'dex',
   'con',
@@ -25,6 +26,11 @@ export const STAT_KEYS = [
 ] as const
 
 export type StatKey = (typeof STAT_KEYS)[number]
+/** Stats held as free text rather than numbers. */
+export type TextStatKey = 'klass' | 'race'
+export function isTextStat(key: StatKey): key is TextStatKey {
+  return key === 'klass' || key === 'race'
+}
 export type StatsManual = Partial<Record<StatKey, boolean>>
 
 export type CharacterStats = {
@@ -36,6 +42,7 @@ export type CharacterStats = {
   initiative: number | null
   level: number | null
   klass: string
+  race: string
   str: number | null
   dex: number | null
   con: number | null
@@ -94,6 +101,7 @@ export function emptyStats(): CharacterStats {
     initiative: null,
     level: null,
     klass: '',
+    race: '',
     str: null,
     dex: null,
     con: null,
@@ -221,6 +229,7 @@ export function normalizeStats(value: unknown): CharacterStats {
     initiative: asNumber(raw.initiative),
     level: asNumber(raw.level),
     klass: typeof raw.klass === 'string' ? raw.klass : '',
+    race: typeof raw.race === 'string' ? raw.race : '',
     ...abilityFields(raw),
     passivePerception: asNumber(raw.passivePerception),
     passiveInsight: asNumber(raw.passiveInsight),
@@ -243,6 +252,7 @@ export function mergeDdbStats(
   if (!manual.initiative && incoming.initiative != null) next.initiative = incoming.initiative
   if (!manual.level && incoming.level != null) next.level = incoming.level
   if (!manual.klass && incoming.klass) next.klass = incoming.klass
+  if (!manual.race && incoming.race) next.race = incoming.race
   mergeAbility(next, incoming, manual, 'str')
   mergeAbility(next, incoming, manual, 'dex')
   mergeAbility(next, incoming, manual, 'con')

@@ -23,6 +23,7 @@ import { canControlPlayer, useSessionStore } from '../state/sessionStore.ts'
 import type { FocusRequest } from '../state/editorStore.ts'
 import { getActiveFloor } from '../state/selectors.ts'
 import { TileCache } from '../tiles/TileCache.ts'
+import { tilesetById } from '../tiles/sets/index.ts'
 import { hitLinkBadge, linkBadges } from './badges.ts'
 import type { LinkBadge } from './badges.ts'
 import { LEVEL_HEIGHT, cellToWorld, cameraFocused, centerOnWorld, panBy, screenToCell, zoomAt } from './camera.ts'
@@ -105,7 +106,9 @@ interface CameraTween {
 export class MapEngine {
   private readonly canvas: HTMLCanvasElement
   private readonly ctx: CanvasRenderingContext2D
-  private readonly tiles = new TileCache()
+  private tiles = new TileCache(tilesetById(useDungeonStore.getState().dungeon.tileset))
+  /** A tileset still loading; it replaces `tiles` once ready. */
+  private pendingTiles: TileCache | null = null
   private readonly unsubs: Array<() => void> = []
   private resizeObserver: ResizeObserver | null = null
   private raf = 0
@@ -152,6 +155,8 @@ export class MapEngine {
     cancelAnimationFrame(this.raf)
     this.resizeObserver?.disconnect()
     this.tiles.destroy()
+    this.pendingTiles?.destroy()
+    this.pendingTiles = null
     for (const unsub of this.unsubs) unsub()
     this.unsubs.length = 0
   }
@@ -180,7 +185,10 @@ export class MapEngine {
       () => this.canvas.removeEventListener('wheel', this.onWheel),
       () => window.removeEventListener('keydown', this.onKeyDown),
       () => window.removeEventListener('keyup', this.onKeyUp),
-      useDungeonStore.subscribe(() => this.markDirty()),
+      useDungeonStore.subscribe((state) => {
+        this.syncTileset(state.dungeon.tileset)
+        this.markDirty()
+      }),
       useEditorStore.subscribe((state, prev) => {
         this.markDirty()
         if (state.viewMode !== prev.viewMode && !this.session) this.applyCursor(null)
@@ -190,6 +198,27 @@ export class MapEngine {
         }
       }),
     )
+  }
+
+  /**
+   * Swaps in a new tile cache when the dungeon's tileset changes. The old one
+   * keeps drawing until the new sheet is sliced, so the map never blanks.
+   */
+  private syncTileset(id: string | undefined): void {
+    const tileset = tilesetById(id)
+    if (tileset === this.pendingTiles?.tileset) return
+    this.pendingTiles?.destroy()
+    this.pendingTiles = null
+    if (tileset === this.tiles.tileset) return
+    const next = new TileCache(tileset)
+    this.pendingTiles = next
+    void next.init().then(() => {
+      if (this.pendingTiles !== next || this.destroyed) return
+      this.pendingTiles = null
+      this.tiles.destroy()
+      this.tiles = next
+      this.markDirty()
+    })
   }
 
   private loop = (): void => {

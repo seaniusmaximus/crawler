@@ -70,9 +70,9 @@ export const useDiceStore = create<DiceState>((set) => ({
           if (isInitiativeRoll(roll)) useDungeonStore.getState().recordInitiativeRoll(roll)
         }
       }
-      return rolls === state.rolls ? state : { rolls, open: true, bridge: 'connected' }
+      return rolls === state.rolls ? state : { rolls, bridge: 'connected' }
     }),
-  replaceRolls: (rolls) => set({ rolls: rolls.slice(0, MAX_ROLL_LOG), open: true }),
+  replaceRolls: (rolls) => set({ rolls: rolls.slice(0, MAX_ROLL_LOG) }),
   markBridge: (connected) =>
     set(connected ? { bridge: 'connected', bridgeSeen: true } : { bridge: 'disconnected' }),
   clear: () => set({ rolls: [] }),

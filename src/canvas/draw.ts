@@ -21,8 +21,8 @@ import type { SharedWalls } from '../model/walls.ts'
 import type { FeatureDraft, FeatureTool } from '../model/tools.ts'
 import type { Camera, Cell, CellRect, ElevationRamp, Link, Player, Room, TileSprite } from '../model/types.ts'
 import type { ViewMode } from '../model/visibility.ts'
-import { tileVariant } from '../tiles/TileCache.ts'
 import type { TileCache } from '../tiles/TileCache.ts'
+import { seedFor, type FaceKind, type Variant } from '../tiles/tileset.ts'
 import type { LinkBadge } from './badges.ts'
 import {
   TILE_HEIGHT,
@@ -62,22 +62,6 @@ const TOOL_TINT: Record<FeatureTool, string> = {
   windows: '#6bb0d6',
   stairs: '#d8cba0',
   walls: '#8b8f9c',
-}
-
-const FACE_LEFT: Record<string, string> = {
-  wall: '#353840',
-  'door-h': '#5a3a1c',
-  'door-v': '#5a3a1c',
-  'window-h': '#3d5c72',
-  'window-v': '#3d5c72',
-}
-
-const FACE_RIGHT: Record<string, string> = {
-  wall: '#4e525c',
-  'door-h': '#7a4e24',
-  'door-v': '#7a4e24',
-  'window-h': '#547a96',
-  'window-v': '#547a96',
 }
 
 export interface DrawView {
@@ -367,6 +351,7 @@ interface QueuedTile {
   y: number
   sprite: TileSprite
   bitmap: ImageBitmap
+  variant: Variant
   stairs: boolean
   open: boolean
   dim: boolean
@@ -389,6 +374,8 @@ function drawTiles(
   view.rooms.forEach((room, roomIndex) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
+    // Each room shuffles its art by its own id, so rooms of the same size never match.
+    const seed = seedFor(room.id)
     const minX = Math.max(rect.minX, bounds.minX)
     const maxX = Math.min(rect.maxX, bounds.maxX)
     const minY = Math.max(rect.minY, bounds.minY)
@@ -401,11 +388,13 @@ function drawTiles(
         const opening = openingAt(room, x, y)
         const planted = opening === 'wall' || opening === 'door' || opening === 'window'
         const sprite = shared.has(room.id, x, y) && !planted ? 'floor' : spriteAt(room, x, y)
-        const bitmap = view.tileCache.get(sprite, tileVariant(x - rect.minX, y - rect.minY, sprite))
+        const variant = { x: x - rect.minX, y: y - rect.minY, seed }
+        const bitmap = view.tileCache.top(sprite, variant)
         if (!bitmap) continue
         queue.push({
           x,
           y,
+          variant,
           depth: isoDepth(x, y, yaw),
           elevation,
           roomIndex,
@@ -418,7 +407,7 @@ function drawTiles(
       }
     }
   })
-  const stairsBitmap = view.tileCache.get('stairs', 0)
+  const stairsBitmap = view.tileCache.top('stairs', { x: 0, y: 0, seed: 0 })
   if (stairsBitmap) {
     for (const slice of rampCells.values()) {
       queue.push({
@@ -429,6 +418,7 @@ function drawTiles(
         roomIndex: view.rooms.length,
         sprite: 'stairs',
         bitmap: stairsBitmap,
+        variant: { x: slice.x, y: slice.y, seed: 0 },
         stairs: false,
         open: false,
         dim: view.viewMode === 'dm' && occupantRoom(view.rooms, slice.x, slice.y)?.visible === false,
@@ -442,7 +432,9 @@ function drawTiles(
       if (tile.dim) ctx.globalAlpha = 0.42
       if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
         drawFloor(ctx, view, tile.x, tile.y, tile.bitmap, tile.elevation)
-      } else drawWall(ctx, view, tile.x, tile.y, tile.bitmap, tile.sprite, tile.elevation, tile.open)
+      } else if (tile.sprite === 'wall') {
+        drawWall(ctx, view, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
+      } else drawOpening(ctx, view, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant)
       if (tile.stairs && stairsBitmap) {
         drawFloor(ctx, view, tile.x, tile.y, stairsBitmap, tile.elevation)
       }
@@ -537,26 +529,200 @@ function drawWall(
   x: number,
   y: number,
   bitmap: ImageBitmap,
-  sprite: TileSprite,
   elevation: number,
-  open = false,
+  variant: Variant,
 ): void {
   const floor = liftCorners(cellCorners(x, y, view.camera), view.camera, roomLift(elevation))
   const top = liftCorners(floor, view.camera, WALL_HEIGHT)
   const [leftFace, rightFace] = visibleWallFaces(floor, top)
-  const left = FACE_LEFT[sprite] ?? FACE_LEFT.wall
-  const right = FACE_RIGHT[sprite] ?? FACE_RIGHT.wall
-
-  fillWallFace(ctx, leftFace, left ?? '#353840')
-  fillWallFace(ctx, rightFace, right ?? '#4e525c')
+  const tiles = view.tileCache
+  paintFace(ctx, tiles.face('wall', variant, 0), leftFace, tiles.tileset.shade.left)
+  paintFace(ctx, tiles.face('wall', variant, 1), rightFace, tiles.tileset.shade.right)
   mapBitmap(ctx, bitmap, top)
-
-  if (sprite.startsWith('door') || sprite.startsWith('window')) {
-    const axis = sprite.endsWith('-h') ? 'h' : 'v'
-    const face = leftFace.axis === axis ? leftFace : rightFace
-    drawOpeningFace(ctx, face, sprite, open)
-  }
 }
+
+/** Where a piece samples its art, as fractions of the texture. */
+interface ArtWindow {
+  u0: number
+  u1: number
+  v0: number
+  v1: number
+}
+
+/**
+ * A piece of a doorway or window in wall-local terms: `a` runs along the wall,
+ * `c` across it, `z` up as a share of the wall's height.
+ */
+interface OpeningPiece {
+  a0: number
+  a1: number
+  c0: number
+  c1: number
+  z0: number
+  z1: number
+  art: 'stone' | FaceKind
+}
+
+/** Width of each stone jamb, as a share of the cell. */
+const JAMB = 0.18
+const DOOR_HEAD = 0.72
+const WINDOW_SILL = 0.36
+const WINDOW_HEAD = 0.78
+
+/** Depth of the frame standing on the cell's edge, as a share of the cell. */
+const FRAME_DEPTH = 0.12
+/** How far a closed leaf sits back inside its frame. */
+const LEAF_INSET = 0.025
+/** How far an open door's leaf reaches into the room. */
+const SWING = 0.55
+
+/**
+ * A doorway or window stands on the cell edge that faces the camera, flush with
+ * the visible face of the walls beside it: jambs, a lintel (plus a sill for
+ * windows) and the leaf, all in one thin plane. The rest of the cell is open
+ * floor, with no wall top over it. `front` is that edge, 0 or 1 across the wall.
+ */
+function openingPieces(opening: 'door' | 'window', open: boolean, front: 0 | 1): OpeningPiece[] {
+  const c0 = front === 1 ? 1 - FRAME_DEPTH : 0
+  const c1 = front === 1 ? 1 : FRAME_DEPTH
+  const leaf = { c0: c0 + LEAF_INSET, c1: c1 - LEAF_INSET }
+  const pieces: OpeningPiece[] = [
+    { a0: 0, a1: JAMB, c0, c1, z0: 0, z1: 1, art: 'stone' },
+    { a0: 1 - JAMB, a1: 1, c0, c1, z0: 0, z1: 1, art: 'stone' },
+  ]
+  if (opening === 'door') {
+    pieces.push({ a0: JAMB, a1: 1 - JAMB, c0, c1, z0: DOOR_HEAD, z1: 1, art: 'stone' })
+    // Open, the leaf swings back into the room against its hinge jamb.
+    const swung = front === 1 ? { c0: c0 - SWING, c1: c0 } : { c0: c1, c1: c1 + SWING }
+    pieces.push(
+      open
+        ? { a0: JAMB, a1: JAMB + 0.08, ...swung, z0: 0, z1: DOOR_HEAD, art: 'door' }
+        : { a0: JAMB, a1: 1 - JAMB, ...leaf, z0: 0, z1: DOOR_HEAD, art: 'door' },
+    )
+    return pieces
+  }
+  pieces.push({ a0: JAMB, a1: 1 - JAMB, c0, c1, z0: 0, z1: WINDOW_SILL, art: 'stone' })
+  pieces.push({ a0: JAMB, a1: 1 - JAMB, c0, c1, z0: WINDOW_HEAD, z1: 1, art: 'stone' })
+  pieces.push({
+    a0: JAMB,
+    a1: 1 - JAMB,
+    ...leaf,
+    z0: WINDOW_SILL,
+    z1: WINDOW_HEAD,
+    art: open ? 'window-open' : 'window',
+  })
+  return pieces
+}
+
+function drawOpening(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  x: number,
+  y: number,
+  sprite: TileSprite,
+  elevation: number,
+  open: boolean,
+  variant: Variant,
+): void {
+  const tiles = view.tileCache
+  const floor = tiles.top('floor', variant)
+  if (floor) drawFloor(ctx, view, x, y, floor, elevation)
+  const opening = sprite.startsWith('door') ? 'door' : 'window'
+  // `h` walls run along x, `v` walls along y.
+  const alongX = sprite.endsWith('-h')
+  const yaw = view.camera.yaw
+  // The edge across the wall that is nearer the camera; it changes as the view rotates.
+  const nearFar = alongX
+    ? isoDepth(x + 0.5, y + 1, yaw) - isoDepth(x + 0.5, y, yaw)
+    : isoDepth(x + 1, y + 0.5, yaw) - isoDepth(x, y + 0.5, yaw)
+  const front: 0 | 1 = nearFar > 0 ? 1 : 0
+  const boxes = openingPieces(opening, open, front).map((piece) => {
+    const box = alongX
+      ? { x0: x + piece.a0, x1: x + piece.a1, y0: y + piece.c0, y1: y + piece.c1 }
+      : { x0: x + piece.c0, x1: x + piece.c1, y0: y + piece.a0, y1: y + piece.a1 }
+    return {
+      ...box,
+      z0: piece.z0,
+      z1: piece.z1,
+      art: piece.art,
+      depth: isoDepth((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, yaw),
+    }
+  })
+  // Far pieces first, and within a piece's footprint the lower one first.
+  boxes.sort((a, b) => a.depth - b.depth || a.z0 - b.z0)
+  for (const box of boxes) drawOpeningBox(ctx, view, x, y, box, elevation, variant)
+}
+
+/** One upright box inside a cell, textured from the tileset. */
+function drawOpeningBox(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  cx: number,
+  cy: number,
+  box: { x0: number; x1: number; y0: number; y1: number; z0: number; z1: number; art: 'stone' | FaceKind },
+  elevation: number,
+  variant: Variant,
+): void {
+  const camera = view.camera
+  const tiles = view.tileCache
+  const ground: IsoCorners = {
+    n: cellToScreen(box.x0, box.y0, camera),
+    e: cellToScreen(box.x1, box.y0, camera),
+    s: cellToScreen(box.x1, box.y1, camera),
+    w: cellToScreen(box.x0, box.y1, camera),
+  }
+  const base = roomLift(elevation)
+  const floor = liftCorners(ground, camera, base + box.z0 * WALL_HEIGHT)
+  const top = liftCorners(ground, camera, base + box.z1 * WALL_HEIGHT)
+  const cellAt: Record<Corner, Point> = {
+    n: { x: box.x0 - cx, y: box.y0 - cy },
+    e: { x: box.x1 - cx, y: box.y0 - cy },
+    s: { x: box.x1 - cx, y: box.y1 - cy },
+    w: { x: box.x0 - cx, y: box.y1 - cy },
+  }
+  const stone = box.art === 'stone'
+  const art = stone ? tiles.face('wall', variant, 0) : tiles.face(box.art as FaceKind, variant, 0)
+  // Bars are see-through; shading them would lay a dark film over the gaps.
+  const solid = box.art !== 'window-open'
+
+  const south = southCorner(floor)
+  const faces = [PREV[south], NEXT[south]].map((from) => {
+    const face: WallFace = {
+      axis: edgeAxis(from, south),
+      lo: floor[from],
+      hi: floor[south],
+      loTop: top[from],
+      hiTop: top[south],
+    }
+    let window: ArtWindow | undefined
+    if (stone) {
+      // Sample the wall art at this piece's place along the cell edge, measured
+      // from the screen-left end as a whole wall face is, so the brick meets its neighbours.
+      const along = (corner: Corner) => (face.axis === 'h' ? cellAt[corner].x : cellAt[corner].y)
+      const loOnLeft = face.lo.x <= face.hi.x
+      const left = along(loOnLeft ? from : south)
+      const right = along(loOnLeft ? south : from)
+      const origin = left < right ? 0 : 1
+      window = { u0: Math.abs(left - origin), u1: Math.abs(right - origin), v0: 1 - box.z1, v1: 1 - box.z0 }
+    }
+    return { face, window, mid: face.lo.x + face.hi.x }
+  })
+  faces.sort((a, b) => a.mid - b.mid)
+  const shade = tiles.tileset.shade
+  faces.forEach(({ face, window }, index) =>
+    paintFace(ctx, art, face, index === 0 ? shade.left : shade.right, window, solid),
+  )
+
+  // Just the frame's top edge, never wall-top art: the cell reads as an opening, not a wall.
+  if (!solid) return
+  ctx.beginPath()
+  diamondPath(ctx, top)
+  ctx.fillStyle = stone ? OPENING_STONE_EDGE : OPENING_WOOD_EDGE
+  ctx.fill()
+}
+
+const OPENING_STONE_EDGE = '#5c5d66'
+const OPENING_WOOD_EDGE = '#5a3a1e'
 
 type Corner = keyof IsoCorners
 
@@ -601,15 +767,46 @@ function visibleWallFaces(floor: IsoCorners, top: IsoCorners): [WallFace, WallFa
   return aMid <= bMid ? [a, b] : [b, a]
 }
 
-function fillWallFace(ctx: CanvasRenderingContext2D, face: WallFace, color: string): void {
+/**
+ * Stands a face texture upright on a cube side: the art's top edge follows the
+ * face's top edge left to right on screen, then light falloff darkens it.
+ */
+function paintFace(
+  ctx: CanvasRenderingContext2D,
+  bitmap: ImageBitmap | undefined,
+  face: WallFace,
+  light: number,
+  window: ArtWindow = { u0: 0, u1: 1, v0: 0, v1: 1 },
+  solid = true,
+): void {
+  const loOnLeft = face.lo.x <= face.hi.x
+  const topLeft = loOnLeft ? face.loTop : face.hiTop
+  const topRight = loOnLeft ? face.hiTop : face.loTop
+  const bottomLeft = loOnLeft ? face.lo : face.hi
+  if (bitmap) {
+    ctx.save()
+    ctx.transform(
+      topRight.x - topLeft.x,
+      topRight.y - topLeft.y,
+      bottomLeft.x - topLeft.x,
+      bottomLeft.y - topLeft.y,
+      topLeft.x,
+      topLeft.y,
+    )
+    drawWindow(ctx, bitmap, window)
+    ctx.restore()
+  }
+  if (!solid) return
   ctx.beginPath()
   ctx.moveTo(face.lo.x, face.lo.y)
   ctx.lineTo(face.hi.x, face.hi.y)
   ctx.lineTo(face.hiTop.x, face.hiTop.y)
   ctx.lineTo(face.loTop.x, face.loTop.y)
   ctx.closePath()
-  ctx.fillStyle = color
-  ctx.fill()
+  if (light < 1) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${(1 - light).toFixed(3)})`
+    ctx.fill()
+  }
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)'
   ctx.lineWidth = 1
   ctx.stroke()
@@ -672,86 +869,29 @@ function drawSupportPrism(
     })
   }
   faces.sort((a, b) => a.lo.x + a.hi.x - (b.lo.x + b.hi.x))
-  if (faces[0]) fillWallFace(ctx, faces[0], '#2a2c34')
-  if (faces[1]) fillWallFace(ctx, faces[1], '#353840')
-}
-
-function drawOpeningFace(
-  ctx: CanvasRenderingContext2D,
-  face: WallFace,
-  sprite: TileSprite,
-  open: boolean,
-): void {
-  const color = sprite.startsWith('door') ? '#c4843a' : '#7eb7d6'
-  if (open) {
-    fillQuad(
-      ctx,
-      lerp(face.lo, face.hi, 0.12),
-      lerp(face.hi, face.lo, 0.12),
-      lerp(face.hiTop, face.loTop, 0.12),
-      lerp(face.loTop, face.hiTop, 0.12),
-      'rgba(8, 8, 12, 0.9)',
-    )
-    fillQuad(
-      ctx,
-      lerp(face.lo, face.hi, 0.12),
-      lerp(face.lo, face.hi, 0.22),
-      lerp(face.loTop, face.hiTop, 0.22),
-      lerp(face.loTop, face.hiTop, 0.12),
-      color,
-    )
-    fillQuad(
-      ctx,
-      lerp(face.hi, face.lo, 0.22),
-      lerp(face.hi, face.lo, 0.12),
-      lerp(face.hiTop, face.loTop, 0.12),
-      lerp(face.hiTop, face.loTop, 0.22),
-      color,
-    )
-    return
-  }
-  fillQuad(
-    ctx,
-    lerp(face.lo, face.hi, 0.18),
-    lerp(face.hi, face.lo, 0.18),
-    lerp(face.hiTop, face.loTop, 0.18),
-    lerp(face.loTop, face.hiTop, 0.18),
-    'rgba(12, 12, 16, 0.72)',
-  )
-  fillQuad(
-    ctx,
-    lerp(face.lo, face.hi, 0.28),
-    lerp(face.hi, face.lo, 0.28),
-    lerp(lerp(face.hiTop, face.loTop, 0.18), lerp(face.hi, face.lo, 0.18), 0.22),
-    lerp(lerp(face.loTop, face.hiTop, 0.18), lerp(face.lo, face.hi, 0.18), 0.22),
-    color,
-  )
-}
-
-function fillQuad(
-  ctx: CanvasRenderingContext2D,
-  a: Point,
-  b: Point,
-  c: Point,
-  d: Point,
-  color: string,
-): void {
-  ctx.beginPath()
-  ctx.moveTo(a.x, a.y)
-  ctx.lineTo(b.x, b.y)
-  ctx.lineTo(c.x, c.y)
-  ctx.lineTo(d.x, d.y)
-  ctx.closePath()
-  ctx.fillStyle = color
-  ctx.fill()
-}
-
-function lerp(a: Point, b: Point, t: number): Point {
-  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+  const shade = view.tileCache.tileset.shade
+  // The rough stone a raised room stands on, a touch darker than the walls above it.
+  const variant = { x, y, seed: 0 }
+  if (faces[0]) paintFace(ctx, view.tileCache.face('foundation', variant, 0), faces[0], shade.left * 0.85)
+  if (faces[1]) paintFace(ctx, view.tileCache.face('foundation', variant, 1), faces[1], shade.right * 0.85)
 }
 
 /** Skew a square bitmap onto an iso diamond. */
-function mapBitmap(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, diamond: IsoCorners): void {
+/** Draws part of a bitmap into the unit square of the current transform. */
+function drawWindow(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, window: ArtWindow): void {
+  const sx = window.u0 * bitmap.width
+  const sy = window.v0 * bitmap.height
+  const sw = Math.max(1, (window.u1 - window.u0) * bitmap.width)
+  const sh = Math.max(1, (window.v1 - window.v0) * bitmap.height)
+  ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, 1, 1)
+}
+
+function mapBitmap(
+  ctx: CanvasRenderingContext2D,
+  bitmap: ImageBitmap,
+  diamond: IsoCorners,
+  window: ArtWindow = { u0: 0, u1: 1, v0: 0, v1: 1 },
+): void {
   ctx.save()
   ctx.beginPath()
   diamondPath(ctx, diamond)
@@ -764,7 +904,7 @@ function mapBitmap(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap, diamond: 
     diamond.n.x,
     diamond.n.y,
   )
-  ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, 1, 1)
+  drawWindow(ctx, bitmap, window)
   ctx.restore()
 }
 

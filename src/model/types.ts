@@ -100,6 +100,8 @@ export interface Dungeon {
   combat: Combat
   /** Planned or playing token walk; null when nobody is moving. */
   travel: TokenTravel | null
+  /** Id of the tileset every room is drawn with; unknown or missing means the default. */
+  tileset?: string
 }
 
 /** A character token that stands on a floor tile. */

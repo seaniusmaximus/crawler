@@ -1,7 +1,9 @@
 import { Fragment } from 'react'
 import type { DoorStyle, Tool } from '../../model/tools.ts'
 import type { StairsDir } from '../../model/types.ts'
+import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
+import { TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Icon } from '../../ui/Icon.tsx'
 
 interface ToolDef {
@@ -66,6 +68,8 @@ export function ToolPanel() {
             </div>
           </Fragment>
         ))}
+        <span className="tool-rule" aria-hidden />
+        <TilesetSelect />
       </div>
       {active ? (
         <p className="tool-hint">
@@ -73,6 +77,28 @@ export function ToolPanel() {
         </p>
       ) : null}
     </div>
+  )
+}
+
+/** The look every room on the map is drawn with; changing it restyles existing rooms too. */
+function TilesetSelect() {
+  const tileset = useDungeonStore((state) => tilesetById(state.dungeon.tileset))
+  const setTileset = useDungeonStore((state) => state.setTileset)
+
+  return (
+    <select
+      className="tileset-select"
+      value={tileset.id}
+      onChange={(event) => setTileset(event.target.value)}
+      aria-label="Tileset"
+      title="Tileset — the look of every room on the map"
+    >
+      {TILESETS.map((set) => (
+        <option key={set.id} value={set.id}>
+          {set.name}
+        </option>
+      ))}
+    </select>
   )
 }
 

@@ -214,12 +214,6 @@ a:hover {
   color: var(--foe);
 }
 
-.panel-head-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .panel-meta {
   font-size: 12px;
   color: var(--text-faint);
@@ -326,10 +320,6 @@ a:hover {
   width: 36px;
   height: 36px;
   color: var(--text-dim);
-}
-
-.icon-btn.is-accent {
-  color: var(--gold);
 }
 
 .icon-btn.is-boxed {
@@ -557,11 +547,21 @@ a:hover {
   text-align: center;
 }
 
-.stat-input.is-wide {
+.stat-input.is-wide,
+.stat-input.is-race {
   width: 160px;
   font-family: var(--font-body);
   font-size: 12px;
   text-align: left;
+}
+
+.stat-input.is-race {
+  width: 88px;
+}
+
+.sheet-sub-edit {
+  display: flex;
+  gap: 6px;
 }
 
 .link-text {
@@ -740,6 +740,33 @@ a:hover {
 .tool-option.is-active {
   border-color: var(--gold-line);
   color: var(--gold);
+}
+
+.tileset-select {
+  height: 34px;
+  padding: 0 26px 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--wash)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239a9da8' stroke-width='1.5'/%3E%3C/svg%3E")
+    no-repeat right 9px center;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  appearance: none;
+}
+
+.tileset-select:hover,
+.tileset-select:focus-visible {
+  border-color: var(--gold-line);
+  color: var(--text);
+  outline: none;
+}
+
+.tileset-select option {
+  background: var(--panel-solid);
+  color: var(--text);
 }
 
 .tool-hint {
@@ -923,11 +950,107 @@ a:hover {
   padding: 0 12px 8px;
 }
 
+/* The DM's initiative controls, between the Party title and its rows. */
+.init-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 4px 6px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--wash);
+}
+
+.init-bar.is-live {
+  border-color: var(--gold-line);
+  background: linear-gradient(180deg, rgba(227, 191, 106, 0.12), rgba(227, 191, 106, 0.04));
+}
+
+.init-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.init-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.init-state strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.init-link {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gold);
+  font-size: 12px;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.init-link:hover {
+  color: var(--gold-hi);
+}
+
+.init-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.init-primary,
+.init-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.init-primary {
+  flex: 1;
+  border: 0;
+  background: var(--gold);
+  color: var(--gold-ink);
+}
+
+.init-primary:hover {
+  background: var(--gold-hi);
+}
+
+.init-secondary {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.init-secondary:hover {
+  border-color: rgba(217, 98, 94, 0.45);
+  color: #f0a29f;
+}
+
 .token-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-height: 0;
+  /* Room for at least one row, so the initiative bar never squeezes the list away. */
+  min-height: 64px;
   overflow-y: auto;
 }
 
@@ -1396,11 +1519,40 @@ a:hover {
 .ability {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 0;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid transparent;
   border-radius: 10px;
   background: var(--wash);
+}
+
+.ability:has(.ability-roll:hover:not(:disabled)) {
+  border-color: var(--gold-line);
+}
+
+/* The top of each tile rolls the check; the score beneath edits the modifier. */
+.ability-roll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 0 2px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.ability-roll:hover:not(:disabled) {
+  background: var(--gold-wash);
+}
+
+.ability-roll:hover:not(:disabled) .ability-mod,
+.ability-roll:hover:not(:disabled) .kicker {
+  color: var(--gold);
+}
+
+.ability-roll:disabled {
+  cursor: default;
 }
 
 .ability .kicker {
@@ -1409,18 +1561,34 @@ a:hover {
 }
 
 .ability-mod {
+  font-family: var(--font-mono);
   font-size: 16px;
+  color: var(--text);
 }
 
 .ability .stat-input {
   width: 40px;
+  margin: 0 auto 6px;
 }
 
 .ability-score {
-  min-height: 14px;
+  min-height: 20px;
+  padding: 0 0 6px;
+  border: 0;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-faint);
+  cursor: pointer;
+}
+
+.ability-score:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline dotted;
+}
+
+.ability-score:disabled {
+  cursor: default;
 }
 
 .passives {
@@ -2190,6 +2358,122 @@ a:hover {
 
 .roll-total.is-fumble {
   color: var(--low);
+}
+
+/* ---------- Roll toasts over tokens ---------- */
+
+.roll-toasts {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* Anchored at its bottom centre, just above the token's standee. */
+.roll-toast {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 260px;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid var(--gold-line);
+  border-radius: 12px;
+  background: rgba(17, 18, 23, 0.94);
+  box-shadow:
+    inset 3px 0 0 var(--token, var(--gold)),
+    0 10px 28px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -100%);
+  white-space: nowrap;
+  animation: roll-toast 4.2s ease-out forwards;
+}
+
+.roll-toast::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  border-right: 1px solid var(--gold-line);
+  border-bottom: 1px solid var(--gold-line);
+  background: rgba(17, 18, 23, 0.94);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.roll-toast-total {
+  min-width: 28px;
+  padding-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--gold-hi);
+  text-align: center;
+}
+
+.roll-toast-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.roll-toast-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.roll-toast-note {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+}
+
+.roll-toast.is-crit {
+  border-color: var(--gold);
+  box-shadow:
+    inset 3px 0 0 var(--token, var(--gold)),
+    0 0 22px rgba(227, 191, 106, 0.35),
+    0 10px 28px rgba(0, 0, 0, 0.55);
+}
+
+.roll-toast.is-fumble {
+  border-color: rgba(217, 98, 94, 0.6);
+}
+
+.roll-toast.is-fumble .roll-toast-total {
+  color: var(--low);
+}
+
+@keyframes roll-toast {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 8px)) scale(0.94);
+  }
+  7% {
+    opacity: 1;
+    transform: translate(-50%, -100%) scale(1);
+  }
+  85% {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - 6px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roll-toast {
+    animation: none;
+  }
 }
 
 /* ---------- Radial menu ---------- */

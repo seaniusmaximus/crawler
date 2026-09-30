@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { MapStage } from '../canvas/MapStage.tsx'
 import { DiceTray } from '../features/dice/DiceTray.tsx'
+import { RollToasts } from '../features/dice/RollToasts.tsx'
 import { FloorDock } from '../features/floors/FloorPanel.tsx'
 import { RadialMenu } from '../features/menus/RadialMenu.tsx'
 import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
@@ -42,6 +43,7 @@ export function EditorPage() {
     >
       <MapStage />
       <div className="map-vignette" aria-hidden />
+      <RollToasts />
 
       <div className="hud">
         <div className="hud-top-left">
