@@ -37,7 +37,7 @@ export function getDiceBridge(): Pick<DiceState, 'ingest' | 'markBridge'> {
 
 export const useDiceStore = create<DiceState>((set) => ({
   rolls: [],
-  open: true,
+  open: false,
   count: 1,
   modifier: 0,
   bridge: 'disconnected',

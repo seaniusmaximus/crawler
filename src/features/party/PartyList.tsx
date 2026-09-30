@@ -1,321 +1,262 @@
-import { useRef, useState } from 'react'
+import { FOCUS_INSET } from '../../app/layout.ts'
 import { sortByInitiative } from '../../model/combat.ts'
-import { rollLocal } from '../../model/dice.ts'
-import { readPortraitFile } from '../../model/portrait.ts'
-import {
-  characterNameOf,
-  monsterMembers,
-  occupantRoom,
-  partyMembers,
-  playerInitials,
-} from '../../model/players.ts'
-import { normalizeStats } from '../../model/stats.ts'
+import { characterNameOf, monsterMembers, partyMembers, playerStatuses } from '../../model/players.ts'
+import { hpRatio, normalizeStats } from '../../model/stats.ts'
+import { STATUS_EFFECTS } from '../../model/status.ts'
 import type { Player } from '../../model/types.ts'
-import { roomRevealed, tokenRevealed } from '../../model/visibility.ts'
-import { useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { getActiveFloor } from '../../state/selectors.ts'
-import { MenuIcon } from '../menus/radialIcons.tsx'
-import { PlayerStats } from './PlayerStats.tsx'
+import { Avatar } from '../../ui/Avatar.tsx'
+import { Diamond, Icon } from '../../ui/Icon.tsx'
+import { rollInitiativeFor } from './initiative.ts'
+import { hpTone, tokenPlace, tokenShown, woundLabel } from './tokenInfo.ts'
 
-export function PartyList({ leftInset }: { leftInset: number }) {
+function toggleSheet(player: Player): void {
+  const editor = useEditorStore.getState()
+  if (editor.sheetPlayerId === player.id) {
+    editor.openSheet(null)
+    return
+  }
+  editor.openSheet(player.id)
+  editor.focusPlayer(player.id, FOCUS_INSET)
+}
+
+function useOrderedTokens(): Player[] {
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
-  const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
   const floors = useDungeonStore((state) => state.dungeon.floors)
   const viewMode = useEditorStore((state) => state.viewMode)
+  return sortByInitiative(tokens).filter((token) => tokenShown(token, floors, viewMode))
+}
+
+export function PartyCard() {
+  const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
+  const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
+  const viewMode = useEditorStore((state) => state.viewMode)
   const role = useSessionStore((state) => state.role)
-  const ordered = sortByInitiative(tokens)
-  const ranks = new Map(ordered.map((token, index) => [token.id, index + 1]))
-  const visibleOnMap = (player: Player): boolean => {
-    if (viewMode !== 'player') return true
-    if (!tokenRevealed(player)) return false
-    const floor = floors.find((item) => item.id === player.floorId)
-    if (!floor) return false
-    const room = occupantRoom(floor.rooms, player.x, player.y)
-    return !room || roomRevealed(room)
-  }
-  const party = partyMembers(ordered).filter(visibleOnMap)
-  const monsters = monsterMembers(ordered).filter(visibleOnMap)
-  const canRun = role !== 'guest'
+  const party = partyMembers(useOrderedTokens())
+  const canRun = role !== 'guest' && viewMode !== 'player'
   const hasRolls = tokens.some((token) => token.initiativeRoll != null)
-  const showMonsters = viewMode !== 'player' || monsters.length > 0
 
   function addPlayer(): void {
     const id = useDungeonStore.getState().addPlayer(getActiveFloor().id)
     if (id) useEditorStore.getState().selectPlayer(id)
   }
 
+  return (
+    <section className="panel token-card is-party" aria-label="Party">
+      <header className="panel-head">
+        <h2 className="panel-title">
+          <Diamond />
+          <span>The Party</span>
+        </h2>
+        {canRun && tokens.length > 0 ? (
+          <div className="panel-head-tools">
+            {hasRolls ? (
+              <button
+                type="button"
+                className="text-btn"
+                onClick={() => useDungeonStore.getState().clearInitiative()}
+                title="Clear every initiative roll"
+              >
+                Clear
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="icon-btn is-accent"
+              aria-label="Next turn"
+              title="Next turn"
+              onClick={() => useDungeonStore.getState().advanceTurn()}
+            >
+              <Icon id="nextTurn" />
+            </button>
+          </div>
+        ) : null}
+      </header>
+
+      <div className="token-list">
+        {party.length === 0 ? (
+          <p className="panel-empty">
+            {viewMode === 'player' ? 'No visible players' : 'Add a player, then drag their token onto a floor tile'}
+          </p>
+        ) : (
+          party.map((player) => (
+            <TokenRow key={player.id} player={player} turn={turnPlayerId === player.id} />
+          ))
+        )}
+      </div>
+
+      {canRun ? (
+        <div className="panel-foot">
+          <button type="button" className="dashed-btn" onClick={addPlayer}>
+            <Icon id="plus" size={15} />
+            Add player
+          </button>
+          {tokens.length > 0 ? (
+            <button type="button" className="dashed-btn" onClick={() => rollInitiativeFor(tokens)}>
+              <Icon id="d20" size={15} />
+              Roll initiative
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+export function FoesCard() {
+  const viewMode = useEditorStore((state) => state.viewMode)
+  const role = useSessionStore((state) => state.role)
+  const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
+  const allFoes = monsterMembers(useDungeonStore((state) => state.dungeon.players ?? []))
+  const foes = monsterMembers(useOrderedTokens())
+  const dm = viewMode !== 'player'
+  const canRun = role !== 'guest' && dm
+  const hidden = allFoes.filter((foe) => foe.visible !== true).length
+
+  if (!dm && foes.length === 0) return null
+
   function addMonster(): void {
     const id = useDungeonStore.getState().addMonster(getActiveFloor().id)
     if (id) useEditorStore.getState().selectPlayer(id)
   }
 
-  function rollOutstanding(): void {
-    for (const token of tokens) {
-      if (token.initiativeRoll != null) continue
-      const bonus = normalizeStats(token.stats).initiative ?? 0
-      const roll = rollLocal(1, 20, bonus)
-      useDiceStore.getState().ingest({
-        ...roll,
-        title: 'Initiative',
-        kind: 'initiative',
-        character: characterNameOf(token),
-        characterId: token.characterId ?? undefined,
-      })
-    }
-  }
-
   return (
-    <>
-      <section className="party">
-        <header className="party-head">
-          <span>Party</span>
-          {viewMode === 'player' ? null : (
-            <button type="button" className="party-add" onClick={addPlayer}>
-              Add
-            </button>
-          )}
-        </header>
-        {canRun && tokens.length > 0 ? (
-          <div className="party-turn">
-            <button type="button" className="party-add" onClick={rollOutstanding}>
-              Roll init
-            </button>
-            <button type="button" className="party-add" onClick={() => useDungeonStore.getState().advanceTurn()}>
-              Next
-            </button>
-            {hasRolls ? (
-              <button type="button" className="party-add" onClick={() => useDungeonStore.getState().clearInitiative()}>
-                Clear
-              </button>
-            ) : null}
-          </div>
+    <section className="panel token-card is-foes" aria-label="Foes">
+      <header className="panel-head">
+        <h2 className="panel-title is-foe">
+          <Diamond />
+          <span>Foes</span>
+        </h2>
+        {dm && allFoes.length > 0 ? (
+          <span className="panel-meta">
+            {allFoes.length - hidden} revealed · {hidden} hidden
+          </span>
         ) : null}
-        {party.length === 0 ? (
-          <p className="party-empty">
-            {viewMode === 'player'
-              ? 'No visible players'
-              : 'Add a player, then drag their token onto a floor tile'}
-          </p>
+      </header>
+
+      <div className="token-list">
+        {foes.length === 0 ? (
+          <p className="panel-empty">Add a monster — hidden from players until you reveal it</p>
+        ) : dm ? (
+          foes.map((foe) => <TokenRow key={foe.id} player={foe} turn={turnPlayerId === foe.id} />)
         ) : (
-          party.map((player) => (
-            <PlayerCard
-              key={player.id}
-              player={player}
-              variant="player"
-              rank={hasRolls ? ranks.get(player.id) ?? null : null}
-              active={turnPlayerId === player.id}
-              leftInset={leftInset}
-            />
-          ))
+          foes.map((foe) => <FoeGlimpse key={foe.id} foe={foe} turn={turnPlayerId === foe.id} />)
         )}
-      </section>
-      {showMonsters ? (
-        <section className="party">
-          <header className="party-head">
-            <span>Monsters</span>
-            {viewMode === 'player' ? null : (
-              <button type="button" className="party-add" onClick={addMonster}>
-                Add
-              </button>
-            )}
-          </header>
-          {monsters.length === 0 ? (
-            <p className="party-empty">
-              {viewMode === 'player'
-                ? 'No visible monsters'
-                : 'Add a monster — hidden from players until you reveal it'}
-            </p>
-          ) : (
-            monsters.map((player) => (
-              <PlayerCard
-                key={player.id}
-                player={player}
-                variant="monster"
-                rank={hasRolls ? ranks.get(player.id) ?? null : null}
-                active={turnPlayerId === player.id}
-                leftInset={leftInset}
-              />
-            ))
-          )}
-        </section>
+      </div>
+
+      {canRun ? (
+        <div className="panel-foot">
+          <button type="button" className="dashed-btn" onClick={addMonster}>
+            <Icon id="plus" size={15} />
+            Add monster
+          </button>
+        </div>
       ) : null}
-    </>
+    </section>
   )
 }
 
-function PlayerCard({
-  player,
-  variant,
-  rank,
-  active,
-  leftInset,
-}: {
-  player: Player
-  variant: 'player' | 'monster'
-  rank: number | null
-  active: boolean
-  leftInset: number
-}) {
-  const viewMode = useEditorStore((state) => state.viewMode)
-  const selected = useEditorStore((state) => state.selectedPlayerId === player.id)
+function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
+  const open = useEditorStore((state) => state.sheetPlayerId === player.id)
   const hovered = useEditorStore((state) => state.hoverPlayerId === player.id)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [editing, setEditing] = useState<null | 'player' | 'character'>(null)
-  const [draft, setDraft] = useState('')
-  const visible = player.visible === true
-  const character = characterNameOf(player)
-  const initials = playerInitials(character)
+  const viewMode = useEditorStore((state) => state.viewMode)
+  const floors = useDungeonStore((state) => state.dungeon.floors)
   const mine = useSessionStore((state) => state.myPlayerId === player.id)
-  const role = useSessionStore((state) => state.role)
-  const canEditNames = variant === 'monster' ? role !== 'guest' : role !== 'guest' || mine
-  const monster = variant === 'monster'
-
-  function focus(): void {
-    useEditorStore.getState().focusPlayer(player.id, leftInset)
-  }
-
-  async function onPortrait(file: File | undefined): Promise<void> {
-    if (!file) return
-    const portrait = await readPortraitFile(file)
-    useDungeonStore.getState().setPlayerPortrait(player.id, portrait)
-  }
-
-  function beginEdit(field: 'player' | 'character'): void {
-    if (!canEditNames) return
-    setDraft(field === 'player' ? player.name : character)
-    setEditing(field)
-  }
-
-  function commitEdit(): void {
-    if (editing === 'player') useDungeonStore.getState().renamePlayer(player.id, draft)
-    if (editing === 'character') {
-      useDungeonStore.getState().renameCharacter(player.id, draft)
-      if (monster) useDungeonStore.getState().renamePlayer(player.id, draft)
-    }
-    setEditing(null)
-  }
-
-  function nameInput(field: 'player' | 'character') {
-    return (
-      <input
-        className={`party-name-input is-${field}`}
-        value={draft}
-        autoFocus
-        aria-label={field === 'player' ? 'Player name' : 'Character name'}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commitEdit}
-        onKeyDown={(event) => {
-          event.stopPropagation()
-          if (event.key === 'Enter') commitEdit()
-          if (event.key === 'Escape') setEditing(null)
-        }}
-      />
-    )
-  }
+  const stats = normalizeStats(player.stats)
+  const name = characterNameOf(player)
+  const monster = player.kind === 'monster'
+  const visible = player.visible === true
+  const dm = viewMode !== 'player'
+  const ratio = hpRatio(stats.hp, stats.hpMax)
+  const statuses = playerStatuses(player)
+  const firstStatus = STATUS_EFFECTS.find((effect) => effect.id === statuses[0])
+  const room = monster ? tokenPlace(player, floors).room : undefined
 
   return (
-    <fieldset
-      className={`player-card${monster ? ' is-monster' : ''}${selected ? ' is-selected' : ''}${hovered ? ' is-hovered' : ''}${active ? ' is-turn' : ''}`}
+    <div
+      className={`token-row${open ? ' is-open' : ''}${hovered ? ' is-hovered' : ''}${mine ? ' is-mine' : ''}`}
       onPointerEnter={() => useEditorStore.getState().setHoverPlayer(player.id)}
       onPointerLeave={() => useEditorStore.getState().setHoverPlayer(null)}
     >
-      <legend className="player-head">
-        {rank != null ? <span className="player-rank">{rank}</span> : null}
-        {viewMode === 'player' ? (
-          <span className="party-portrait" style={{ borderColor: player.color, background: player.color }}>
-            {player.portrait ? <img src={player.portrait} alt="" /> : <span>{initials}</span>}
+      <button
+        type="button"
+        className="token-row-main"
+        aria-expanded={open}
+        aria-label={monster ? `Open ${name} stat block` : `Open ${name}'s sheet`}
+        onClick={() => toggleSheet(player)}
+      >
+        <span className={`token-init${turn ? ' is-turn' : ''}${player.initiativeRoll == null ? ' is-empty' : ''}`}>
+          {player.initiativeRoll ?? '—'}
+        </span>
+        <Avatar player={player} turn={turn} dim={dm && !visible} />
+        <span className={`token-copy${dm && !visible ? ' is-dim' : ''}`}>
+          <span className="token-line">
+            <span className="token-name-wrap">
+              <span className="token-name">
+                {name}
+                {mine ? <em> · you</em> : null}
+              </span>
+              {firstStatus ? (
+                <span className="status-chip" style={{ color: firstStatus.color }}>
+                  {firstStatus.label}
+                  {statuses.length > 1 ? ` +${statuses.length - 1}` : ''}
+                </span>
+              ) : null}
+            </span>
+            <span className="token-hp">
+              {stats.hp ?? '–'}
+              <small>/{stats.hpMax ?? '–'}</small>
+            </span>
           </span>
-        ) : (
-          <button
-            type="button"
-            className="party-portrait"
-            title="Set standee cutout"
-            aria-label={`Set standee image for ${character}`}
-            onClick={(event) => {
-              event.stopPropagation()
-              fileRef.current?.click()
-            }}
-            style={{ borderColor: player.color, background: player.color }}
-          >
-            {player.portrait ? <img src={player.portrait} alt="" /> : <span>{initials}</span>}
-          </button>
-        )}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/png,image/*"
-          hidden
-          onChange={(event) => {
-            void onPortrait(event.target.files?.[0])
-            event.target.value = ''
-          }}
-        />
-        <div className="player-copy">
-          {!monster &&
-            (editing === 'player' ? (
-              nameInput('player')
-            ) : (
-              <button
-                type="button"
-                className="player-user-btn"
-                title={canEditNames ? 'Player name — double-click to edit' : 'Player name'}
-                onClick={focus}
-                onDoubleClick={() => beginEdit('player')}
-              >
-                {player.name}
-              </button>
-            ))}
-          {editing === 'character' ? (
-            nameInput('character')
-          ) : (
-            <button
-              type="button"
-              className="player-char-btn"
-              title={canEditNames ? `${monster ? 'Monster' : 'Character'} name — double-click to edit` : 'Name'}
-              onClick={focus}
-              onDoubleClick={() => beginEdit('character')}
-            >
-              {character}
-              {mine ? ' · you' : ''}
-            </button>
-          )}
-        </div>
-        {viewMode === 'player' ? null : (
-          <div className="player-tools">
-            <button
-              type="button"
-              className={`icon-btn${visible ? ' is-on' : ''}`}
-              aria-pressed={visible}
-              aria-label={visible ? `Hide ${character} from players` : `Reveal ${character} to players`}
-              title={visible ? 'Visible to players' : 'Hidden from players'}
-              onClick={(event) => {
-                event.stopPropagation()
-                useDungeonStore.getState().setPlayerVisible(player.id, !visible)
-              }}
-            >
-              <MenuIcon id={visible ? 'reveal' : 'hide'} />
-            </button>
-            <button
-              type="button"
-              className="icon-btn is-danger"
-              aria-label={`Remove ${character}`}
-              title={monster ? 'Remove monster' : 'Remove player'}
-              onClick={(event) => {
-                event.stopPropagation()
-                useDungeonStore.getState().deletePlayer(player.id)
-                const editor = useEditorStore.getState()
-                if (editor.selectedPlayerId === player.id) editor.selectPlayer(null)
-              }}
-            >
-              <MenuIcon id="delete" />
-            </button>
-          </div>
-        )}
-      </legend>
-      <PlayerStats player={player} />
-    </fieldset>
+          <span className="hp-bar">
+            <span
+              className={`hp-fill is-${hpTone(stats.hp, stats.hpMax)}`}
+              style={{ width: `${(ratio ?? 0) * 100}%` }}
+            />
+          </span>
+          {monster ? (
+            <span className="token-sub">
+              {stats.ac != null ? <span>AC {stats.ac}</span> : null}
+              {stats.ac != null && room ? <span>·</span> : null}
+              {room ? <span>{room.name}</span> : null}
+              {!visible ? <span className="hidden-chip">Hidden</span> : null}
+            </span>
+          ) : null}
+        </span>
+      </button>
+      {monster ? (
+        <button
+          type="button"
+          className="icon-btn"
+          aria-pressed={visible}
+          aria-label={visible ? `Hide ${name}` : `Reveal ${name}`}
+          title={visible ? `Hide ${name} from players` : `Reveal ${name} to players`}
+          onClick={() => useDungeonStore.getState().setPlayerVisible(player.id, !visible)}
+        >
+          <Icon id={visible ? 'eye' : 'eyeOff'} />
+        </button>
+      ) : (
+        <span className="ac-shield" title={stats.ac != null ? `Armor Class ${stats.ac}` : 'Armor Class'}>
+          <Icon id="shield" size={26} strokeWidth={1.3} />
+          <span>{stats.ac ?? '–'}</span>
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Players see a foe's name and how hurt it looks, never its numbers. */
+function FoeGlimpse({ foe, turn }: { foe: Player; turn: boolean }) {
+  const stats = normalizeStats(foe.stats)
+  const wound = woundLabel(stats.hp, stats.hpMax)
+  return (
+    <div className="token-row is-glimpse">
+      <Avatar player={foe} size={34} turn={turn} />
+      <span className="token-name">{characterNameOf(foe)}</span>
+      {wound ? <span className={`wound is-${wound.toLowerCase()}`}>{wound}</span> : null}
+    </div>
   )
 }

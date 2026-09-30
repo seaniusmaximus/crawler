@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { FOCUS_INSET } from '../app/layout.ts'
 import { applyRemote, isRemoteApply } from '../net/remote.ts'
 import {
   isNetMessage,
@@ -171,7 +172,7 @@ function handleGuestMessage(message: NetMessage): void {
     return
   }
   if (message.type === 'focus') {
-    useEditorStore.getState().focusRoom(message.floorId, message.roomId, 260)
+    useEditorStore.getState().focusRoom(message.floorId, message.roomId, FOCUS_INSET)
   }
 }
 

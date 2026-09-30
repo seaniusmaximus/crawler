@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { rotateAt } from '../canvas/camera.ts'
+import { rotateAt, zoomAt } from '../canvas/camera.ts'
 import type { DoorStyle, Tool } from '../model/tools.ts'
 import type { StairLanding, StairUsePrompt } from '../model/stairs.ts'
 import type { ViewMode } from '../model/visibility.ts'
@@ -30,7 +30,7 @@ export interface PlayerMenu {
 
 export type Menu = RoomMenu | OpeningMenu | PlayerMenu
 
-/** `leftInset` keeps the room centred in the area the flyout is not covering. */
+/** `leftInset` keeps the room centred in the area a docked panel is not covering. */
 export interface FocusRequest {
   roomId?: string
   playerId?: string
@@ -59,9 +59,12 @@ interface EditorState {
   stairsPrompt: StairLanding[] | null
   stairUse: StairUsePrompt | null
   viewMode: ViewMode
+  /** Token whose character sheet or stat block is open beside its card. */
+  sheetPlayerId: string | null
   setCamera: (camera: Camera) => void
   setViewport: (width: number, height: number) => void
   rotateView: (steps: number) => void
+  zoomView: (factor: number) => void
   setTool: (tool: Tool) => void
   setDoorStyle: (style: DoorStyle) => void
   setStairsDir: (dir: StairsDir) => void
@@ -82,6 +85,7 @@ interface EditorState {
   promptStairUse: (prompt: StairUsePrompt) => void
   closeStairUse: () => void
   setViewMode: (mode: ViewMode) => void
+  openSheet: (playerId: string | null) => void
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -102,11 +106,16 @@ export const useEditorStore = create<EditorState>((set) => ({
   stairsPrompt: null,
   stairUse: null,
   viewMode: 'dm',
+  sheetPlayerId: null,
   setCamera: (camera) => set({ camera }),
   setViewport: (width, height) => set({ viewport: { width, height } }),
   rotateView: (steps) =>
     set((state) => ({
       camera: rotateAt(state.camera, state.viewport.width / 2, state.viewport.height / 2, steps),
+    })),
+  zoomView: (factor) =>
+    set((state) => ({
+      camera: zoomAt(state.camera, state.viewport.width / 2, state.viewport.height / 2, factor),
     })),
   // Resize handles belong to the rooms tool, so leaving it ends resize mode.
   setTool: (tool) => set({ tool, menu: null, resizeRoomId: null, linkRoomId: null }),
@@ -173,4 +182,5 @@ export const useEditorStore = create<EditorState>((set) => ({
   closeStairUse: () => set({ stairUse: null }),
   setViewMode: (viewMode) =>
     set({ viewMode, menu: null, resizeRoomId: null, linkRoomId: null, hoverRoomId: null }),
+  openSheet: (sheetPlayerId) => set({ sheetPlayerId }),
 }))

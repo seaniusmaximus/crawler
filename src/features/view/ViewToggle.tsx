@@ -5,7 +5,7 @@ export function ViewToggle() {
   const setViewMode = useEditorStore((state) => state.setViewMode)
 
   return (
-    <div className="view-toggle" role="group" aria-label="Map view">
+    <div className="panel segmented" role="group" aria-label="Map view">
       <button
         type="button"
         className={mode === 'dm' ? 'is-active' : ''}

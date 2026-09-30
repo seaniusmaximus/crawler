@@ -220,7 +220,9 @@ export function hitToken(
     const size = playerSize(player)
     const standee = tokenStandee(camera, size)
     const pos = playerTokenCenter(player, rooms, ramps, camera)
-    const dist = standeeHit(sx, sy, pos, standee, playerStatuses(player).includes('prone'))
+    const dist =
+      standeeHit(sx, sy, pos, standee, playerStatuses(player).includes('prone')) ??
+      airColumnHit(sx, sy, pos, playerGroundCenter(player, rooms, ramps, camera), standee)
     if (dist === null) continue
     const mid = playerCenter(player.x, player.y, size)
     const depth = isoDepth(mid.x, mid.y, camera.yaw)
@@ -246,7 +248,30 @@ export function hitGhostToken(
   const size = playerSize(player)
   const standee = tokenStandee(camera, size)
   const pos = playerTokenCenterAt(player, x, y, rooms, ramps, camera)
-  return standeeHit(sx, sy, pos, standee, playerStatuses(player).includes('prone')) !== null
+  if (standeeHit(sx, sy, pos, standee, playerStatuses(player).includes('prone')) !== null) return true
+  const ground = playerGroundCenterAt(player, x, y, rooms, ramps, camera)
+  return airColumnHit(sx, sy, pos, ground, standee) !== null
+}
+
+/**
+ * The clear column under a raised token belongs to the token, so it can be
+ * grabbed or right-clicked from the floor. Mirrors `drawAirColumn`. Scores
+ * behind the figure itself so an overlapping standee still wins a tie.
+ */
+function airColumnHit(
+  sx: number,
+  sy: number,
+  pos: Point,
+  ground: Point,
+  standee: ReturnType<typeof tokenStandee>,
+): number | null {
+  if (ground.y - pos.y < 1.5) return null
+  const dx = (sx - pos.x) / standee.rx
+  if (dx * dx > 1) return null
+  if (sy >= pos.y && sy <= ground.y) return 2 + dx * dx
+  const dyFoot = (sy - ground.y) / standee.ry
+  if (dx * dx + dyFoot * dyFoot <= 1) return 2 + dx * dx + dyFoot * dyFoot
+  return null
 }
 
 function standeeHit(

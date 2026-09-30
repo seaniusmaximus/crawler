@@ -109,7 +109,7 @@ export interface DrawView {
 
 export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
   ctx.clearRect(0, 0, view.width, view.height)
-  ctx.fillStyle = '#121318'
+  ctx.fillStyle = '#0b0c10'
   ctx.fillRect(0, 0, view.width, view.height)
 
   const bounds = visibleCellBounds(view)

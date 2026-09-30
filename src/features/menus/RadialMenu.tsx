@@ -1,7 +1,16 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { FOCUS_INSET } from '../../app/layout.ts'
 import { resolveFloor } from '../../model/floors.ts'
 import { connectedOpenings } from '../../model/openings.ts'
-import { characterNameOf, playerHover, playerSize, playerStatuses } from '../../model/players.ts'
+import {
+  MAX_TOKEN_HOVER,
+  MAX_TOKEN_SIZE,
+  MIN_TOKEN_HOVER,
+  MIN_TOKEN_SIZE,
+  playerHover,
+  playerSize,
+  playerStatuses,
+} from '../../model/players.ts'
 import { FEET_PER_TILE } from '../../model/scale.ts'
 import { STATUS_EFFECTS } from '../../model/status.ts'
 import type { StatusId } from '../../model/status.ts'
@@ -11,20 +20,10 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import type { OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
-import { PANEL_WIDTH } from '../floors/FloorPanel.tsx'
-import {
-  RadialWheel,
-  WHEEL_INNER,
-  WHEEL_MID,
-  WHEEL_OUTER,
-  WHEEL_SIZE,
-  type WheelSlice,
-} from './RadialWheel.tsx'
+import { Ring, RingButton, RingCore, RingStepper } from './Ring.tsx'
+import { RING_SIZE, RING_SPOTS, RING_SPOTS_SIX } from './ringLayout.ts'
 
-type ItemId = 'raise' | 'lower' | 'rename' | 'resize' | 'delete' | 'visible'
-type TokenItemId = 'raise' | 'lower' | 'grow' | 'shrink' | 'visible' | 'status'
-
-/** Right-click menu for whole-room actions; tiles are edited with the tools. */
+/** Right-click menus for tokens, rooms and doors, laid out as a ring around the click. */
 export function RadialMenu() {
   const menu = useEditorStore((state) => state.menu)
   const activeFloorId = useEditorStore((state) => state.activeFloorId)
@@ -36,80 +35,68 @@ export function RadialMenu() {
   if (menu.kind === 'player') {
     const player = players.find((item) => item.id === menu.playerId)
     if (!player) return null
-    return <TokenRadial menu={menu} player={player} />
+    return <TokenRing menu={menu} player={player} />
   }
   const room = floor.rooms.find((item) => item.id === menu.roomId)
   if (!room) return null
   if (menu.kind === 'opening') {
-    return <OpeningRadial menu={menu} floorId={floor.id} room={room} rooms={floor.rooms} />
+    return <OpeningRing menu={menu} floorId={floor.id} room={room} rooms={floor.rooms} />
   }
-  return <RoomRadial menu={menu} floorId={floor.id} room={room} />
+  return <RoomRing menu={menu} floorId={floor.id} room={room} />
 }
 
-function RoomRadial({
+function RingFrame({
   menu,
-  floorId,
-  room,
+  className,
+  children,
 }: {
-  menu: RoomMenu
-  floorId: string
-  room: Room
+  menu: { x: number; y: number }
+  className?: string
+  children: ReactNode
 }) {
+  return (
+    <div
+      className={`radial${className ? ` ${className}` : ''}`}
+      style={{ left: menu.x, top: menu.y, width: RING_SIZE, height: RING_SIZE }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {children}
+    </div>
+  )
+}
+
+function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; room: Room }) {
   const closeMenu = useEditorStore((state) => state.closeMenu)
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(room.name)
   const inputRef = useRef<HTMLInputElement>(null)
+  const elevation = room.elevation ?? 0
 
   useEffect(() => {
     if (renaming) inputRef.current?.select()
   }, [renaming])
 
-  const slices: WheelSlice[] = [
-    { id: 'lower', label: 'Lower', start: -45, sweep: 90, r0: WHEEL_INNER, r1: WHEEL_MID },
-    { id: 'raise', label: 'Raise', start: -45, sweep: 90, r0: WHEEL_MID, r1: WHEEL_OUTER },
-    { id: 'rename', label: 'Rename', start: 45, sweep: 90, r0: WHEEL_INNER, r1: WHEEL_OUTER },
-    { id: 'resize', label: 'Resize', start: 135, sweep: 90, r0: WHEEL_INNER, r1: WHEEL_MID },
-    { id: 'delete', label: 'Delete', start: 135, sweep: 90, r0: WHEEL_MID, r1: WHEEL_OUTER, danger: true },
-    {
-      id: 'visible',
-      icon: room.visible ? 'hide' : 'reveal',
-      label: room.visible ? 'Hide' : 'Reveal',
-      start: 225,
-      sweep: 90,
-      r0: WHEEL_INNER,
-      r1: WHEEL_OUTER,
-    },
-  ]
+  function nudge(delta: number): void {
+    useDungeonStore.getState().nudgeRoomElevation(floorId, room.id, delta)
+  }
 
-  function choose(id: ItemId): void {
-    if (id === 'raise' || id === 'lower') {
-      useDungeonStore.getState().nudgeRoomElevation(floorId, room.id, id === 'raise' ? 1 : -1)
-      return
-    }
-    if (id === 'delete') {
-      const orphans = useDungeonStore.getState().deleteRoom(floorId, room.id)
-      useEditorStore.getState().selectRoom(null)
-      if (orphans.length > 0) useEditorStore.getState().promptStairLandings(orphans)
-      closeMenu()
-      return
-    }
-    if (id === 'visible') {
-      useDungeonStore.getState().setRoomVisible(floorId, room.id, !room.visible)
-      return
-    }
-    if (id === 'resize') {
-      const editor = useEditorStore.getState()
-      editor.setTool('rooms')
-      editor.beginResize(room.id)
-      return
-    }
-    setDraftName(room.name)
-    setRenaming(true)
+  function remove(): void {
+    const orphans = useDungeonStore.getState().deleteRoom(floorId, room.id)
+    useEditorStore.getState().selectRoom(null)
+    if (orphans.length > 0) useEditorStore.getState().promptStairLandings(orphans)
+    closeMenu()
+  }
+
+  function resize(): void {
+    const editor = useEditorStore.getState()
+    editor.setTool('rooms')
+    editor.beginResize(room.id)
   }
 
   function lookHere(): void {
     useDungeonStore.getState().setRoomVisible(floorId, room.id, true)
-    useEditorStore.getState().focusRoom(floorId, room.id, PANEL_WIDTH)
+    useEditorStore.getState().focusRoom(floorId, room.id, FOCUS_INSET)
     useSessionStore.getState().reportFocus(floorId, room.id)
     closeMenu()
   }
@@ -120,20 +107,15 @@ function RoomRadial({
     closeMenu()
   }
 
-  return (
-    <div
-      className={`radial${renaming ? ' is-editing' : ''}`}
-      style={{ left: menu.x, top: menu.y, width: WHEEL_SIZE, height: WHEEL_SIZE }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => event.preventDefault()}
-    >
-      {renaming ? null : <RadialWheel slices={slices} onChoose={(id) => choose(id as ItemId)} />}
-      {renaming ? (
-        <div className="radial-core is-editing" title={room.name}>
+  if (renaming) {
+    return (
+      <RingFrame menu={menu}>
+        <RingCore className="is-editing">
           <input
             ref={inputRef}
-            className="radial-input"
+            className="ring-input"
             value={draftName}
+            aria-label="Room name"
             onChange={(event) => setDraftName(event.target.value)}
             onKeyDown={(event) => {
               event.stopPropagation()
@@ -142,85 +124,68 @@ function RoomRadial({
             }}
             onBlur={commitRename}
           />
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="radial-core is-action"
+        </RingCore>
+      </RingFrame>
+    )
+  }
+
+  return (
+    <RingFrame menu={menu}>
+      <Ring>
+        <RingButton
+          spot={RING_SPOTS_SIX.top}
+          icon="look"
+          label="Look here"
           title={`Pull player vision to ${room.name}`}
           onClick={lookHere}
-        >
-          <span>
-            Look here
-            <small>{room.name}</small>
-          </span>
-        </button>
-      )}
-    </div>
+        />
+        <RingButton
+          spot={RING_SPOTS_SIX.upperRight}
+          icon="pencil"
+          label="Rename"
+          onClick={() => {
+            setDraftName(room.name)
+            setRenaming(true)
+          }}
+        />
+        <RingStepper
+          spot={RING_SPOTS_SIX.lowerRight}
+          label="Room elevation"
+          value={`${elevation}`}
+          caption="ELEV"
+          incLabel="Raise room"
+          decLabel="Lower room"
+          onInc={() => nudge(1)}
+          onDec={() => nudge(-1)}
+        />
+        <RingButton spot={RING_SPOTS_SIX.bottom} icon="trash" label="Delete" danger onClick={remove} />
+        <RingButton spot={RING_SPOTS_SIX.lowerLeft} icon="resize" label="Resize" onClick={resize} />
+        <RingButton
+          spot={RING_SPOTS_SIX.upperLeft}
+          icon={room.visible ? 'eyeOff' : 'eye'}
+          label={room.visible ? 'Hide' : 'Reveal'}
+          title={room.visible ? 'Hide from players' : 'Reveal to players'}
+          onClick={() => useDungeonStore.getState().setRoomVisible(floorId, room.id, !room.visible)}
+        />
+      </Ring>
+    </RingFrame>
   )
 }
 
-function TokenRadial({ menu, player }: { menu: PlayerMenu; player: Player }) {
+function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
   const [pickingStatus, setPickingStatus] = useState(false)
+  const viewMode = useEditorStore((state) => state.viewMode)
   const size = playerSize(player)
   const hover = playerHover(player)
   const statuses = playerStatuses(player)
   const visible = player.visible !== false
-  const character = characterNameOf(player)
+  const store = useDungeonStore.getState()
+  // Players never open a foe's stat block.
+  const canOpenSheet = player.kind !== 'monster' || viewMode !== 'player'
 
-  const slices: WheelSlice[] = [
-    { id: 'lower', label: 'Lower', start: -45, sweep: 90, r0: WHEEL_INNER, r1: WHEEL_MID },
-    { id: 'raise', label: 'Raise', start: -45, sweep: 90, r0: WHEEL_MID, r1: WHEEL_OUTER },
-    { id: 'status', label: 'Status', start: 45, sweep: 90, r0: WHEEL_INNER, r1: WHEEL_OUTER },
-    { id: 'shrink', label: '−5 ft', start: 135, sweep: 90, r0: WHEEL_INNER, r1: WHEEL_MID },
-    { id: 'grow', label: '+5 ft', start: 135, sweep: 90, r0: WHEEL_MID, r1: WHEEL_OUTER },
-    {
-      id: 'visible',
-      icon: visible ? 'hide' : 'reveal',
-      label: visible ? 'Hide' : 'Reveal',
-      start: 225,
-      sweep: 90,
-      r0: WHEEL_INNER,
-      r1: WHEEL_OUTER,
-    },
-  ]
-
-  function choose(id: TokenItemId): void {
-    if (id === 'raise') {
-      useDungeonStore.getState().nudgePlayerHover(player.id, 1)
-      return
-    }
-    if (id === 'lower') {
-      useDungeonStore.getState().nudgePlayerHover(player.id, -1)
-      return
-    }
-    if (id === 'grow') {
-      useDungeonStore.getState().nudgePlayerSize(player.id, 1)
-      return
-    }
-    if (id === 'shrink') {
-      useDungeonStore.getState().nudgePlayerSize(player.id, -1)
-      return
-    }
-    if (id === 'visible') {
-      useDungeonStore.getState().setPlayerVisible(player.id, !visible)
-      return
-    }
-    setPickingStatus(true)
-  }
-
-  function toggleStatus(id: StatusId): void {
-    useDungeonStore.getState().togglePlayerStatus(player.id, id)
-  }
-
-  return (
-    <div
-      className={`radial${pickingStatus ? ' is-status' : ''}`}
-      style={{ left: menu.x, top: menu.y, width: WHEEL_SIZE, height: WHEEL_SIZE }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => event.preventDefault()}
-    >
-      {pickingStatus ? (
+  if (pickingStatus) {
+    return (
+      <RingFrame menu={menu} className="is-status">
         <div className="radial-status">
           <div className="radial-status-head">
             <button type="button" className="radial-status-back" onClick={() => setPickingStatus(false)}>
@@ -238,7 +203,7 @@ function TokenRadial({ menu, player }: { menu: PlayerMenu; player: Player }) {
                   className={`radial-status-item${on ? ' is-on' : ''}`}
                   aria-pressed={on}
                   style={{ '--status': effect.color } as CSSProperties}
-                  onClick={() => toggleStatus(effect.id)}
+                  onClick={() => store.togglePlayerStatus(player.id, effect.id as StatusId)}
                 >
                   <span className="radial-status-swatch" />
                   {effect.label}
@@ -247,25 +212,71 @@ function TokenRadial({ menu, player }: { menu: PlayerMenu; player: Player }) {
             })}
           </div>
         </div>
-      ) : (
-        <>
-          <RadialWheel slices={slices} onChoose={(id) => choose(id as TokenItemId)} />
-          <div className="radial-core" title={character}>
-            <span>
-              {character}
-              <small>
-                {size}×{size}
-                {hover > 0 ? ` · ${hover * FEET_PER_TILE} ft` : ''}
-              </small>
-            </span>
-          </div>
-        </>
-      )}
-    </div>
+      </RingFrame>
+    )
+  }
+
+  return (
+    <RingFrame menu={menu}>
+      <Ring>
+        {canOpenSheet ? (
+          <RingButton
+            spot={RING_SPOTS.top}
+            icon="person"
+            label="Sheet"
+            title={player.kind === 'monster' ? 'Open stat block' : 'Open character sheet'}
+            onClick={() => {
+              const editor = useEditorStore.getState()
+              editor.openSheet(player.id)
+              editor.closeMenu()
+            }}
+          />
+        ) : null}
+        <RingButton
+          spot={RING_SPOTS.upperRight}
+          icon="heart"
+          label="Status"
+          active={statuses.length > 0}
+          title={statuses.length > 0 ? `${statuses.length} active` : 'Set conditions'}
+          onClick={() => setPickingStatus(true)}
+        />
+        <RingButton
+          spot={RING_SPOTS.upperLeft}
+          icon={visible ? 'eyeOff' : 'eye'}
+          label={visible ? 'Hide' : 'Reveal'}
+          title={visible ? 'Hide from players' : 'Reveal to players'}
+          onClick={() => store.setPlayerVisible(player.id, !visible)}
+        />
+        <RingStepper
+          spot={RING_SPOTS.lowerRight}
+          label="Height above floor"
+          value={`${hover * FEET_PER_TILE} ft`}
+          caption="HEIGHT"
+          incLabel={`Raise ${FEET_PER_TILE} ft`}
+          decLabel={`Lower ${FEET_PER_TILE} ft`}
+          onInc={() => store.nudgePlayerHover(player.id, 1)}
+          onDec={() => store.nudgePlayerHover(player.id, -1)}
+          incDisabled={hover >= MAX_TOKEN_HOVER}
+          decDisabled={hover <= MIN_TOKEN_HOVER}
+        />
+        <RingStepper
+          spot={RING_SPOTS.lowerLeft}
+          label="Token size"
+          value={`${size * FEET_PER_TILE} ft`}
+          caption="SIZE"
+          incLabel={`Larger (+${FEET_PER_TILE} ft)`}
+          decLabel={`Smaller (−${FEET_PER_TILE} ft)`}
+          onInc={() => store.nudgePlayerSize(player.id, 1)}
+          onDec={() => store.nudgePlayerSize(player.id, -1)}
+          incDisabled={size >= MAX_TOKEN_SIZE}
+          decDisabled={size <= MIN_TOKEN_SIZE}
+        />
+      </Ring>
+    </RingFrame>
   )
 }
 
-function OpeningRadial({
+function OpeningRing({
   menu,
   floorId,
   room,
@@ -281,36 +292,22 @@ function OpeningRadial({
   const open = openingIsOpen(room, menu.cellX, menu.cellY)
   const label = kind === 'window' ? 'Window' : 'Door'
 
-  const slices: WheelSlice[] = [
-    { id: 'open', label: 'Open', start: -90, sweep: 180, r0: WHEEL_INNER, r1: WHEEL_OUTER, active: open },
-    {
-      id: 'close',
-      label: 'Close',
-      start: 90,
-      sweep: 180,
-      r0: WHEEL_INNER,
-      r1: WHEEL_OUTER,
-      active: !open,
-    },
-  ]
-
-  function choose(id: 'open' | 'close'): void {
+  function choose(next: boolean): void {
     const spots = connectedOpenings(rooms, room.id, menu.cellX, menu.cellY)
-    useDungeonStore.getState().setOpeningOpen(floorId, spots, id === 'open')
+    useDungeonStore.getState().setOpeningOpen(floorId, spots, next)
     closeMenu()
   }
 
   return (
-    <div
-      className="radial"
-      style={{ left: menu.x, top: menu.y, width: WHEEL_SIZE, height: WHEEL_SIZE }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => event.preventDefault()}
-    >
-      <RadialWheel slices={slices} onChoose={(id) => choose(id as 'open' | 'close')} />
-      <div className="radial-core" title={label}>
-        <span>{label}</span>
-      </div>
-    </div>
+    <RingFrame menu={menu}>
+      <Ring>
+        <RingButton spot={RING_SPOTS.upperLeft} icon="doorOpen" label="Open" active={open} onClick={() => choose(true)} />
+        <RingButton spot={RING_SPOTS.upperRight} icon="doors" label="Close" active={!open} onClick={() => choose(false)} />
+        <RingCore className="is-label">
+          <span>{label}</span>
+          <small>{open ? 'Open' : 'Closed'}</small>
+        </RingCore>
+      </Ring>
+    </RingFrame>
   )
 }

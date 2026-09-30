@@ -6,6 +6,11 @@ export function floorName(order: number): string {
   return order >= 0 ? `Floor ${order + 1}` : `Basement ${-order}`
 }
 
+/** Short elevator-style label: F1 is the ground floor, B1 the first basement. */
+export function floorTag(order: number): string {
+  return order >= 0 ? `F${order + 1}` : `B${-order}`
+}
+
 /** Highest floor first, the way a floor stack reads. */
 export function floorsTopDown(floors: readonly Floor[]): Floor[] {
   return [...floors].sort((a, b) => b.order - a.order)

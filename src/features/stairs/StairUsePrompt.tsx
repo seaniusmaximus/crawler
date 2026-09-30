@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { PANEL_WIDTH } from '../floors/FloorPanel.tsx'
+import { FOCUS_INSET } from '../../app/layout.ts'
 import { canPlacePlayer, findStandable, occupiedCells, playerSize } from '../../model/players.ts'
 import type { StairExit } from '../../model/stairs.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -47,7 +47,7 @@ export function StairUsePrompt() {
     dungeon.setRoomVisible(floor.id, exit.roomId, true)
     dungeon.movePlayer(player.id, floor.id, dest.x, dest.y)
     useSessionStore.getState().reportMove(player.id, floor.id, dest.x, dest.y)
-    useEditorStore.getState().focusPlayer(player.id, PANEL_WIDTH)
+    useEditorStore.getState().focusPlayer(player.id, FOCUS_INSET)
     close()
   }
 
