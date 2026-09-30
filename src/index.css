@@ -2074,6 +2074,9 @@ a:hover {
 }
 
 .dice-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-height: 0;
   margin: 0;
   padding: 0;
@@ -2085,7 +2088,35 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 4px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+/* The newest roll reads as a lit card; older rolls stay quiet beneath it. */
+.dice-log-item:first-child {
+  padding: 12px 12px 12px 10px;
+  border-color: rgba(227, 191, 106, 0.45);
+  background: linear-gradient(90deg, rgba(227, 191, 106, 0.16), rgba(227, 191, 106, 0.05));
+  box-shadow: inset 3px 0 0 var(--gold);
+  animation: roll-land 0.35s ease-out;
+}
+
+.dice-log-item:not(:first-child) {
+  opacity: 0.72;
+}
+
+@keyframes roll-land {
+  from {
+    transform: translateY(-4px);
+    background-color: rgba(227, 191, 106, 0.28);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dice-log-item:first-child {
+    animation: none;
+  }
 }
 
 .roll-dot {
@@ -2125,8 +2156,32 @@ a:hover {
   font-size: 20px;
 }
 
+.dice-log-item:first-child .roll-dot {
+  width: 10px;
+  height: 10px;
+  box-shadow: 0 0 0 3px rgba(227, 191, 106, 0.18);
+}
+
+.dice-log-item:first-child .roll-who {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dice-log-item:first-child .roll-note {
+  color: var(--text-dim);
+}
+
 .dice-log-item:first-child .roll-total {
-  font-size: 26px;
+  font-size: 30px;
+  font-weight: 500;
+  color: var(--gold-hi);
+  text-shadow: 0 0 18px rgba(227, 191, 106, 0.35);
+}
+
+.dice-log-item:first-child .roll-total.is-fumble {
+  color: var(--low);
+  text-shadow: 0 0 18px rgba(217, 98, 94, 0.35);
 }
 
 .roll-total.is-crit {

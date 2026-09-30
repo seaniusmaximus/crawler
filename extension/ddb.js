@@ -1,16 +1,17 @@
+// Reads the D&D Beyond sheet the user has open and forwards it to Crawler.
+//
+// Page-only by design: this runs in the extension's isolated world, reads what
+// the sheet already shows, and never injects code into the page, patches its
+// network calls, hooks its internals, or calls D&D Beyond's services itself.
+
+const CHARACTER_POLL_MS = 2000
+const ROLL_SCAN_MS = 1500
+
 function runtimeAlive() {
   try {
     return Boolean(chrome.runtime?.id)
   } catch {
     return false
-  }
-}
-
-function cloneJson(value) {
-  try {
-    return JSON.parse(JSON.stringify(value ?? null))
-  } catch {
-    return null
   }
 }
 
@@ -25,17 +26,74 @@ function sendRuntime(message) {
   }
 }
 
-function sendRolls(rolls) {
-  const safe = cloneJson(rolls)
-  if (!Array.isArray(safe) || !safe.length) return
-  sendRuntime({ type: 'DICE_ROLL', rolls: safe })
+function num(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
+function clean(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function textOf(root, selector) {
+  return clean(root.querySelector(selector)?.textContent)
+}
+
+function firstText(selectors) {
+  for (const selector of selectors) {
+    const text = clean(document.querySelector(selector)?.textContent)
+    if (text) return text
+  }
+  return ''
+}
+
+function firstNumber(selectors) {
+  return num(firstText(selectors).replace(/,/g, '').match(/-?\d+/)?.[0])
+}
+
+function signedNumber(selectors) {
+  const match = firstText(selectors)
+    .replace(/,/g, '')
+    .match(/([+-]?)(\d+)/)
+  if (!match) return null
+  const value = Number(match[2])
+  return match[1] === '-' ? -value : value
+}
+
+// ---------- Who is on this sheet ----------
+
+function sheetCharacterId() {
+  return (window.location.pathname.match(/\/characters\/(\d+)/) || [])[1] || ''
+}
+
+function characterName() {
+  const fromDom = firstText([
+    '.ddbc-character-tidbits__heading h1',
+    '.ct-character-tidbits__heading h1',
+    '[class*="character-tidbits"] h1',
+  ])
+  if (fromDom) return fromDom
+  return document.title.replace(/\s*[-–|].*$/, '').trim() || 'D&D Beyond'
+}
+
+function portraitUrl() {
+  const img =
+    document.querySelector('.ddbc-character-avatar__portrait') ||
+    document.querySelector('.ct-character-tidbits__avatar img') ||
+    document.querySelector('[class*="character-avatar"] img') ||
+    document.querySelector('[class*="character-tidbits"] img')
+  return (img instanceof HTMLImageElement && img.src) || ''
+}
+
+// The portrait is the image the sheet is already showing; re-reading it is
+// normally served from the browser cache and happens once per image.
 const portraitCache = { url: '', data: null }
 
 async function portraitData(url) {
-  if (!url) return portraitCache.data
-  if (url === portraitCache.url && portraitCache.data) return portraitCache.data
+  if (!url) return null
+  if (url === portraitCache.url) return portraitCache.data
   try {
     const response = await fetch(url)
     const blob = await response.blob()
@@ -49,261 +107,381 @@ async function portraitData(url) {
     portraitCache.data = data
     return data
   } catch {
+    portraitCache.url = url
+    portraitCache.data = url
     return url
   }
 }
 
-function fillMissing(base, extra) {
-  if (!extra) return base || null
-  const next = { ...(base || {}) }
-  for (const [key, value] of Object.entries(extra)) {
-    if (next[key] == null && value != null && value !== '') next[key] = value
+// ---------- Stats shown on the sheet ----------
+
+function itemValue(item) {
+  const input = item.querySelector('input')
+  if (input && input.value !== '') return num(input.value)
+  const button = item.querySelector('button[class*="value"], button[class*="Value"]')
+  if (button) return num((button.textContent || '').replace(/,/g, '').match(/-?\d+/)?.[0])
+  return num((item.textContent || '').replace(/,/g, '').match(/-?\d+/)?.[0])
+}
+
+function looksLikeHpPair(current, max) {
+  if (current == null || max == null) return false
+  if (max <= 3) return false
+  return max >= current || current === 0
+}
+
+function scrapeHp() {
+  let hp = null
+  let hpMax = null
+  let hpTemp = null
+
+  const items = document.querySelectorAll(
+    '.ct-health-summary__hp-item, [class*="health-summary__hp-item"], .ct-quick-info__health [class*="styles_item"], [class*="styles_innerContainer"] [class*="styles_item"]',
+  )
+  for (const item of items) {
+    const text = clean(item.textContent)
+    const value = itemValue(item)
+    if (value == null) continue
+    if (/current/i.test(text)) hp = value
+    else if (/\bmax\b/i.test(text)) hpMax = value
+    else if (/temp/i.test(text)) hpTemp = value
   }
-  return next
-}
 
-function pickCurrentHp(dom, api) {
-  if (dom != null && dom > 0) return dom
-  if (api != null && api > 0) return api
-  if (dom === 0 && api === 0) return 0
-  return dom ?? api ?? null
-}
-
-function pickMaxHp(dom, api) {
-  if (dom != null && dom > 3) return dom
-  if (api != null && api > 0) return api
-  return dom ?? api ?? null
-}
-
-function mergeHp(dom, api) {
-  return {
-    hp: pickCurrentHp(dom?.hp, api?.hp),
-    hpMax: pickMaxHp(dom?.hpMax, api?.hpMax),
-    hpTemp: dom?.hpTemp ?? api?.hpTemp ?? null,
+  if (hp == null) {
+    hp = firstNumber([
+      '.ct-health-summary__hp-number--current',
+      '.ct-status-summary-mobile__hp-current',
+      '[class*="health-summary__hp-number--current"]',
+      '[class*="hp-current"]',
+    ])
   }
+  if (hpMax == null) {
+    hpMax = firstNumber([
+      '.ct-health-summary__hp-number--max',
+      '.ct-status-summary-mobile__hp-max',
+      '[class*="health-summary__hp-number--max"]',
+      '[class*="hp-max"]',
+      '[class*="styles_maxContainer"]',
+    ])
+  }
+  if (hpTemp == null) {
+    hpTemp = firstNumber([
+      '.ct-health-summary__hp-number--temp',
+      '[class*="health-summary__hp-number--temp"]',
+      '[class*="styles_temp"] input',
+      '[class*="styles_temp"] button',
+    ])
+  }
+
+  if (hp == null || hpMax == null) {
+    const slashNodes = document.querySelectorAll(
+      '.ct-health-summary__hp-group--primary, .ct-health-summary__hp, .ct-status-summary-mobile__hp, [class*="hp-group--primary"]',
+    )
+    for (const node of slashNodes) {
+      const match = clean(node.textContent).match(/(-?\d+)\s*\/\s*(-?\d+)/)
+      if (!match) continue
+      const current = num(match[1])
+      const max = num(match[2])
+      if (!looksLikeHpPair(current, max)) continue
+      if (hp == null) hp = current
+      if (hpMax == null) hpMax = max
+      break
+    }
+  }
+
+  return { hp, hpMax, hpTemp: hpTemp != null && hpTemp > 0 ? hpTemp : null }
 }
 
 const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha']
 
-function looksLikeScore(value) {
-  return value != null && value >= 8 && value <= 30
+function signedFrom(text) {
+  const match = String(text || '')
+    .replace(/,/g, '')
+    .match(/([+-])\s*(\d+)/)
+  if (!match) return null
+  const value = Number(match[2])
+  return match[1] === '-' ? -value : value
 }
 
-function reconcileAbilities(stats, api) {
-  const next = { ...(stats || {}) }
-  for (const key of ABILITY_KEYS) {
-    const modKey = `${key}Mod`
-    const apiScore = api?.[key]
-    const apiMod = api?.[modKey]
-    if (looksLikeScore(apiScore)) next[key] = apiScore
-    else if (!looksLikeScore(next[key])) next[key] = null
-    if (next[modKey] == null && apiMod != null) next[modKey] = apiMod
-    if (next[modKey] == null && next[key] != null) next[modKey] = abilityMod(next[key])
-    if (looksLikeScore(next[key]) && next[modKey] == null) next[modKey] = abilityMod(next[key])
-  }
-  return next
+function unsignedFrom(text) {
+  const cleaned = String(text || '').replace(/,/g, '')
+  if (/[+-]/.test(cleaned)) return null
+  return num(cleaned.match(/\d+/)?.[0])
 }
 
-const ABILITY_BY_ID = { 1: 'str', 2: 'dex', 3: 'con', 4: 'int', 5: 'wis', 6: 'cha' }
-const SCORE_SUBTYPE = {
-  1: 'strength-score',
-  2: 'dexterity-score',
-  3: 'constitution-score',
-  4: 'intelligence-score',
-  5: 'wisdom-score',
-  6: 'charisma-score',
-}
-
-function asNumber(value) {
-  const n = Number(value)
-  return Number.isFinite(n) ? n : null
-}
-
-function allModifiers(data) {
-  const bags = data?.modifiers && typeof data.modifiers === 'object' ? data.modifiers : {}
-  return Object.values(bags)
-    .flat()
-    .filter((item) => item && typeof item === 'object')
-}
-
-function abilityMod(score) {
-  return Math.floor((Number(score) - 10) / 2)
-}
-
-function abilityScore(data, id) {
-  const override = (data.overrideStats || []).find((item) => item?.id === id)
-  if (override && override.value != null) return asNumber(override.value)
-  const base = asNumber((data.stats || []).find((item) => item?.id === id)?.value) ?? 0
-  const bonus = asNumber((data.bonusStats || []).find((item) => item?.id === id)?.value) ?? 0
-  const mods = allModifiers(data).filter(
-    (item) => item.subType === SCORE_SUBTYPE[id] && !item.restriction,
+function scrapeAbilities() {
+  const nodes = document.querySelectorAll(
+    '.ct-quick-info__ability, .ddbc-quick-info__ability, .ct-ability-summary, .ddbc-ability-summary, [class*="ability-summary"]',
   )
-  const set = mods.find((item) => item.type === 'set' && item.value != null)
-  if (set) return asNumber(set.value)
-  const extra = mods
-    .filter((item) => item.type === 'bonus')
-    .reduce((sum, item) => sum + (asNumber(item.value) || 0), 0)
-  const total = base + bonus + extra
-  return total > 0 ? total : null
-}
-
-function classLevel(data) {
-  return (Array.isArray(data.classes) ? data.classes : []).reduce(
-    (sum, item) => sum + (Number(item?.level) || 0),
-    0,
-  )
-}
-
-function proficiencyBonus(level) {
-  return Math.max(2, Math.floor(((level || 1) - 1) / 4) + 2)
-}
-
-function modifierSum(data, type, subTypes) {
-  const wanted = new Set(subTypes)
-  return allModifiers(data)
-    .filter((item) => item.type === type && wanted.has(item.subType) && !item.restriction)
-    .reduce((sum, item) => sum + (asNumber(item.value) || 0), 0)
-}
-
-function hasModifier(data, type, subTypes) {
-  const wanted = new Set(subTypes)
-  return allModifiers(data).some((item) => item.type === type && wanted.has(item.subType))
-}
-
-function skillPassive(data, level, abilityId, skill) {
-  const score = abilityScore(data, abilityId)
-  if (score == null) return null
-  const names = [skill, `skill-${skill}`]
-  const proficient = hasModifier(data, 'proficiency', names)
-  const expertise = hasModifier(data, 'expertise', names)
-  const pb = proficiencyBonus(level)
-  const bonus = modifierSum(data, 'bonus', names)
-  const passiveBonus = modifierSum(data, 'bonus', [`passive-${skill}`, `${skill}-passive`])
-  return 10 + abilityMod(score) + (expertise ? pb * 2 : proficient ? pb : 0) + bonus + passiveBonus
-}
-
-function maxHitPoints(data, level, conScore) {
-  const override = asNumber(data.overrideHitPoints)
-  if (override != null) return override
-  const perLevel = modifierSum(data, 'bonus', ['hit-points-per-level'])
-  const flat = modifierSum(data, 'bonus', ['hit-points', 'hp-max', 'maximum-hit-points'])
-  return (
-    (asNumber(data.baseHitPoints) || 0) +
-    (asNumber(data.bonusHitPoints) || 0) +
-    abilityMod(conScore ?? 10) * (level || 0) +
-    perLevel * (level || 0) +
-    flat
-  )
-}
-
-function parseApiStats(data) {
-  if (!data || typeof data !== 'object') return null
-  const level = classLevel(data)
-  const klass = (Array.isArray(data.classes) ? data.classes : [])
-    .map((item) => item?.definition?.name)
-    .filter(Boolean)
-    .join(' / ')
-  const abilities = {}
-  const abilityMods = {}
-  for (const [id, key] of Object.entries(ABILITY_BY_ID)) {
-    const score = abilityScore(data, Number(id))
-    abilities[key] = score
-    if (score != null) abilityMods[`${key}Mod`] = abilityMod(score)
+  const out = {}
+  for (const node of nodes) {
+    const key = textOf(
+      node,
+      '.ct-ability-summary__abbr, .ddbc-ability-summary__abbr, [class*="ability-summary__abbr"]',
+    ).toLowerCase()
+    if (!ABILITY_KEYS.includes(key) || out[key] != null) continue
+    const primary = textOf(
+      node,
+      '.ct-ability-summary__primary, .ddbc-ability-summary__primary, [class*="ability-summary__primary"]',
+    )
+    const secondary = textOf(
+      node,
+      '.ct-ability-summary__secondary, .ddbc-ability-summary__secondary, [class*="ability-summary__secondary"]',
+    )
+    // The sheet can be set to show either the modifier or the score on top.
+    let mod = signedFrom(primary)
+    let score = unsignedFrom(secondary)
+    if (mod == null) {
+      mod = signedFrom(secondary)
+      score = unsignedFrom(primary)
+    }
+    if (score != null && score < 1) score = null
+    if (score != null) out[key] = score
+    if (mod == null && score != null) mod = Math.floor((score - 10) / 2)
+    if (mod != null) out[`${key}Mod`] = mod
   }
-  const hpMax = maxHitPoints(data, level, abilities.con)
-  const removed = asNumber(data.removedHitPoints) || 0
-  const hpTemp = asNumber(data.temporaryHitPoints)
-  const initOverride = asNumber(data.overrideInitiative ?? data.initiativeBonus)
-  const initiative =
-    initOverride != null
-      ? initOverride
-      : abilities.dex != null
-        ? abilityMod(abilities.dex) +
-          modifierSum(data, 'bonus', ['initiative']) +
-          (hasModifier(data, 'proficiency', ['initiative']) ? proficiencyBonus(level) : 0)
-        : null
-  return {
-    hp: Number.isFinite(hpMax) ? Math.max(0, hpMax - removed) : null,
-    hpMax: Number.isFinite(hpMax) && hpMax > 0 ? hpMax : null,
-    hpTemp: hpTemp != null && hpTemp > 0 ? hpTemp : null,
-    ac: asNumber(data.overrideAc ?? data.customAc),
-    speed: asNumber(data.baseWalkSpeed ?? data.walkSpeed),
-    initiative,
-    level: level || null,
-    klass: klass || null,
-    ...abilities,
-    ...abilityMods,
-    passivePerception: skillPassive(data, level, 5, 'perception'),
-    passiveInsight: skillPassive(data, level, 5, 'insight'),
-    passiveInvestigation: skillPassive(data, level, 4, 'investigation'),
-  }
+  return out
 }
 
-async function fetchApiStats(characterId) {
-  const urls = [
-    `https://character-service.dndbeyond.com/character/v5/character/${characterId}`,
-    `https://character-service.dndbeyond.com/character/v3/character/${characterId}`,
+function scrapePassives() {
+  const out = {}
+  const pairs = [
+    [/perception/i, 'passivePerception'],
+    [/insight/i, 'passiveInsight'],
+    [/investigation/i, 'passiveInvestigation'],
   ]
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, { credentials: 'include' })
-      if (!response.ok) continue
-      const json = await response.json()
-      const stats = parseApiStats(json.data || json)
-      if (stats) return stats
-    } catch {
-      // Try the next character-service version.
+  const nodes = document.querySelectorAll(
+    '.ct-senses__callout, .ddbc-senses__callout, [class*="senses__callout"], [class*="senses"] [class*="callout"], [class*="Senses"] li, [class*="senses"] li',
+  )
+  for (const node of nodes) {
+    const text = clean(node.textContent)
+    for (const [pattern, key] of pairs) {
+      if (!pattern.test(text) || out[key] != null) continue
+      const value = num(text.match(/(\d+)\s*$/)?.[1] || text.match(/\d+/)?.[0])
+      if (value != null) out[key] = value
     }
   }
-  return null
+  return out
 }
 
-let lastDomCharacter = null
-let lastSentKey = ''
-let pollBusy = false
-
-async function sendCharacter(character) {
-  if (!character || !character.characterId) return
-  lastDomCharacter = character
-  const [portrait, apiStats] = await Promise.all([
-    portraitData(character.portrait),
-    fetchApiStats(character.characterId),
+function scrapeStats() {
+  const levelText = firstText([
+    '.ddbc-character-tidbits__level',
+    '.ct-character-tidbits__level',
+    '[class*="character-tidbits__level"]',
   ])
-  const filled = fillMissing(character.stats, apiStats)
-  const merged = reconcileAbilities(filled, apiStats)
-  Object.assign(merged, mergeHp(character.stats, apiStats))
-  const payload = {
-    characterId: String(character.characterId),
-    name: String(character.name || ''),
-    portrait,
-    stats: merged,
+  const klass = firstText([
+    '.ddbc-character-tidbits__classes',
+    '.ct-character-tidbits__classes',
+    '[class*="character-tidbits__classes"]',
+  ])
+  return {
+    ...scrapeHp(),
+    ac: firstNumber([
+      '.ct-armor-class-box__value',
+      '.ddbc-armor-class-box__value',
+      '[class*="armor-class-box__value"]',
+      '[class*="armor-class"] [class*="__value"]',
+    ]),
+    speed: firstNumber([
+      '.ct-speed-box__box-value',
+      '.ddbc-speed-box__box-value',
+      '[class*="speed-box__box-value"]',
+      '[class*="speed-box"] [class*="distance-number__number"]',
+    ]),
+    initiative: signedNumber([
+      '.ct-initiative-box__value',
+      '.ddbc-initiative-box__value',
+      '[class*="initiative-box__value"]',
+      '[class*="initiative-box"] [class*="signed-number"]',
+      '.ct-combat-mobile__extra--initiative [class*="signed-number"]',
+      '[class*="initiative"] [class*="signed-number"]',
+    ]),
+    level: num(levelText.replace(/level/i, '').match(/\d+/)?.[0]),
+    klass: klass || null,
+    ...scrapeAbilities(),
+    ...scrapePassives(),
   }
-  const key = JSON.stringify({
-    characterId: payload.characterId,
-    name: payload.name,
-    stats: payload.stats,
-  })
-  if (key === lastSentKey) return
-  lastSentKey = key
-  sendRuntime({ type: 'CHARACTER', character: payload })
 }
 
-window.addEventListener('message', (event) => {
-  if (event.source !== window || !event.data) return
-  if (event.data.type === 'CRAWLER_DDB_ROLL') {
-    const rolls = Array.isArray(event.data.rolls) ? event.data.rolls : []
-    if (rolls.length) sendRolls(rolls)
-    return
-  }
-  if (event.data.type === 'CRAWLER_DDB_CHARACTER') {
-    void sendCharacter(event.data.character)
-  }
-})
+let lastCharacterKey = ''
+let characterBusy = false
 
-window.setInterval(() => {
-  if (pollBusy || !lastDomCharacter) return
-  pollBusy = true
-  void sendCharacter(lastDomCharacter).finally(() => {
-    pollBusy = false
+async function sendCharacter() {
+  const characterId = sheetCharacterId()
+  if (!characterId || characterBusy) return
+  const scraped = {
+    characterId,
+    name: characterName(),
+    portraitUrl: portraitUrl(),
+    stats: scrapeStats(),
+  }
+  const key = JSON.stringify(scraped)
+  if (key === lastCharacterKey) return
+  characterBusy = true
+  try {
+    const portrait = await portraitData(scraped.portraitUrl)
+    lastCharacterKey = key
+    sendRuntime({
+      type: 'CHARACTER',
+      character: { characterId, name: scraped.name, portrait, stats: scraped.stats },
+    })
+  } finally {
+    characterBusy = false
+  }
+}
+
+let characterTimer = 0
+function requestCharacter() {
+  window.clearTimeout(characterTimer)
+  characterTimer = window.setTimeout(() => void sendCharacter(), 250)
+}
+
+// ---------- Rolls from the sheet's result popups ----------
+
+const CARD_SELECTOR = '.dice_result, [class*="dice_result"], [class*="DiceResult"]'
+/** How long a popup's text must hold still before it counts, so a total that animates in is read once. */
+const SETTLE_MS = 300
+/** Per popup: the text last sent, and text seen but not yet settled. */
+const cardState = new WeakMap()
+let baselineTaken = false
+
+/**
+ * Pairs the popup's breakdown ("17+7", or "17,4+7" with advantage) with the
+ * formula's dice, so Crawler gets each die's face and can spot a natural 20.
+ * Returns [] when the two do not line up rather than guessing.
+ */
+function diceFromBreakdown(formula, breakdown) {
+  const groups = [...String(formula).matchAll(/(\d*)d(\d+)(k[hl]1)?/gi)].map((match) => ({
+    count: Number(match[1] || 1),
+    faces: Number(match[2]),
+    keep: (match[3] || '').toLowerCase(),
+  }))
+  const values = (String(breakdown).match(/\d+/g) || []).map(Number)
+  const wanted = groups.reduce((sum, group) => sum + group.count, 0)
+  if (!groups.length || values.length < wanted) return []
+
+  const dice = []
+  let at = 0
+  for (const group of groups) {
+    const rolled = values.slice(at, at + group.count).map((value) => ({ faces: group.faces, value }))
+    at += group.count
+    // A face the die cannot show means the text was not a per-die breakdown.
+    if (rolled.some((die) => die.value < 1 || die.value > die.faces)) return []
+    if (group.keep && rolled.length > 1) {
+      const best = group.keep === 'kh1' ? Math.max(...rolled.map((die) => die.value)) : Math.min(...rolled.map((die) => die.value))
+      let kept = false
+      for (const die of rolled) {
+        if (!kept && die.value === best) kept = true
+        else die.discarded = true
+      }
+    }
+    dice.push(...rolled)
+  }
+  return dice
+}
+
+function readCard(card) {
+  const title = textOf(card, '.dice_result__info__title, .dice_result__info__rolldetail, [class*="rolldetail"], [class*="RollDetail"]')
+  const formula = textOf(card, '.dice_result__info__dicenotation, [class*="dicenotation"], [class*="DiceNotation"]')
+  const breakdown = textOf(card, '.dice_result__info__breakdown, [class*="breakdown"], [class*="Breakdown"]')
+  const kind = textOf(card, '.dice_result__rolltype, [class*="rolltype"], [class*="RollType"]')
+  const totalText = textOf(card, '.dice_result__total-result, .dice_result__total, [class*="total-result"], [class*="TotalResult"]')
+  const total = num(totalText.match(/-?\d+/)?.[0])
+  if (total == null && !formula) return null
+  return { title, formula, breakdown, kind, total }
+}
+
+function cardsIn(root) {
+  const cards = new Set()
+  const scope = root?.querySelectorAll ? root : document
+  for (const node of scope.querySelectorAll(CARD_SELECTOR)) {
+    const card = node.closest(CARD_SELECTOR) || node
+    if (card instanceof HTMLElement) cards.add(card)
+  }
+  if (root instanceof HTMLElement && root.matches?.(CARD_SELECTOR)) {
+    cards.add(root.closest(CARD_SELECTOR) || root)
+  }
+  // Only the outermost card counts; its children match the loose selectors too.
+  return [...cards].filter((card) => !card.parentElement?.closest(CARD_SELECTOR))
+}
+
+let rollCounter = 0
+
+/**
+ * A popup is a new roll when it is a new element, or when an existing one now
+ * shows different text. Identical repeat rolls still count because each one
+ * gets its own popup. Text must settle first so an animating total is read once.
+ */
+function scanRolls(root) {
+  const rolls = []
+  const now = Date.now()
+  let unsettled = false
+  for (const card of cardsIn(root)) {
+    const info = readCard(card)
+    if (!info) continue
+    const key = `${info.title}|${info.kind}|${info.formula}|${info.breakdown}|${info.total}`
+    const state = cardState.get(card)
+    // Popups already on screen when the sheet loads are history, not new rolls.
+    if (!baselineTaken) {
+      cardState.set(card, { sent: key, pending: null, since: 0 })
+      continue
+    }
+    if (state?.sent === key) continue
+    if (state?.pending !== key) {
+      cardState.set(card, { sent: state?.sent ?? null, pending: key, since: now })
+      unsettled = true
+      continue
+    }
+    if (now - state.since < SETTLE_MS) {
+      unsettled = true
+      continue
+    }
+    cardState.set(card, { sent: key, pending: null, since: 0 })
+    rollCounter += 1
+    const dice = diceFromBreakdown(info.formula, info.breakdown)
+    rolls.push({
+      id: `ddb-page:${sheetCharacterId()}:${Date.now()}:${rollCounter}`,
+      source: 'ddb',
+      character: characterName(),
+      characterId: sheetCharacterId() || undefined,
+      title: [info.title, info.kind].filter(Boolean).join(' · ') || 'Roll',
+      formula: info.formula || `total ${info.total}`,
+      total: info.total ?? 0,
+      dice,
+      kind: info.kind || undefined,
+      at: Date.now(),
+    })
+  }
+  if (rolls.length) sendRuntime({ type: 'DICE_ROLL', rolls })
+  if (unsettled) window.setTimeout(() => scanRolls(document), SETTLE_MS + 20)
+}
+
+let scanTimer = 0
+function requestScan() {
+  window.clearTimeout(scanTimer)
+  scanTimer = window.setTimeout(() => scanRolls(document), 40)
+}
+
+// ---------- Start watching ----------
+
+function start() {
+  scanRolls(document)
+  baselineTaken = true
+  void sendCharacter()
+
+  const observer = new MutationObserver(() => {
+    requestScan()
+    requestCharacter()
   })
-}, 2000)
+  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+
+  // Safety nets for changes the observer coalesces away; both only read the page.
+  window.setInterval(() => scanRolls(document), ROLL_SCAN_MS)
+  window.setInterval(() => void sendCharacter(), CHARACTER_POLL_MS)
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', start, { once: true })
+} else {
+  start()
+}
