@@ -337,6 +337,16 @@ async function sendCharacter() {
   }
 }
 
+if (runtimeAlive()) {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== 'RESEND_CHARACTER') return false
+    // Crawler asked (a player just joined or reloaded): resend even if nothing changed.
+    lastCharacterKey = ''
+    void sendCharacter()
+    return false
+  })
+}
+
 let characterTimer = 0
 function requestCharacter() {
   window.clearTimeout(characterTimer)

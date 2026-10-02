@@ -23,7 +23,7 @@ const IDLE_MS = 30 * 24 * 60 * 60 * 1000
 const CHUNK = 1_000_000
 
 const HOST_SENDS = new Set(['snapshot', 'focus', 'dice'])
-const GUEST_SENDS = new Set(['hello', 'claim', 'move', 'player', 'opening', 'dice', 'travel'])
+const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel'])
 
 /**
  * One hibernating room. The DM's browser stays authoritative; the room checks

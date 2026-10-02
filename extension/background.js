@@ -70,6 +70,10 @@ async function flush(tabId) {
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab?.id
+  if (message?.type === 'REQUEST_CHARACTER') {
+    requestCharacters(tabId)
+    return false
+  }
   if (message?.type === 'CRAWLER_HELLO') {
     remember(tabId)
     flush(tabId)
@@ -81,6 +85,19 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
   return false
 })
+
+/** Ask every open D&D Beyond sheet to send its character again, even if unchanged. */
+async function requestCharacters(tabId) {
+  remember(tabId)
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://*.dndbeyond.com/*' })
+    await Promise.all(
+      tabs.map((tab) => (tab.id == null ? null : chrome.tabs.sendMessage(tab.id, { type: 'RESEND_CHARACTER' }).catch(() => null))),
+    )
+  } catch {
+    // No sheets open; the player still needs to open one.
+  }
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   forget(tabId)

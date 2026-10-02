@@ -19,6 +19,8 @@ export interface SessionPeer {
 export type NetMessage =
   | { type: 'hello'; clientId: string }
   | { type: 'claim'; clientId: string; character: DdbCharacter | null }
+  /** A player without D&D Beyond asks for a token; `playerId` reclaims one they had. */
+  | { type: 'spawn'; clientId: string; name: string; playerId: string | null }
   | { type: 'snapshot'; dungeon: Dungeon; rolls: DiceRoll[]; you: Record<string, string | null> }
   | { type: 'move'; playerId: string; floorId: string; x: number; y: number }
   | { type: 'player'; player: Player }

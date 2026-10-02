@@ -2855,6 +2855,112 @@ a:hover {
   color: var(--danger);
 }
 
+a.dialog-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.dialog-button.is-primary {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: var(--gold-ink);
+  font-weight: 600;
+}
+
+.dialog-button.is-primary:hover {
+  border-color: var(--gold-hi);
+  background: var(--gold-hi);
+  color: var(--gold-ink);
+}
+
+/* ---------- Seat prompt ---------- */
+
+.seat-dialog {
+  width: min(420px, calc(100% - 32px));
+}
+
+.seat-dialog a:not(.dialog-button) {
+  color: var(--gold);
+}
+
+.seat-options {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.seat-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--wash);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.seat-option:hover,
+.seat-option:focus-visible {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+}
+
+.seat-option-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.seat-option-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.seat-option-note {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.seat-name {
+  display: block;
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.seat-steps {
+  padding-left: 30px;
+  list-style: decimal;
+}
+
+.dialog p.seat-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+}
+
+.seat-waiting .status-pip {
+  animation: seat-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes seat-pulse {
+  50% {
+    background: var(--gold);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seat-waiting .status-pip {
+    animation: none;
+  }
+}
+
 /* ---------- Narrow windows ---------- */
 
 @media (max-width: 1280px) {

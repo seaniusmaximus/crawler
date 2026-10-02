@@ -6,10 +6,8 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
-import { startDiceBridge } from './bridge.ts'
+import { EXTENSION_URL, startDiceBridge } from './bridge.ts'
 
-const EXTENSION_URL =
-  'https://chromewebstore.google.com/detail/crawler-dice-bridge/bpgbfbpckmbljndpmoncdjpeniepplbb'
 // The extension announces itself within ~1s of the tray mounting; give it some slack.
 const BRIDGE_GRACE_MS = 5000
 

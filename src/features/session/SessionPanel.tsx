@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { characterNameOf } from '../../model/players.ts'
+import type { SessionPeer } from '../../net/protocol.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { bootSessionFromUrl, useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
@@ -26,7 +27,7 @@ export function Brand() {
   else if (status === 'reconnecting') line = 'Reconnecting…'
   else if (status === 'error') line = 'Connection lost'
   else if (role === 'guest' && !hostOnline) line = 'Waiting for the DM…'
-  else if (role === 'host') line = `Table ${roomId ?? ''} · ${peers.length} ${peers.length === 1 ? 'player' : 'players'} joined`
+  else if (role === 'host') line = `Table ${roomId ?? ''} · ${playerCount(peers)} ${playerCount(peers) === 1 ? 'player' : 'players'} joined`
   else if (role === 'guest') {
     const name = me ? characterNameOf(me) : character?.name
     line = name ? `Playing as ${name}${me?.name && me.name !== name ? ` · ${me.name}` : ''}` : 'Connected to the DM'
@@ -137,10 +138,23 @@ export function TableMenu() {
                     : status === 'error'
                       ? 'Disconnected'
                       : role === 'host'
-                        ? `Hosting · ${peers.length} connected`
+                        ? `Hosting · ${playerCount(peers)} connected`
                         : 'Connected to the DM'}
               </p>
               {character ? <p className="panel-note">D&amp;D Beyond: {character.name}</p> : null}
+              {role === 'guest' ? (
+                <button
+                  type="button"
+                  className="outline-btn"
+                  onClick={() => {
+                    setOpen(false)
+                    useSessionStore.getState().setSeatPrompt(true)
+                  }}
+                >
+                  <Icon id="person" size={15} />
+                  Choose character
+                </button>
+              ) : null}
               {roomId ? <code className="field is-code">{roomId}</code> : null}
               {link ? (
                 <button type="button" className="outline-btn" onClick={() => void copy()}>
@@ -172,4 +186,9 @@ export function TableMenu() {
       ) : null}
     </div>
   )
+}
+
+/** People at the table: several tabs on one token count once. */
+function playerCount(peers: readonly SessionPeer[]): number {
+  return new Set(peers.map((peer) => peer.playerId ?? peer.id)).size
 }

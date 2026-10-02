@@ -2,6 +2,7 @@ const HELLO = 'CRAWLER_DICE_HELLO'
 const READY = 'CRAWLER_DICE_READY'
 const ROLL = 'CRAWLER_DICE_ROLL'
 const CHARACTER = 'CRAWLER_DDB_CHARACTER'
+const REQUEST_CHARACTER = 'CRAWLER_DDB_REQUEST'
 
 let booted = false
 
@@ -71,7 +72,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 })
 
 window.addEventListener('message', (event) => {
-  if (event.source !== window || event.data?.type !== READY) return
+  if (event.source !== window) return
+  if (event.data?.type === REQUEST_CHARACTER) {
+    sendRuntime({ type: 'REQUEST_CHARACTER' })
+    return
+  }
+  if (event.data?.type !== READY) return
   helloBackground()
   announce()
 })

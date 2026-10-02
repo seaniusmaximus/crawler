@@ -287,6 +287,8 @@ interface DungeonState {
     portrait: string | null
     stats?: Partial<CharacterStats> | null
   }) => string | null
+  /** Seat a player without D&D Beyond; reuses `playerId` when that token still exists. */
+  spawnPlayer: (name: string, playerId: string | null) => string | null
   setPlayerStat: (playerId: string, key: StatKey, value: number | string | null) => void
   setInitiativeRoll: (playerId: string, total: number | null) => void
   recordInitiativeRoll: (roll: DiceRoll) => void
@@ -918,39 +920,21 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
       return match.id
     }
 
-    const floor =
-      dungeon.floors.find((item) => item.id === getActiveFloorId(dungeon)) ?? dungeon.floors[0]
-    if (!floor) return null
-    const spot = standOnFloor(floor, players) ?? { x: 0, y: 0 }
-    const id = uid()
-    set({
-      dungeon: {
-        ...dungeon,
-        players: [
-          ...players,
-          {
-            id,
-            name: nextPlayerName(players),
-            characterName: name || nextCharacterName(players),
-            portrait: info.portrait,
-            color: nextPlayerColor(players),
-            floorId: floor.id,
-            x: spot.x,
-            y: spot.y,
-            visible: true,
-            size: 1,
-            hover: 0,
-            statuses: [],
-            characterId: characterId || null,
-            stats: mergeDdbStats(emptyStats(), info.stats),
-            statsManual: {},
-            initiativeRoll: null,
-            kind: 'player',
-          },
-        ],
-      },
-    })
-    return id
+    const token = newPartyToken(dungeon, { ...info, characterId, name })
+    if (!token) return null
+    set({ dungeon: { ...dungeon, players: [...players, token] } })
+    return token.id
+  },
+
+  spawnPlayer: (name, playerId) => {
+    const dungeon = get().dungeon
+    const players = dungeon.players ?? []
+    const existing = playerId ? players.find((player) => player.id === playerId && !isMonster(player)) : null
+    if (existing) return existing.id
+    const token = newPartyToken(dungeon, { characterId: '', name: name.trim(), portrait: null })
+    if (!token) return null
+    set({ dungeon: { ...dungeon, players: [...players, token] } })
+    return token.id
   },
 
   setPlayerStat: (playerId, key, value) => {
@@ -1051,6 +1035,36 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     }
   },
 }))
+
+/** A fresh party token on the active floor, or null when there is no floor to stand on. */
+function newPartyToken(
+  dungeon: Dungeon,
+  info: { characterId: string; name: string; portrait: string | null; stats?: Partial<CharacterStats> | null },
+): Player | null {
+  const players = dungeon.players ?? []
+  const floor = dungeon.floors.find((item) => item.id === getActiveFloorId(dungeon)) ?? dungeon.floors[0]
+  if (!floor) return null
+  const spot = standOnFloor(floor, players) ?? { x: 0, y: 0 }
+  return {
+    id: uid(),
+    name: nextPlayerName(players),
+    characterName: info.name || nextCharacterName(players),
+    portrait: info.portrait,
+    color: nextPlayerColor(players),
+    floorId: floor.id,
+    x: spot.x,
+    y: spot.y,
+    visible: true,
+    size: 1,
+    hover: 0,
+    statuses: [],
+    characterId: info.characterId || null,
+    stats: mergeDdbStats(emptyStats(), info.stats),
+    statsManual: {},
+    initiativeRoll: null,
+    kind: 'player',
+  }
+}
 
 function getActiveFloorId(dungeon: Dungeon): string | null {
   return dungeon.floors.find((floor) => floor.order === 0)?.id ?? dungeon.floors[0]?.id ?? null

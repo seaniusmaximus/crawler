@@ -12,12 +12,16 @@ import {
   type SessionPeer,
 } from '../net/protocol.ts'
 import type { TokenTravel } from '../model/travel.ts'
+import { requestDdbCharacter } from '../features/dice/bridge.ts'
 import { useDiceStore } from './diceStore.ts'
 import { useDungeonStore } from './dungeonStore.ts'
 import { useEditorStore } from './editorStore.ts'
 
 export type SessionRole = 'solo' | 'host' | 'guest'
 export type SessionStatus = 'idle' | 'connecting' | 'reconnecting' | 'live' | 'error'
+
+/** How a joining player wants to sit at the table. */
+export type SeatChoice = { mode: 'ddb' } | { mode: 'native'; name: string }
 
 interface SessionState {
   role: SessionRole
@@ -32,10 +36,15 @@ interface SessionState {
   peers: SessionPeer[]
   myPlayerId: string | null
   character: DdbCharacter | null
+  /** The guest's seat; null until they pick one (or if they only watch). */
+  seat: SeatChoice | null
+  seatPrompt: boolean
   startHost: () => void
   join: (input: string) => void
   leave: () => void
   setCharacter: (character: DdbCharacter | null) => void
+  chooseSeat: (seat: SeatChoice) => void
+  setSeatPrompt: (open: boolean) => void
   reportMove: (playerId: string, floorId: string, x: number, y: number) => void
   reportPlayer: (playerId: string) => void
   reportOpening: (floorId: string, roomId: string, x: number, y: number) => void
@@ -51,6 +60,10 @@ const CLOSE_NOT_HOST = 4003
 const CLOSE_NO_TABLE = 4004
 
 const HOSTED_KEY = 'crawler.hostedTable'
+const SEAT_KEY = 'crawler.seat.'
+
+/** A guest's seat, remembered per table so a reload doesn't ask again or spawn a twin. */
+type SavedSeat = SeatChoice & { playerId?: string | null }
 
 interface HostedTable {
   room: string
@@ -86,6 +99,28 @@ function writeHosted(table: HostedTable | null): void {
     else window.localStorage.removeItem(HOSTED_KEY)
   } catch {
     // Storage blocked: the table still works, it just won't survive a reload.
+  }
+}
+
+function readSeat(room: string): SavedSeat | null {
+  try {
+    const raw = window.localStorage.getItem(SEAT_KEY + room)
+    const parsed = raw ? (JSON.parse(raw) as Partial<SavedSeat>) : null
+    if (parsed?.mode === 'ddb') return { mode: 'ddb' }
+    if (parsed?.mode === 'native') {
+      return { mode: 'native', name: String(parsed.name ?? ''), playerId: parsed.playerId ?? null }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function writeSeat(room: string, seat: SavedSeat): void {
+  try {
+    window.localStorage.setItem(SEAT_KEY + room, JSON.stringify(seat))
+  } catch {
+    // Storage blocked: the player is asked again after a reload.
   }
 }
 
@@ -139,6 +174,8 @@ function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void
     const claimed = message.you?.[clientId]
     if (claimed) useSessionStore.setState({ myPlayerId: claimed })
   })
+  const { seat, roomId, myPlayerId } = useSessionStore.getState()
+  if (seat?.mode === 'native' && roomId && myPlayerId) writeSeat(roomId, { ...seat, playerId: myPlayerId })
   const playerId = useSessionStore.getState().myPlayerId
   const player = playerId
     ? useDungeonStore.getState().dungeon.players.find((item) => item.id === playerId)
@@ -152,9 +189,19 @@ function upsertPeer(peers: SessionPeer[], next: SessionPeer): SessionPeer[] {
   return [...peers.filter((item) => item.id !== next.id), next]
 }
 
+function sendSeat(): void {
+  const { seat, character, myPlayerId, roomId } = useSessionStore.getState()
+  if (seat?.mode === 'ddb') send({ type: 'claim', clientId, character })
+  if (seat?.mode === 'native') {
+    const saved = roomId ? readSeat(roomId) : null
+    const playerId = myPlayerId ?? (saved?.mode === 'native' ? (saved.playerId ?? null) : null)
+    send({ type: 'spawn', clientId, name: seat.name, playerId })
+  }
+}
+
 function greet(): void {
   send({ type: 'hello', clientId })
-  send({ type: 'claim', clientId, character: useSessionStore.getState().character })
+  sendSeat()
 }
 
 function handleHostMessage(message: NetMessage): void {
@@ -196,6 +243,20 @@ function handleHostMessage(message: NetMessage): void {
         playerId,
         name: character?.name || 'Player',
       }),
+    })
+    send(snapshotMessage())
+    return
+  }
+  if (message.type === 'spawn') {
+    const id = message.clientId
+    // A playerId only comes from this browser's saved seat, so another tab of the
+    // same player shares the token rather than spawning a twin.
+    let playerId: string | null = null
+    applyRemote(() => {
+      playerId = useDungeonStore.getState().spawnPlayer(message.name, message.playerId)
+    })
+    useSessionStore.setState({
+      peers: upsertPeer(session.peers, { id, playerId, name: message.name.trim() || 'Player' }),
     })
     send(snapshotMessage())
     return
@@ -406,6 +467,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   peers: [],
   myPlayerId: null,
   character: null,
+  seat: null,
+  seatPrompt: false,
 
   startHost: () => hostTable({ room: roomCode(), token: crypto.randomUUID() }, false),
 
@@ -421,7 +484,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     destroySocket()
     wireSync()
+    const saved = readSeat(parsed.room)
+    if (saved?.mode === 'ddb') requestDdbCharacter()
     set({
+      seat: saved,
+      seatPrompt: !saved,
       role: 'guest',
       status: 'connecting',
       roomId: parsed.room,
@@ -452,6 +519,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hostOnline: false,
       peers: [],
       myPlayerId: null,
+      seat: null,
+      seatPrompt: false,
     })
   },
 
@@ -462,10 +531,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       applyRemote(() => useDungeonStore.getState().claimCharacter(character))
       scheduleSnapshot()
     }
-    if (session.role === 'guest' && session.status === 'live') {
+    if (session.role === 'guest' && session.seat?.mode === 'ddb') {
       send({ type: 'claim', clientId, character })
+      if (character) set({ seatPrompt: false })
     }
   },
+
+  chooseSeat: (seat) => {
+    const session = get()
+    if (session.role !== 'guest' || !session.roomId) return
+    writeSeat(session.roomId, seat)
+    // Switching seats starts fresh; the host keeps any old token on the map.
+    set({ seat, myPlayerId: null, seatPrompt: seat.mode === 'ddb' && !session.character })
+    if (seat.mode === 'ddb' && !session.character) requestDdbCharacter()
+    sendSeat()
+  },
+
+  setSeatPrompt: (open) => set({ seatPrompt: open }),
 
   reportMove: (playerId, floorId, x, y) => {
     if (get().role !== 'guest') return

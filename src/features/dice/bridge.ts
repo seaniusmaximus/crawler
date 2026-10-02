@@ -7,6 +7,11 @@ const HELLO = 'CRAWLER_DICE_HELLO'
 const READY = 'CRAWLER_DICE_READY'
 const ROLL = 'CRAWLER_DICE_ROLL'
 const CHARACTER = 'CRAWLER_DDB_CHARACTER'
+const REQUEST_CHARACTER = 'CRAWLER_DDB_REQUEST'
+
+export const EXTENSION_URL =
+  'https://chromewebstore.google.com/detail/crawler-dice-bridge/bpgbfbpckmbljndpmoncdjpeniepplbb'
+export const DDB_CHARACTERS_URL = 'https://www.dndbeyond.com/characters'
 
 let staleTimer = 0
 
@@ -47,6 +52,11 @@ export function startDiceBridge(): () => void {
     window.clearTimeout(staleTimer)
     window.clearInterval(readyTimer)
   }
+}
+
+/** Ask the extension to resend the character from any open D&D Beyond sheet. */
+export function requestDdbCharacter(): void {
+  window.postMessage({ type: REQUEST_CHARACTER }, '*')
 }
 
 function ownRoll(roll: IncomingRoll): boolean {

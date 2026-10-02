@@ -7,6 +7,7 @@ import { RadialMenu } from '../features/menus/RadialMenu.tsx'
 import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
 import { TokenSheet } from '../features/party/TokenSheet.tsx'
 import { TurnBanner } from '../features/party/TurnBanner.tsx'
+import { SeatPrompt } from '../features/session/SeatPrompt.tsx'
 import { Brand, TableMenu } from '../features/session/SessionPanel.tsx'
 import { StairUsePrompt } from '../features/stairs/StairUsePrompt.tsx'
 import { StairsPrompt } from '../features/stairs/StairsPrompt.tsx'
@@ -77,6 +78,7 @@ export function EditorPage() {
       <RadialMenu />
       <StairsPrompt />
       <StairUsePrompt />
+      <SeatPrompt />
     </div>
   )
 }
