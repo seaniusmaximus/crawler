@@ -83,9 +83,10 @@ export interface DrawView {
   selectedPlayerId: string | null
   hoverPlayerId: string | null
   portraits: ReadonlyMap<string, CanvasImageSource>
-  movePath: { playerId: string; cells: readonly Cell[]; feet: number } | null
-  ghost: { player: Player; x: number; y: number } | null
-  tokenPose: { playerId: string; x: number; y: number; tilt: number } | null
+  /** One per token being moved, by anyone at the table. */
+  movePaths: readonly { playerId: string; cells: readonly Cell[]; feet: number }[]
+  ghosts: readonly { player: Player; x: number; y: number }[]
+  tokenPoses: readonly { playerId: string; x: number; y: number; tilt: number }[]
   turnPlayerId: string | null
   viewMode: ViewMode
   tileCache: TileCache
@@ -1048,8 +1049,15 @@ function drawRampPreview(ctx: CanvasRenderingContext2D, view: DrawView, draft: R
 }
 
 function drawMovePath(ctx: CanvasRenderingContext2D, view: DrawView): void {
-  const path = view.movePath
-  if (!path || path.cells.length < 2) return
+  for (const path of view.movePaths) drawOnePath(ctx, view, path)
+}
+
+function drawOnePath(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  path: DrawView['movePaths'][number],
+): void {
+  if (path.cells.length < 2) return
   const flyer = view.players.find((player) => player.id === path.playerId)
   const size = flyer ? playerSize(flyer) : 1
   const points = path.cells.map((cell) => {
@@ -1098,8 +1106,8 @@ function tokenDrawCell(
   player: Player,
   view: DrawView,
 ): { x: number; y: number; tilt: number } {
-  const pose = view.tokenPose
-  if (pose && pose.playerId === player.id) return pose
+  const pose = view.tokenPoses.find((item) => item.playerId === player.id)
+  if (pose) return pose
   return { x: player.x, y: player.y, tilt: 0 }
 }
 
@@ -1165,9 +1173,9 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
       drawAirChip(ctx, `${air} ft`, pos.x + standee.width / 2 + 6, pos.y - standee.height * 0.55)
     }
 
-    const trail = view.movePath
-    const walking = view.tokenPose?.playerId === player.id
-    if (walking && trail && trail.playerId === player.id && trail.feet > 0) {
+    const trail = view.movePaths.find((item) => item.playerId === player.id)
+    const walking = view.tokenPoses.some((item) => item.playerId === player.id)
+    if (walking && trail && trail.feet > 0) {
       drawMeasureChip(
         ctx,
         `${trail.feet} ft`,
@@ -1177,7 +1185,7 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
     }
     ctx.globalAlpha = 1
   }
-  drawGhostToken(ctx, view)
+  for (const ghost of view.ghosts) drawGhostToken(ctx, view, ghost)
 }
 
 function wreathArcSpan(start: number, end: number, dir: number): number {
@@ -1355,9 +1363,11 @@ function drawTurnWreath(
   ctx.restore()
 }
 
-function drawGhostToken(ctx: CanvasRenderingContext2D, view: DrawView): void {
-  const ghost = view.ghost
-  if (!ghost) return
+function drawGhostToken(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  ghost: DrawView['ghosts'][number],
+): void {
   const { player, x, y } = ghost
   const size = playerSize(player)
   const standee = tokenStandee(view.camera, size)
@@ -1383,8 +1393,8 @@ function drawGhostToken(ctx: CanvasRenderingContext2D, view: DrawView): void {
     characterNameOf(player),
     statuses,
   )
-  const trail = view.movePath
-  if (trail && trail.playerId === player.id && trail.feet > 0) {
+  const trail = view.movePaths.find((item) => item.playerId === player.id)
+  if (trail && trail.feet > 0) {
     drawMeasureChip(
       ctx,
       `${trail.feet} ft`,

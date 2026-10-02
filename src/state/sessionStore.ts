@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { FOCUS_INSET } from '../app/layout.ts'
+import { isEmbedded, knownAssetUrl, uploadImage } from '../net/assets.ts'
+import { diffDungeon } from '../net/patch.ts'
 import { applyRemote, isRemoteApply } from '../net/remote.ts'
 import {
   isNetMessage,
@@ -12,10 +14,12 @@ import {
   type SnapshotMessage,
 } from '../net/protocol.ts'
 import type { TokenTravel } from '../model/travel.ts'
+import type { Dungeon } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
 import { useDiceStore } from './diceStore.ts'
 import { useDungeonStore } from './dungeonStore.ts'
 import { useEditorStore } from './editorStore.ts'
+import { useTravelStore } from './travelStore.ts'
 
 export type SessionRole = 'solo' | 'host' | 'guest'
 export type SessionStatus = 'idle' | 'connecting' | 'reconnecting' | 'live' | 'error'
@@ -102,7 +106,6 @@ export interface ActiveCampaign {
 }
 
 let socket: WebSocket | null = null
-let snapshotTimer = 0
 let retryTimer = 0
 let retries = 0
 let lastDiceIds = ''
@@ -114,9 +117,43 @@ let restorePending = false
 /** Numbers each DM snapshot so the relay's "saved" reply can be matched to the latest one. */
 let snapshotSeq = 0
 let lastSentSeq = 0
-let snapshotQueued = false
+
+/**
+ * Keeping players in step (DM side): players get a full snapshot when they join or
+ * fall out of step, and otherwise just what changed, as numbered patches. A full
+ * copy goes to the relay for saving at most every SAVE_MS, and isn't sent on to
+ * the players.
+ */
+const PATCH_MS = 30
+const SAVE_MS = 1500
+/** The map as the players last received it; the next patch is the difference from this. */
+let synced: Dungeon | null = null
+let syncedYou = ''
+/**
+ * The DM's revision: bumped by every snapshot or patch sent to players. Starts at a
+ * random point so a reloaded DM tab can never line up with a player's old revision.
+ */
+let rev = Math.floor(Math.random() * 1_000_000_000)
+let patchTimer = 0
+let fullTimer = 0
+let saveTimer = 0
+let saveQueued = false
+/** Players whose position must go out even if unchanged (a move the DM refused). */
+let forced = new Set<string>()
+/** Resend who holds which token even if unchanged: the answer to a refused pick. */
+let resendClaims = false
+/** Player side: the DM revision this tab's map is at, or null before the first snapshot. */
+let guestRev: number | null = null
+let resyncTimer = 0
 /** A token picked from the "played here before" list, until the DM confirms or refuses it. */
 let pickPending = false
+/** Live token paths go out at most this often while dragging; starts and ends go at once. */
+const TRAVEL_MS = 66
+let travelTimer = 0
+let travelQueued: TokenTravel | null = null
+let travelSentAt = 0
+/** The token whose path this tab last announced, so "path ended" can name it. */
+let travelPlayerId: string | null = null
 /** Close table waits on this for the relay to confirm the final save. */
 let closeWaiter: (() => void) | null = null
 
@@ -169,8 +206,20 @@ function writeSeat(room: string, seat: SavedSeat | null): void {
 }
 
 function destroySocket(): void {
-  window.clearTimeout(snapshotTimer)
+  window.clearTimeout(patchTimer)
+  window.clearTimeout(fullTimer)
+  window.clearTimeout(saveTimer)
+  window.clearTimeout(resyncTimer)
+  patchTimer = fullTimer = saveTimer = resyncTimer = 0
+  saveQueued = false
+  synced = null
+  guestRev = null
+  forced = new Set()
   window.clearTimeout(retryTimer)
+  window.clearTimeout(travelTimer)
+  travelQueued = null
+  travelPlayerId = null
+  useTravelStore.getState().clear()
   const old = socket
   socket = null
   old?.close()
@@ -194,7 +243,8 @@ function claims(): Record<string, string | null> {
 function snapshotMessage(): SnapshotMessage {
   return {
     type: 'snapshot',
-    dungeon: useDungeonStore.getState().dungeon,
+    // Paths in progress travel separately and are never saved with the map.
+    dungeon: { ...useDungeonStore.getState().dungeon, travel: null },
     rolls: useDiceStore.getState().rolls,
     you: claims(),
   }
@@ -208,10 +258,77 @@ function connected(): boolean {
   return socket?.readyState === WebSocket.OPEN
 }
 
-/** Send the DM's map to the relay, which saves it and shows it to the players. */
+/** The whole map to everyone (the relay saves it too): on (re)connect, joins and resyncs. */
 function sendSnapshot(): void {
-  window.clearTimeout(snapshotTimer)
-  snapshotQueued = false
+  window.clearTimeout(patchTimer)
+  window.clearTimeout(fullTimer)
+  window.clearTimeout(saveTimer)
+  patchTimer = fullTimer = saveTimer = 0
+  saveQueued = false
+  forced = new Set()
+  resendClaims = false
+  if (useSessionStore.getState().role !== 'host') return
+  if (!connected()) {
+    setSaveState('offline')
+    return
+  }
+  rev += 1
+  snapshotSeq += 1
+  lastSentSeq = snapshotSeq
+  const message = { ...snapshotMessage(), seq: snapshotSeq, rev }
+  send(message)
+  synced = useDungeonStore.getState().dungeon
+  syncedYou = JSON.stringify(message.you)
+  setSaveState('saving')
+}
+
+/** Several joins or resync requests at once get one snapshot. */
+function requestFullSnapshot(): void {
+  if (!fullTimer) fullTimer = window.setTimeout(sendSnapshot, 60)
+}
+
+/** Something changed on the DM's side: players get the difference soon, the relay a full copy later. */
+function scheduleSync(): void {
+  if (useSessionStore.getState().role !== 'host' || restorePending) return
+  setSaveState(connected() ? 'saving' : 'offline')
+  if (!patchTimer) patchTimer = window.setTimeout(flushPatch, PATCH_MS)
+  saveQueued = true
+  if (!saveTimer) saveTimer = window.setTimeout(saveNow, SAVE_MS)
+}
+
+/** Send players what changed since they were last in step. */
+function flushPatch(): void {
+  window.clearTimeout(patchTimer)
+  patchTimer = 0
+  if (useSessionStore.getState().role !== 'host') return
+  if (!connected()) {
+    setSaveState('offline')
+    return
+  }
+  if (!synced) {
+    sendSnapshot()
+    return
+  }
+  const dungeon = useDungeonStore.getState().dungeon
+  const you = claims()
+  const youJson = JSON.stringify(you)
+  const patch = diffDungeon(synced, dungeon, forced)
+  forced = new Set()
+  const youChanged = youJson !== syncedYou || resendClaims
+  resendClaims = false
+  if (!patch && !youChanged) return
+  send({ type: 'patch', base: rev, rev: rev + 1, patch: patch ?? {}, ...(youChanged ? { you } : {}) })
+  rev += 1
+  synced = dungeon
+  syncedYou = youJson
+}
+
+/** A full copy for the relay to save, not forwarded to players (they have the patches). */
+function saveNow(): void {
+  window.clearTimeout(saveTimer)
+  saveTimer = 0
+  if (patchTimer) flushPatch()
+  saveQueued = false
   if (useSessionStore.getState().role !== 'host') return
   if (!connected()) {
     setSaveState('offline')
@@ -219,29 +336,48 @@ function sendSnapshot(): void {
   }
   snapshotSeq += 1
   lastSentSeq = snapshotSeq
-  send({ ...snapshotMessage(), seq: snapshotSeq })
-  setSaveState('saving')
-}
-
-function scheduleSnapshot(): void {
-  if (useSessionStore.getState().role !== 'host' || isRemoteApply() || restorePending) return
-  window.clearTimeout(snapshotTimer)
-  snapshotQueued = true
-  setSaveState(connected() ? 'saving' : 'offline')
-  snapshotTimer = window.setTimeout(sendSnapshot, 120)
+  // At the players' revision, so someone joining from this copy can take the next patch.
+  send({ ...snapshotMessage(), seq: snapshotSeq, rev, quiet: true })
 }
 
 function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void {
+  window.clearTimeout(resyncTimer)
+  resyncTimer = 0
+  guestRev = typeof message.rev === 'number' ? message.rev : null
+  applyFromDm(message.you, () => {
+    useDungeonStore.getState().replaceDungeon(message.dungeon)
+    useDiceStore.getState().replaceRolls(message.rolls)
+  })
+}
+
+/** A patch from the DM: apply it if this map is at its base revision, otherwise ask to resync. */
+function applyPatch(message: Extract<NetMessage, { type: 'patch' }>): void {
+  if (guestRev === null || message.base !== guestRev) {
+    // Missed something (a reconnect, or joined from an older saved copy): get the whole map.
+    if (!resyncTimer) {
+      resyncTimer = window.setTimeout(() => {
+        resyncTimer = 0
+        send({ type: 'resync', clientId })
+      }, 300)
+    }
+    return
+  }
+  guestRev = message.rev
+  applyFromDm(message.you, () => useDungeonStore.getState().applyPatch(message.patch))
+}
+
+/** Apply the DM's map change, then catch up on seats and follow this player's token between floors. */
+function applyFromDm(you: Record<string, string | null> | undefined, change: () => void): void {
   const session = useSessionStore.getState()
-  const mine = session.myPlayerId ?? message.you?.[clientId] ?? null
+  const mine = session.myPlayerId ?? you?.[clientId] ?? null
   const prevFloor = mine
     ? useDungeonStore.getState().dungeon.players.find((player) => player.id === mine)?.floorId
     : null
   applyRemote(() => {
-    useDungeonStore.getState().replaceDungeon(message.dungeon)
-    useDiceStore.getState().replaceRolls(message.rolls)
-    const claimed = message.you?.[clientId]
-    useSessionStore.setState({ claims: message.you ?? {}, ...(claimed ? { myPlayerId: claimed } : {}) })
+    change()
+    if (!you) return
+    const claimed = you[clientId]
+    useSessionStore.setState({ claims: you, ...(claimed ? { myPlayerId: claimed } : {}) })
     if (claimed) pickPending = false
   })
   refusePickIfTaken()
@@ -281,19 +417,31 @@ function sheetMatchesSeat(character: DdbCharacter | null): character is DdbChara
 
 function sendSeat(): void {
   const { seat, character, myPlayerId, roomId } = useSessionStore.getState()
-  if (seat?.mode === 'ddb') send({ type: 'claim', clientId, character })
+  if (seat?.mode === 'ddb') sendClaim(character)
   if (seat?.mode === 'native') {
     const saved = roomId ? readSeat(roomId) : null
     const playerId = myPlayerId ?? seat.playerId ?? (saved?.mode === 'native' ? (saved.playerId ?? null) : null)
     send({ type: 'spawn', clientId, name: seat.name, playerId, pick: pickPending || undefined })
     // A reclaimed D&D Beyond token: the sheet's latest stats land on the same token.
-    if (sheetMatchesSeat(character)) send({ type: 'claim', clientId, character })
+    if (sheetMatchesSeat(character)) sendClaim(character)
   }
 }
 
 function greet(): void {
+  // A new connection (or a returning DM) gets the portrait once more with the next claim.
+  lastClaimPortrait = null
   send({ type: 'hello', clientId })
   sendSeat()
+}
+
+/** The portrait this tab last sent with a claim; repeats go out as null ("keep what you have"). */
+let lastClaimPortrait: string | null = null
+
+function sendClaim(character: DdbCharacter | null): void {
+  const portrait = character?.portrait ?? null
+  const repeat = portrait !== null && portrait === lastClaimPortrait
+  if (portrait) lastClaimPortrait = portrait
+  send({ type: 'claim', clientId, character: character && repeat ? { ...character, portrait: null } : character })
 }
 
 function handleHostMessage(message: NetMessage): void {
@@ -308,7 +456,7 @@ function handleHostMessage(message: NetMessage): void {
     return
   }
   if (message.type === 'saved') {
-    if (message.seq === lastSentSeq && !snapshotQueued) {
+    if (message.seq === lastSentSeq && !saveQueued && !patchTimer) {
       useSessionStore.setState({ saveState: 'saved', savedAt: Date.now() })
       closeWaiter?.()
     }
@@ -316,8 +464,6 @@ function handleHostMessage(message: NetMessage): void {
   }
   if (message.type === 'restore') {
     // The DM restored a save point: adopt it, then send it back so player claims stay current.
-    window.clearTimeout(snapshotTimer)
-    snapshotQueued = false
     applyRemote(() => {
       useDungeonStore.getState().replaceDungeon(message.snapshot.dungeon)
       useDiceStore.getState().replaceRolls(message.snapshot.rolls)
@@ -327,13 +473,17 @@ function handleHostMessage(message: NetMessage): void {
   }
   if (message.type === 'presence') {
     const live = new Set(message.guests)
-    useSessionStore.setState({ hostOnline: true, peers: session.peers.filter((peer) => live.has(peer.id)) })
+    const peers = session.peers.filter((peer) => live.has(peer.id))
+    useSessionStore.setState({ hostOnline: true, peers })
+    // Someone left: tell the others their token is free to take back.
+    if (peers.length !== session.peers.length && !awaitingPresence) scheduleSync()
     if (awaitingPresence) {
       // The relay sends any saved snapshot before presence, so a restore is done.
       awaitingPresence = false
       restorePending = false
       const character = session.character
       if (character) applyRemote(() => useDungeonStore.getState().claimCharacter(character))
+      convertPortraits()
       sendSnapshot()
     }
     return
@@ -354,7 +504,13 @@ function handleHostMessage(message: NetMessage): void {
         name: character?.name || 'Player',
       }),
     })
-    sendSnapshot()
+    // Someone (re)joining needs the whole map; a sheet update is just a change.
+    if (message.type === 'hello') requestFullSnapshot()
+    else scheduleSync()
+    return
+  }
+  if (message.type === 'resync') {
+    requestFullSnapshot()
     return
   }
   if (message.type === 'spawn') {
@@ -364,7 +520,9 @@ function handleHostMessage(message: NetMessage): void {
     let playerId: string | null = null
     const taken =
       message.pick && session.peers.some((peer) => peer.id !== id && peer.playerId === message.playerId)
-    // A picked token someone else holds stays theirs; the player is left unseated to choose again.
+    // A picked token someone else holds stays theirs; the player is left unseated to choose again,
+    // and told so even though nothing on the map changed.
+    if (taken) resendClaims = true
     if (!taken) {
       applyRemote(() => {
         playerId = useDungeonStore.getState().spawnPlayer(message.name, message.playerId)
@@ -373,19 +531,21 @@ function handleHostMessage(message: NetMessage): void {
     useSessionStore.setState({
       peers: upsertPeer(session.peers, { id, playerId, name: message.name.trim() || 'Player' }),
     })
-    sendSnapshot()
+    scheduleSync()
     return
   }
   if (message.type === 'move') {
     applyRemote(() => {
       useDungeonStore.getState().movePlayer(message.playerId, message.floorId, message.x, message.y)
     })
-    sendSnapshot()
+    // Resend where the token stands even if the DM refused the move, so the mover snaps back.
+    forced.add(message.playerId)
+    scheduleSync()
     return
   }
   if (message.type === 'player') {
     applyRemote(() => useDungeonStore.getState().upsertPlayer(message.player))
-    sendSnapshot()
+    scheduleSync()
     return
   }
   if (message.type === 'opening') {
@@ -394,7 +554,7 @@ function handleHostMessage(message: NetMessage): void {
         .getState()
         .toggleConnectedOpenings(message.floorId, message.roomId, message.x, message.y)
     })
-    sendSnapshot()
+    scheduleSync()
     return
   }
   if (message.type === 'dice') {
@@ -402,10 +562,26 @@ function handleHostMessage(message: NetMessage): void {
     send({ type: 'dice', rolls: message.rolls })
     return
   }
+}
+
+/** Send this tab's token path (or its end) straight to the table through the relay. */
+function sendTravel(travel: TokenTravel | null): void {
+  const playerId = travel?.playerId ?? travelPlayerId
+  if (!playerId) return
+  const fromHost = useSessionStore.getState().role === 'host'
+  send({ type: 'travel', clientId, fromHost, playerId, travel })
+  travelPlayerId = travel ? travel.playerId : null
+  travelSentAt = Date.now()
+}
+
+/** Messages every seat handles the same way. */
+function handleSharedMessage(message: NetMessage): boolean {
   if (message.type === 'travel') {
-    applyRemote(() => useDungeonStore.getState().setTravel(message.travel))
-    sendSnapshot()
+    useTravelStore.getState().receive(message.clientId, message.fromHost, message.playerId, message.travel)
+    return true
   }
+  if (message.type === 'presence') useTravelStore.getState().prune(message)
+  return false
 }
 
 function handleGuestMessage(message: NetMessage): void {
@@ -419,6 +595,10 @@ function handleGuestMessage(message: NetMessage): void {
   }
   if (message.type === 'snapshot') {
     applySnapshot(message)
+    return
+  }
+  if (message.type === 'patch') {
+    applyPatch(message)
     return
   }
   if (message.type === 'dice') {
@@ -446,6 +626,7 @@ function onSocketMessage(event: MessageEvent): void {
     ws?.close()
     return
   }
+  if (handleSharedMessage(data)) return
   if (useSessionStore.getState().role === 'host') handleHostMessage(data)
   else handleGuestMessage(data)
 }
@@ -570,14 +751,46 @@ function hostTable(campaign: ActiveCampaign, restore: boolean): void {
   })
 }
 
+/**
+ * DM side: swap embedded portraits for the campaign's image URLs, so each image
+ * crosses the network once. Ones uploaded before are swapped on the spot, before
+ * any patch goes out; new ones are uploaded and swapped when the upload lands.
+ */
+function convertPortraits(): void {
+  const { role, roomId } = useSessionStore.getState()
+  if (role !== 'host' || !roomId || restorePending) return
+  for (const player of useDungeonStore.getState().dungeon.players ?? []) {
+    const src = player.portrait
+    if (!isEmbedded(src)) continue
+    const known = knownAssetUrl(roomId, src)
+    if (known) {
+      swapPortrait(player.id, src, known)
+      continue
+    }
+    void uploadImage(roomId, src).then((url) => {
+      if (url && useSessionStore.getState().roomId === roomId) swapPortrait(player.id, src, url)
+    })
+  }
+}
+
+/** Only if the token still shows that same image: it may have changed while uploading. */
+function swapPortrait(playerId: string, src: string, url: string): void {
+  const player = (useDungeonStore.getState().dungeon.players ?? []).find((item) => item.id === playerId)
+  if (player?.portrait === src) useDungeonStore.getState().setPlayerPortrait(playerId, url)
+}
+
 function wireSync(): void {
   if (wired) return
   wired = true
+  // Before the sync listener below, and for changes from players too (D&D Beyond sheets, uploads).
+  useDungeonStore.subscribe((state, prev) => {
+    if (state.dungeon.players !== prev.dungeon.players) convertPortraits()
+  })
   lastDiceIds = useDiceStore.getState().rolls.map((roll) => roll.id).join()
   useDungeonStore.subscribe((state, prev) => {
     if (state.dungeon === prev.dungeon || isRemoteApply()) return
     const session = useSessionStore.getState()
-    if (session.role === 'host') scheduleSnapshot()
+    if (session.role === 'host') scheduleSync()
     if (session.role === 'guest' && session.myPlayerId) {
       const player = state.dungeon.players.find((item) => item.id === session.myPlayerId)
       const before = prev.dungeon.players.find((item) => item.id === session.myPlayerId)
@@ -637,7 +850,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return
     }
     // Flush the latest change and give the relay a moment to confirm it before leaving.
-    sendSnapshot()
+    saveNow()
     if (get().saveState !== 'saving') {
       get().leave()
       return
@@ -715,14 +928,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const session = get()
     if (session.role === 'host' && character) {
       applyRemote(() => useDungeonStore.getState().claimCharacter(character))
-      scheduleSnapshot()
+      scheduleSync()
     }
     if (session.role === 'guest' && session.seat?.mode === 'ddb') {
-      send({ type: 'claim', clientId, character })
+      sendClaim(character)
       if (character) set({ seatPrompt: false })
     }
     // Other sheets are ignored on a native seat, except the one its token came from.
-    if (session.role === 'guest' && sheetMatchesSeat(character)) send({ type: 'claim', clientId, character })
+    if (session.role === 'guest' && sheetMatchesSeat(character)) sendClaim(character)
   },
 
   chooseSeat: (seat) => {
@@ -764,8 +977,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   reportTravel: (travel) => {
-    if (get().role !== 'guest') return
-    send({ type: 'travel', travel })
+    if (get().role === 'solo') return
+    window.clearTimeout(travelTimer)
+    // Moving a different token: end the old path first so it doesn't linger for others.
+    if (travel && travelPlayerId && travelPlayerId !== travel.playerId) sendTravel(null)
+    const urgent = !travel || travel.phase === 'playing'
+    const wait = TRAVEL_MS - (Date.now() - travelSentAt)
+    if (urgent || wait <= 0) {
+      travelQueued = null
+      sendTravel(travel)
+      return
+    }
+    // Dragging: keep only the newest path and send it when the window opens.
+    travelQueued = travel
+    travelTimer = window.setTimeout(() => {
+      const next = travelQueued
+      travelQueued = null
+      if (next) sendTravel(next)
+    }, wait)
   },
 
   reportFocus: (floorId, roomId) => {

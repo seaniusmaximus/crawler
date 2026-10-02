@@ -98,7 +98,10 @@ export interface Dungeon {
   floors: Floor[]
   players: Player[]
   combat: Combat
-  /** Planned or playing token walk; null when nobody is moving. */
+  /**
+   * This tab's own planned or playing token walk; null when it isn't moving one.
+   * Never saved or sent in snapshots: other people's paths live in the travel store.
+   */
   travel: TokenTravel | null
   /** Id of the tileset every room is drawn with; unknown or missing means the default. */
   tileset?: string

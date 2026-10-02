@@ -47,7 +47,7 @@ export function SaveFileActions() {
     <>
       <span className="kicker">Backup</span>
       <div className="table-join">
-        <button type="button" className="outline-btn" onClick={() => downloadSave(campaignName ?? 'crawler')}>
+        <button type="button" className="outline-btn" onClick={() => void downloadSave(campaignName ?? 'crawler')}>
           <Icon id="download" size={15} />
           Download save
         </button>

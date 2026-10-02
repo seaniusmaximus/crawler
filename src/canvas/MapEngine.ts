@@ -20,6 +20,7 @@ import type { Cell, CellRect, Edge, Link, Player, Room } from '../model/types.ts
 import { useDungeonStore } from '../state/dungeonStore.ts'
 import { useEditorStore } from '../state/editorStore.ts'
 import { canControlPlayer, useSessionStore } from '../state/sessionStore.ts'
+import { remoteTravelAnimating, useTravelStore, type RemoteTravel } from '../state/travelStore.ts'
 import type { FocusRequest } from '../state/editorStore.ts'
 import { getActiveFloor } from '../state/selectors.ts'
 import { TileCache } from '../tiles/TileCache.ts'
@@ -66,9 +67,12 @@ interface TokenDrag {
 
 interface MovePath {
   playerId: string
-  cells: Cell[]
+  cells: readonly Cell[]
   feet: number
 }
+
+type Ghost = { player: Player; x: number; y: number }
+type Pose = { playerId: string; x: number; y: number; tilt: number }
 
 interface PointerSession {
   id: number
@@ -189,6 +193,7 @@ export class MapEngine {
         this.syncTileset(state.dungeon.tileset)
         this.markDirty()
       }),
+      useTravelStore.subscribe(() => this.markDirty()),
       useEditorStore.subscribe((state, prev) => {
         this.markDirty()
         if (state.viewMode !== prev.viewMode && !this.session) this.applyCursor(null)
@@ -232,6 +237,13 @@ export class MapEngine {
     } else {
       this.travelFinishing = false
     }
+    // Other people's walks: keep animating, and let finished ones go once the DM's move lands.
+    const remote = useTravelStore.getState().remote
+    const now = Date.now()
+    if (remoteTravelAnimating(remote, now)) this.dirty = true
+    if (Object.values(remote).some((item) => item.endedAt !== null)) {
+      useTravelStore.getState().settle(dungeon.players ?? [], now)
+    }
     if (!this.dirty || !this.tiles.isReady()) return
     this.dirty = false
     const editor = useEditorStore.getState()
@@ -255,9 +267,9 @@ export class MapEngine {
       selectedPlayerId: editor.selectedPlayerId,
       hoverPlayerId: editor.hoverPlayerId,
       portraits: this.portraits,
-      movePath: this.liveMovePath(),
-      ghost: this.ghostToken(players),
-      tokenPose: this.liveTokenPose(dungeon.travel),
+      movePaths: this.liveMovePaths(players),
+      ghosts: this.ghostTokens(players),
+      tokenPoses: this.liveTokenPoses(dungeon.travel, players),
       turnPlayerId: dungeon.combat?.turnPlayerId ?? null,
       badges: this.badges(),
       hoverLink: this.hoverLink,
@@ -895,6 +907,58 @@ export class MapEngine {
     if (!player) return null
     if (travel.ghostX === player.x && travel.ghostY === player.y) return null
     return { player, x: travel.ghostX, y: travel.ghostY }
+  }
+
+  /**
+   * Other people's paths on this floor, for tokens this viewer can see and isn't
+   * moving itself (its own drag or walk wins).
+   */
+  private remoteTravels(players: readonly Player[]): RemoteTravel[] {
+    const own = new Set([this.tokenDrag?.id, useDungeonStore.getState().dungeon.travel?.playerId])
+    const floorId = getActiveFloor().id
+    return Object.values(useTravelStore.getState().remote).filter(
+      (travel) =>
+        travel.floorId === floorId && !own.has(travel.playerId) && players.some((item) => item.id === travel.playerId),
+    )
+  }
+
+  private liveMovePaths(players: readonly Player[]): MovePath[] {
+    const paths: MovePath[] = []
+    const own = this.liveMovePath()
+    if (own) paths.push(own)
+    for (const travel of this.remoteTravels(players)) {
+      if (travel.endedAt === null && travel.cells.length >= 2) {
+        paths.push({ playerId: travel.playerId, cells: travel.cells, feet: travel.feet })
+      }
+    }
+    return paths
+  }
+
+  private ghostTokens(players: readonly Player[]): Ghost[] {
+    const ghosts: Ghost[] = []
+    const own = this.ghostToken(players)
+    if (own) ghosts.push(own)
+    for (const travel of this.remoteTravels(players)) {
+      if (travel.phase !== 'preview') continue
+      const player = players.find((item) => item.id === travel.playerId)
+      if (!player || (travel.ghostX === player.x && travel.ghostY === player.y)) continue
+      ghosts.push({ player, x: travel.ghostX, y: travel.ghostY })
+    }
+    return ghosts
+  }
+
+  private liveTokenPoses(travel: TokenTravel | null, players: readonly Player[]): Pose[] {
+    const poses: Pose[] = []
+    const own = this.liveTokenPose(travel)
+    if (own) poses.push(own)
+    const now = Date.now()
+    for (const item of this.remoteTravels(players)) {
+      if (item.phase !== 'playing') continue
+      // Finished walks hold their destination until the DM's snapshot moves the token there.
+      const pose = travelPose(item, now)
+      poses.push({ playerId: item.playerId, x: pose.x, y: pose.y, tilt: pose.tilt })
+    }
+    return poses
   }
 
   private liveTokenPose(

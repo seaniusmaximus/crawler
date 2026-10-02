@@ -1,4 +1,5 @@
 import type { DiceRoll } from '../../model/dice.ts'
+import { inlineImage } from '../../net/assets.ts'
 import type { Dungeon } from '../../model/types.ts'
 import { useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -13,14 +14,23 @@ interface SaveFile {
   rolls: DiceRoll[]
 }
 
-/** Download the map in this tab as a .crawler.json file. */
-export function downloadSave(name: string): void {
+/**
+ * Download the map in this tab as a .crawler.json file. Portraits stored on the
+ * server go back inline, so the file still works if the campaign is gone.
+ */
+export async function downloadSave(name: string): Promise<void> {
+  const dungeon = useDungeonStore.getState().dungeon
+  const players = await Promise.all(
+    (dungeon.players ?? []).map(async (player) =>
+      player.portrait ? { ...player, portrait: await inlineImage(player.portrait) } : player,
+    ),
+  )
   const file: SaveFile = {
     app: 'crawler',
     version: 1,
     savedAt: new Date().toISOString(),
     name,
-    dungeon: useDungeonStore.getState().dungeon,
+    dungeon: { ...dungeon, players, travel: null },
     rolls: useDiceStore.getState().rolls,
   }
   const blob = new Blob([JSON.stringify(file)], { type: 'application/json' })

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { applyDungeonPatch, type DungeonPatch } from '../net/patch.ts'
 import { floorAtOrder, floorName } from '../model/floors.ts'
 import { linkedFloors, roomStairLandings, stairLandings, stripStairs } from '../model/stairs.ts'
 import type { StairLanding } from '../model/stairs.ts'
@@ -280,6 +281,8 @@ interface DungeonState {
   togglePlayerStatus: (playerId: string, status: StatusId) => void
   deletePlayer: (playerId: string) => void
   replaceDungeon: (dungeon: Dungeon) => void
+  /** Apply the DM's changes; this tab's own path in progress is kept. */
+  applyPatch: (patch: DungeonPatch) => void
   upsertPlayer: (player: Player) => void
   claimCharacter: (info: {
     characterId: string
@@ -855,16 +858,20 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
   },
 
   replaceDungeon: (dungeon) => {
-    const incoming = normalizeTravel(dungeon.travel)
-    const local = get().dungeon.travel
     set({
       dungeon: {
         ...dungeon,
         combat: normalizeCombat(dungeon.combat),
         players: (dungeon.players ?? []).map(normalizePlayer),
-        travel: local && incoming && local.seq > incoming.seq ? local : incoming,
+        // `travel` is this tab's own path in progress; other people's live in the travel store.
+        travel: get().dungeon.travel,
       },
     })
+  },
+
+  applyPatch: (patch) => {
+    const dungeon = get().dungeon
+    set({ dungeon: { ...applyDungeonPatch(dungeon, patch), travel: dungeon.travel } })
   },
 
   upsertPlayer: (player) => {

@@ -15,6 +15,9 @@ interface Seat {
   id: string
 }
 
+/** Sent straight to everyone, never through the DM's browser: rolls and live token paths. */
+const BROADCAST = new Set(['dice', 'travel'])
+
 /** Close codes the client treats as final — no reconnect. */
 const CLOSE_REPLACED = 4001
 const CLOSE_SIGNED_OUT = 4002
@@ -40,8 +43,8 @@ export interface SavePoint {
   size: number
 }
 
-const HOST_SENDS = new Set(['snapshot', 'focus', 'dice'])
-const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel'])
+const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel'])
+const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel', 'resync'])
 
 /**
  * One campaign, kept for as long as its DM wants it. The DM's browser stays
@@ -66,6 +69,12 @@ export class TableRoom extends DurableObject<RoomEnv> {
         idx INTEGER NOT NULL,
         data TEXT NOT NULL,
         PRIMARY KEY (save_id, idx)
+      );
+      CREATE TABLE IF NOT EXISTS assets (
+        hash TEXT PRIMARY KEY,
+        mime TEXT NOT NULL,
+        data BLOB NOT NULL,
+        created_at INTEGER NOT NULL
       );
     `)
   }
@@ -171,6 +180,31 @@ export class TableRoom extends DurableObject<RoomEnv> {
     return this.meta('owner')
   }
 
+  // ---------- Images (portraits), stored once per campaign by content hash ----------
+
+  /** Store an image and return its hash; the same bytes always land on the same row. */
+  async putAsset(bytes: ArrayBuffer, mime: string): Promise<string> {
+    this.ensureTables()
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+    const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    this.ctx.storage.sql.exec(
+      'INSERT OR IGNORE INTO assets (hash, mime, data, created_at) VALUES (?, ?, ?, ?)',
+      hash,
+      mime,
+      bytes,
+      Date.now(),
+    )
+    return hash
+  }
+
+  getAsset(hash: string): { mime: string; data: ArrayBuffer } | null {
+    this.ensureTables()
+    const row = this.ctx.storage.sql
+      .exec<{ mime: string; data: ArrayBuffer }>('SELECT mime, data FROM assets WHERE hash = ?', hash)
+      .toArray()[0]
+    return row ? { mime: row.mime, data: row.data } : null
+  }
+
   /** Wipe the campaign and send everyone home. */
   async destroy(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) kick(ws, CLOSE_NO_TABLE, 'This table has ended')
@@ -217,7 +251,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if (typeof message !== 'string') return
     const seat = seatOf(ws)
     if (!seat) return
-    let parsed: { type?: unknown; clientId?: unknown; seq?: unknown }
+    let parsed: { type?: unknown; clientId?: unknown; seq?: unknown; fromHost?: unknown; quiet?: unknown }
     try {
       parsed = JSON.parse(message)
     } catch {
@@ -227,17 +261,20 @@ export class TableRoom extends DurableObject<RoomEnv> {
     const allowed = seat.role === 'host' ? HOST_SENDS : GUEST_SENDS
     if (!allowed.has(type)) return
     if ('clientId' in parsed && parsed.clientId !== seat.id) return
+    if (parsed.fromHost && seat.role !== 'host') return
 
     if (type === 'snapshot') {
       this.saveSnapshot(message)
       // Tell the DM this exact version is safe, so the page can say "Saved".
       if (typeof parsed.seq === 'number') ws.send(JSON.stringify({ type: 'saved', seq: parsed.seq }))
+      // A save-only copy: players already have these changes as patches.
+      if (parsed.quiet) return
     }
 
-    // The DM speaks to everyone; players speak to the DM, except dice, which
-    // everyone sees straight away even while the DM is away.
+    // The DM speaks to everyone; players speak to the DM, except rolls and live
+    // token paths, which everyone sees straight away (even while the DM is away).
     const targets =
-      seat.role === 'guest' && type !== 'dice' ? this.ctx.getWebSockets('host') : this.ctx.getWebSockets()
+      seat.role === 'guest' && !BROADCAST.has(type) ? this.ctx.getWebSockets('host') : this.ctx.getWebSockets()
     for (const peer of targets) {
       if (peer === ws) continue
       try {

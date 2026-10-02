@@ -10,6 +10,10 @@ export interface Env extends Partial<AuthEnv> {
 }
 
 const ROOM_ID = /^[a-z0-9]{4,32}$/
+/** Raster images only: an SVG could carry script. */
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+/** Portraits are small cutouts; this leaves room under the 2 MB row limit. */
+const MAX_ASSET_BYTES = 1_500_000
 const MAX_NAME = 80
 
 export default {
@@ -21,6 +25,7 @@ export default {
       return Response.json({ origins: [url.origin] })
     }
     if (path === '/crawler-sync') return openRoom(request, env, url)
+    if (path.startsWith('/crawler-sync/asset/')) return asset(request, env, url)
 
     if (path.startsWith('/auth/')) {
       if (!configured(env)) return new Response('Google sign-in is not configured', { status: 503 })
@@ -39,6 +44,49 @@ export default {
 
 async function signedIn(request: Request, env: Env): Promise<User | null> {
   return configured(env) ? currentUser(request, env) : null
+}
+
+/**
+ * GET  /crawler-sync/asset/:room/:hash — an image, to anyone with the campaign's link.
+ * POST /crawler-sync/asset/:room       — the campaign's DM stores one; answers { url }.
+ */
+async function asset(request: Request, env: Env, url: URL): Promise<Response> {
+  const [, , , room, hash] = url.pathname.split('/')
+  if (!room || !ROOM_ID.test(room)) return new Response(null, { status: 404 })
+  const table = env.TABLE.get(env.TABLE.idFromName(room))
+
+  if (request.method === 'GET' && hash && /^[0-9a-f]{64}$/.test(hash)) {
+    if (request.headers.get('If-None-Match') === `"${hash}"`) return new Response(null, { status: 304 })
+    const found = await table.getAsset(hash)
+    if (!found) return new Response(null, { status: 404 })
+    return new Response(found.data, {
+      headers: {
+        'Content-Type': found.mime,
+        // Content-addressed: these bytes never change, so browsers keep them.
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        ETag: `"${hash}"`,
+        'X-Content-Type-Options': 'nosniff',
+      },
+    })
+  }
+
+  if (request.method === 'POST' && !hash) {
+    const user = await signedIn(request, env)
+    if (!user) return Response.json({ error: 'Sign in first' }, { status: 401 })
+    if (!sameOrigin(request, url)) return forbidden()
+    const owns = await env.LIBRARY.get(env.LIBRARY.idFromName(user.id)).owns(room)
+    if (!owns) return Response.json({ error: 'Not found' }, { status: 404 })
+    const mime = (request.headers.get('Content-Type') ?? '').split(';')[0].trim().toLowerCase()
+    if (!IMAGE_TYPES.has(mime)) return Response.json({ error: 'Images only (PNG, JPEG, WebP, GIF)' }, { status: 415 })
+    const bytes = await request.arrayBuffer()
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_ASSET_BYTES) {
+      return Response.json({ error: 'Image is empty or larger than 1.5 MB' }, { status: 413 })
+    }
+    const stored = await table.putAsset(bytes, mime)
+    return Response.json({ url: `/crawler-sync/asset/${room}/${stored}` }, { status: 201 })
+  }
+
+  return new Response(null, { status: 405 })
 }
 
 async function openRoom(request: Request, env: Env, url: URL): Promise<Response> {

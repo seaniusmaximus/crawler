@@ -2,6 +2,7 @@ import type { DiceRoll } from '../model/dice.ts'
 import type { CharacterStats } from '../model/stats.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
+import type { DungeonPatch } from './patch.ts'
 
 export interface DdbCharacter {
   characterId: string
@@ -30,12 +31,23 @@ export type NetMessage =
   | { type: 'player'; player: Player }
   | { type: 'opening'; floorId: string; roomId: string; x: number; y: number }
   | { type: 'dice'; rolls: DiceRoll[] }
-  | { type: 'travel'; travel: TokenTravel | null }
+  /**
+   * A live token path, relayed straight to everyone and never saved. `travel` is
+   * null when the sender's path for `playerId` ends; `fromHost` is checked by the relay.
+   */
+  | { type: 'travel'; clientId: string; fromHost: boolean; playerId: string; travel: TokenTravel | null }
   | { type: 'focus'; floorId: string; roomId: string }
   /** Sent by the table relay itself whenever someone connects or drops. */
   | { type: 'presence'; host: boolean; guests: string[] }
   /** Sent by the relay just before it closes a socket for good (see worker/room.ts). */
   | { type: 'kicked'; code: number; reason: string }
+  /**
+   * What changed since revision `base`, from the DM to everyone; never stored. A player
+   * whose map isn't at `base` asks for a resync instead of applying it.
+   */
+  | { type: 'patch'; base: number; rev: number; patch: DungeonPatch; you?: Record<string, string | null> }
+  /** A player's map fell out of step: the DM answers with a full snapshot. */
+  | { type: 'resync'; clientId: string }
   /** The relay stored the DM's snapshot with this `seq`. */
   | { type: 'saved'; seq: number }
   /** A save point was restored: the DM's browser takes this as its map. */
@@ -48,6 +60,10 @@ export interface SnapshotMessage {
   you: Record<string, string | null>
   /** Set by the DM so the relay can confirm exactly which version it saved. */
   seq?: number
+  /** The DM's revision this snapshot is at; patches build on it. */
+  rev?: number
+  /** Save only: the relay stores it but doesn't send it to the players. */
+  quiet?: boolean
 }
 
 export function isNetMessage(value: unknown): value is NetMessage {
