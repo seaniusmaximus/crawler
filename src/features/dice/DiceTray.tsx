@@ -6,6 +6,7 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
+import { bridgeIcon } from '../../ui/brand.ts'
 import { EXTENSION_URL, startDiceBridge } from './bridge.ts'
 
 // The extension announces itself within ~1s of the tray mounting; give it some slack.
@@ -54,6 +55,7 @@ export function DiceTray() {
                 rel="noopener noreferrer"
                 title="Install the Crawler Dice Bridge extension to send D&D Beyond rolls here"
               >
+                <img className="bridge-icon" src={bridgeIcon} width={16} height={16} alt="" />
                 Get Bridge
                 <Icon id="external" size={12} />
               </a>
@@ -121,7 +123,7 @@ export function DiceTray() {
 
       <button
         type="button"
-        className={`panel dice-fab scroll-h${open ? ' is-open' : ''}`}
+        className={`panel dice-fab chest${open ? ' is-open' : ''}`}
         onClick={() => dice.setOpen(!open)}
         aria-expanded={open}
         aria-label={open ? 'Close dice tray' : 'Open dice tray'}

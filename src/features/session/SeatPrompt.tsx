@@ -6,6 +6,7 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { myClientId, useSessionStore } from '../../state/sessionStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Icon } from '../../ui/Icon.tsx'
+import { bridgeIcon } from '../../ui/brand.ts'
 import { DDB_CHARACTERS_URL, EXTENSION_URL, requestDdbCharacter } from '../dice/bridge.ts'
 
 // The extension says hello every few seconds; wait that long before calling it missing.
@@ -187,6 +188,7 @@ function SeatDialog() {
               </button>
               {bridge !== 'connected' && graceOver ? (
                 <a className="dialog-button" href={EXTENSION_URL} target="_blank" rel="noopener noreferrer">
+                  <img className="bridge-icon" src={bridgeIcon} width={16} height={16} alt="" />
                   Get the extension
                   <Icon id="external" size={12} />
                 </a>

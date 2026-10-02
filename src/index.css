@@ -682,19 +682,29 @@ a:hover {
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  align-items: stretch;
+  gap: 12px;
 }
 
+/* The Crawler mark on its own, as tall as the name and status beside it. */
 .brand-mark {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid rgba(227, 191, 106, 0.25);
-  border-radius: 12px;
-  background: rgba(227, 191, 106, 0.08);
-  color: var(--gold);
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.brand-mark img {
+  display: block;
+  width: auto;
+  height: 100%;
+  /* The tile's mass sits above its falling rubble; lift it to line up with the text. */
+  transform: translateY(-3px);
+}
+
+/* The Dice Bridge icon (it carries its own tile), beside links to the extension. */
+.bridge-icon {
+  display: block;
+  flex: none;
 }
 
 .brand-copy {
@@ -2610,6 +2620,11 @@ a:hover {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
+}
+
+/* As a chest, the button keeps room under the lid. */
+.dice-fab.chest {
+  padding-top: 12px;
 }
 
 .dice-fab:hover,

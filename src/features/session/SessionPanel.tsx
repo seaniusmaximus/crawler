@@ -5,6 +5,7 @@ import { useAccountStore } from '../../state/accountStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { bootSessionFromUrl, useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
+import { crawlerMark } from '../../ui/brand.ts'
 import { CampaignPanel } from './CampaignPanel.tsx'
 
 /** Wordmark and a one-line read of the table's connection, top-left. */
@@ -40,7 +41,7 @@ export function Brand() {
   return (
     <div className="brand">
       <span className="brand-mark" aria-hidden>
-        <Icon id="d20" size={22} strokeWidth={1.3} />
+        <img src={crawlerMark} width={30} height={30} alt="" />
       </span>
       <div className="brand-copy">
         <span className="brand-name">Crawler</span>
