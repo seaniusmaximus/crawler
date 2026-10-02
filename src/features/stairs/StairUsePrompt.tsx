@@ -54,7 +54,7 @@ export function StairUsePrompt() {
   return (
     <div className="dialog-backdrop" onPointerDown={close} role="presentation">
       <div
-        className="dialog"
+        className="dialog scroll-v"
         role="alertdialog"
         aria-labelledby="stair-use-title"
         aria-describedby="stair-use-body"

@@ -13,6 +13,7 @@ import {
   type SessionPeer,
   type SnapshotMessage,
 } from '../net/protocol.ts'
+import { isMonster } from '../model/players.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
@@ -65,6 +66,15 @@ interface SessionState {
   saveState: SaveState
   /** When the relay last confirmed a save of this campaign. */
   savedAt: number | null
+  /** Bumped whenever the campaign's maps change, so lists can refresh. */
+  mapsVersion: number
+  /** The map the party is being moved to, while that's under way. */
+  mapBusy: string | null
+  mapError: string | null
+  /** Move the party (and every player's screen) to another map of the campaign. */
+  switchMap: (mapId: string) => void
+  /** Something changed in the maps list (created, renamed, deleted). */
+  touchMaps: () => void
   /** Open a saved campaign; `restore` loads its saved map instead of sending this tab's. */
   hostCampaign: (campaign: ActiveCampaign, restore: boolean) => void
   /** Save and step away; the campaign stays in the DM's list. */
@@ -344,10 +354,36 @@ function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void
   window.clearTimeout(resyncTimer)
   resyncTimer = 0
   guestRev = typeof message.rev === 'number' ? message.rev : null
+  const newMap = useDungeonStore.getState().dungeon.id !== message.dungeon.id
   applyFromDm(message.you, () => {
     useDungeonStore.getState().replaceDungeon(message.dungeon)
     useDiceStore.getState().replaceRolls(message.rolls)
   })
+  if (newMap) {
+    useTravelStore.getState().clear()
+    settleViewOnNewMap(useSessionStore.getState().myPlayerId)
+  }
+}
+
+/** After moving to another map: clear selections and look at your token (or the party, or the first room). */
+function settleViewOnNewMap(playerId: string | null): void {
+  const dungeon = useDungeonStore.getState().dungeon
+  const editor = useEditorStore.getState()
+  editor.selectRoom(null)
+  editor.selectPlayer(null)
+  editor.openSheet(null)
+  const players = dungeon.players ?? []
+  const token = players.find((player) => player.id === playerId) ?? players.find((player) => !isMonster(player))
+  if (token) {
+    editor.setActiveFloor(token.floorId)
+    editor.focusPlayer(token.id, 260)
+    return
+  }
+  const ground = dungeon.floors.find((floor) => floor.order === 0) ?? dungeon.floors[0]
+  if (!ground) return
+  editor.setActiveFloor(ground.id)
+  const room = ground.rooms[0]
+  if (room) editor.focusRoom(ground.id, room.id, FOCUS_INSET)
 }
 
 /** A patch from the DM: apply it if this map is at its base revision, otherwise ask to resync. */
@@ -460,6 +496,21 @@ function handleHostMessage(message: NetMessage): void {
       useSessionStore.setState({ saveState: 'saved', savedAt: Date.now() })
       closeWaiter?.()
     }
+    return
+  }
+  if (message.type === 'mapLoad') {
+    applyRemote(() => useDungeonStore.getState().enterMap(message.snapshot?.dungeon ?? null))
+    useSessionStore.getState().reportTravel(null)
+    useTravelStore.getState().clear()
+    convertPortraits()
+    // Everyone switches with this, and the relay saves it as the live map.
+    sendSnapshot()
+    settleViewOnNewMap(null)
+    useSessionStore.setState({ mapBusy: null, mapsVersion: session.mapsVersion + 1 })
+    return
+  }
+  if (message.type === 'mapError') {
+    useSessionStore.setState({ mapBusy: null, mapError: message.message, mapsVersion: session.mapsVersion + 1 })
     return
   }
   if (message.type === 'restore') {
@@ -731,6 +782,8 @@ function hostTable(campaign: ActiveCampaign, restore: boolean): void {
     campaignName: campaign.name,
     saveState: 'saving',
     savedAt: null,
+    mapBusy: null,
+    mapError: null,
     joinId: null,
     error: null,
     hostOnline: true,
@@ -840,6 +893,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   campaignName: null,
   saveState: 'idle',
   savedAt: null,
+  mapsVersion: 0,
+  mapBusy: null,
+  mapError: null,
+
+  switchMap: (mapId) => {
+    if (get().role !== 'host' || !connected()) {
+      set({ mapError: 'Open the campaign first' })
+      return
+    }
+    set({ mapBusy: mapId, mapError: null })
+    // The relay files the live map away as it stands, so send everything first.
+    saveNow()
+    send({ type: 'switchMap', mapId })
+  },
+
+  touchMaps: () => set({ mapsVersion: get().mapsVersion + 1 }),
 
   hostCampaign: (campaign, restore) => hostTable(campaign, restore),
 

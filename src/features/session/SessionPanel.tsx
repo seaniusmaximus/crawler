@@ -102,7 +102,7 @@ export function TableMenu() {
       </button>
 
       {open ? (
-        <section className="panel table-pop" aria-label="Table">
+        <section className="panel table-pop scroll-v" aria-label="Table">
           <header className="panel-head">
             <h2 className="panel-title">
               <Diamond />

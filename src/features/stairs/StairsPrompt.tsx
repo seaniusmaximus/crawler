@@ -30,7 +30,7 @@ export function StairsPrompt() {
   return (
     <div className="dialog-backdrop" onPointerDown={close} role="presentation">
       <div
-        className="dialog"
+        className="dialog scroll-v"
         role="alertdialog"
         aria-labelledby="stairs-prompt-title"
         aria-describedby="stairs-prompt-body"

@@ -18,7 +18,7 @@ export function TurnBanner() {
   if (!player || !tokenShown(player, floors, viewMode)) return null
 
   return (
-    <div className={`panel turn-banner${mine ? ' is-mine' : ''}`} role="status">
+    <div className={`panel turn-banner scroll-h${mine ? ' is-mine' : ''}`} role="status">
       <Avatar player={player} size={30} turn />
       {mine ? (
         <>

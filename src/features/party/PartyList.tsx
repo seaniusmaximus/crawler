@@ -44,7 +44,7 @@ export function PartyCard() {
   }
 
   return (
-    <section className="panel token-card is-party" aria-label="Party">
+    <section className="panel token-card is-party scroll-v" aria-label="Party">
       <header className="panel-head">
         <h2 className="panel-title">
           <Diamond />
@@ -171,7 +171,7 @@ export function FoesCard() {
   }
 
   return (
-    <section className="panel token-card is-foes" aria-label="Foes">
+    <section className="panel token-card is-foes scroll-v" aria-label="Foes">
       <header className="panel-head">
         <h2 className="panel-title is-foe">
           <Diamond />

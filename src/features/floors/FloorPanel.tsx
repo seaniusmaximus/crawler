@@ -90,7 +90,7 @@ function FloorTower({
   const tower = useShareTowerHeight()
 
   return (
-    <section ref={tower} className="panel floor-tower" aria-label="Floors">
+    <section ref={tower} className="panel floor-tower scroll-h" aria-label="Floors">
       <FloorStack floors={floors} activeId={activeId} width={140} height={stackHeight(floors.length, 132)} />
       {floors.length === 0 ? (
         <p className="panel-empty">No revealed rooms</p>
@@ -170,7 +170,7 @@ function FloorDrawer({
   const hidden = active ? active.rooms.filter((room) => !room.visible).length : 0
 
   return (
-    <section className="panel floor-drawer" aria-label="Floors and rooms">
+    <section className="panel floor-drawer scroll-v" aria-label="Floors and rooms">
       <header className="panel-head">
         <h2 className="panel-title">
           <Diamond />

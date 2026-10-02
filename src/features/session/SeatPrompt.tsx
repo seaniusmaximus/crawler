@@ -81,7 +81,7 @@ function SeatDialog() {
   return (
     <div className="dialog-backdrop" role="presentation">
       <div
-        className="dialog seat-dialog"
+        className="dialog seat-dialog scroll-v"
         role="dialog"
         aria-modal="true"
         aria-labelledby="seat-title"

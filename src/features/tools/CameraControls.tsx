@@ -10,7 +10,7 @@ export function CameraControls() {
   const zoomView = useEditorStore((state) => state.zoomView)
 
   return (
-    <div className="panel camera-dock" role="group" aria-label="Camera">
+    <div className="panel camera-dock scroll-h" role="group" aria-label="Camera">
       <button type="button" className="icon-btn is-lg" onClick={() => rotateView(-1)} title="Rotate left (Q)" aria-label="Rotate view left">
         <Icon id="rotateLeft" size={17} />
       </button>

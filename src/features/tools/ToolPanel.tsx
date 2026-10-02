@@ -48,7 +48,7 @@ export function ToolPanel() {
 
   return (
     <div className="tool-dock">
-      <div className="panel tools" role="toolbar" aria-label="Tools">
+      <div className="panel tools scroll-h" role="toolbar" aria-label="Tools">
         {TOOLS.map((item) => (
           <Fragment key={item.id}>
             {item.group ? <span className="tool-rule" aria-hidden /> : null}

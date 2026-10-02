@@ -283,6 +283,12 @@ interface DungeonState {
   replaceDungeon: (dungeon: Dungeon) => void
   /** Apply the DM's changes; this tab's own path in progress is kept. */
   applyPatch: (patch: DungeonPatch) => void
+  /**
+   * Move to another map of the campaign (null: a brand-new one). The party comes
+   * along, standing where they last stood there (or in the first room); monsters
+   * and the layout are that map's own; combat starts over.
+   */
+  enterMap: (target: Dungeon | null) => void
   upsertPlayer: (player: Player) => void
   claimCharacter: (info: {
     characterId: string
@@ -865,6 +871,37 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         players: (dungeon.players ?? []).map(normalizePlayer),
         // `travel` is this tab's own path in progress; other people's live in the travel store.
         travel: get().dungeon.travel,
+      },
+    })
+  },
+
+  enterMap: (target) => {
+    const party = (get().dungeon.players ?? []).filter((player) => !isMonster(player))
+    const base = target ?? createDungeon()
+    const floors = base.floors.length ? base.floors : [createFloor(0)]
+    const ground = floors.find((floor) => floor.order === 0) ?? floors[0]
+    const lastStood = new Map(
+      (target?.players ?? []).filter((player) => !isMonster(player)).map((player) => [player.id, player]),
+    )
+    const monsters = (target?.players ?? []).filter(isMonster).map(normalizePlayer)
+    const placed: Player[] = [...monsters]
+    for (const member of party) {
+      const before = lastStood.get(member.id)
+      if (before && floors.some((floor) => floor.id === before.floorId)) {
+        placed.push({ ...member, floorId: before.floorId, x: before.x, y: before.y })
+        continue
+      }
+      const spot = standOnFloor(ground, placed) ?? { x: 0, y: 0 }
+      placed.push({ ...member, floorId: ground.id, x: spot.x, y: spot.y })
+    }
+    set({
+      dungeon: {
+        ...base,
+        floors,
+        // Party first, then this map's monsters.
+        players: [...placed.slice(monsters.length), ...monsters],
+        combat: emptyCombat(),
+        travel: null,
       },
     })
   },

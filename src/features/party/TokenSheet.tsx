@@ -55,104 +55,106 @@ function CharacterSheet({ player }: { player: Player }) {
   }
 
   return (
-    <aside className="panel sheet is-party" aria-label={`${characterNameOf(player)} character sheet`}>
-      <SheetHead player={player} editable={editable} size={50}>
-        <span className="sheet-sub">
-          {editable && editing === 'klass' ? (
-            <span className="sheet-sub-edit">
-              <input
-                className="stat-input is-race"
-                defaultValue={stats.race}
-                autoFocus
-                aria-label="Race"
-                placeholder="Race"
-                // Saved without closing, so Tab moves on to the class field.
-                onBlur={(event) => useDungeonStore.getState().setPlayerStat(player.id, 'race', event.target.value)}
-                onKeyDown={textKeys}
-              />
-              <input
-                className="stat-input is-wide"
-                defaultValue={stats.klass}
-                aria-label="Class"
-                placeholder="Class"
-                onBlur={(event) => commit('klass', event.target.value)}
-                onKeyDown={textKeys}
-              />
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="link-text"
-              disabled={!editable}
-              onClick={() => setEditing('klass')}
-              title={editable ? 'Edit race and class' : undefined}
-            >
-              {subline.join(' · ') || (editable ? 'Add race and class' : '')}
-            </button>
-          )}
-        </span>
-        <span className="sheet-place">{placeLabel(player, floors)}</span>
-      </SheetHead>
+    <aside className="panel sheet is-party scroll-v" aria-label={`${characterNameOf(player)} character sheet`}>
+      <div className="sheet-body">
+        <SheetHead player={player} editable={editable} size={50}>
+          <span className="sheet-sub">
+            {editable && editing === 'klass' ? (
+              <span className="sheet-sub-edit">
+                <input
+                  className="stat-input is-race"
+                  defaultValue={stats.race}
+                  autoFocus
+                  aria-label="Race"
+                  placeholder="Race"
+                  // Saved without closing, so Tab moves on to the class field.
+                  onBlur={(event) => useDungeonStore.getState().setPlayerStat(player.id, 'race', event.target.value)}
+                  onKeyDown={textKeys}
+                />
+                <input
+                  className="stat-input is-wide"
+                  defaultValue={stats.klass}
+                  aria-label="Class"
+                  placeholder="Class"
+                  onBlur={(event) => commit('klass', event.target.value)}
+                  onKeyDown={textKeys}
+                />
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="link-text"
+                disabled={!editable}
+                onClick={() => setEditing('klass')}
+                title={editable ? 'Edit race and class' : undefined}
+              >
+                {subline.join(' · ') || (editable ? 'Add race and class' : '')}
+              </button>
+            )}
+          </span>
+          <span className="sheet-place">{placeLabel(player, floors)}</span>
+        </SheetHead>
 
-      <HpBlock player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} />
+        <HpBlock player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} />
 
-      <div className="stat-tiles">
-        <StatTile label="AC">
-          <EditableValue
-            label="Armor class"
-            value={stats.ac}
-            editing={editing === 'ac'}
-            editable={editable}
-            onEdit={() => setEditing('ac')}
-            onCommit={(value) => commit('ac', value)}
-            onCancel={() => setEditing(null)}
-          />
-        </StatTile>
-        <InitTile player={player} stats={stats} editable={editable} editing={editing === 'initiativeRoll'} setEditing={setEditing} />
-        <StatTile label="Speed" unit={stats.speed != null ? 'ft' : undefined}>
-          <EditableValue
-            label="Speed"
-            value={stats.speed}
-            editing={editing === 'speed'}
-            editable={editable}
-            onEdit={() => setEditing('speed')}
-            onCommit={(value) => commit('speed', value)}
-            onCancel={() => setEditing(null)}
-          />
-        </StatTile>
-        <StatTile label="Level">
-          <EditableValue
-            label="Level"
-            value={stats.level}
-            editing={editing === 'level'}
-            editable={editable}
-            onEdit={() => setEditing('level')}
-            onCommit={(value) => commit('level', value)}
-            onCancel={() => setEditing(null)}
-          />
-        </StatTile>
+        <div className="stat-tiles">
+          <StatTile label="AC">
+            <EditableValue
+              label="Armor class"
+              value={stats.ac}
+              editing={editing === 'ac'}
+              editable={editable}
+              onEdit={() => setEditing('ac')}
+              onCommit={(value) => commit('ac', value)}
+              onCancel={() => setEditing(null)}
+            />
+          </StatTile>
+          <InitTile player={player} stats={stats} editable={editable} editing={editing === 'initiativeRoll'} setEditing={setEditing} />
+          <StatTile label="Speed" unit={stats.speed != null ? 'ft' : undefined}>
+            <EditableValue
+              label="Speed"
+              value={stats.speed}
+              editing={editing === 'speed'}
+              editable={editable}
+              onEdit={() => setEditing('speed')}
+              onCommit={(value) => commit('speed', value)}
+              onCancel={() => setEditing(null)}
+            />
+          </StatTile>
+          <StatTile label="Level">
+            <EditableValue
+              label="Level"
+              value={stats.level}
+              editing={editing === 'level'}
+              editable={editable}
+              onEdit={() => setEditing('level')}
+              onCommit={(value) => commit('level', value)}
+              onCancel={() => setEditing(null)}
+            />
+          </StatTile>
+        </div>
+
+        <Divider />
+
+        <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
+        <Passives stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
+
+        <Conditions player={player} />
+
+        {player.characterId ? (
+          <a
+            className="outline-link"
+            href={`https://www.dndbeyond.com/characters/${player.characterId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Icon id="external" size={15} />
+            Open D&amp;D Beyond sheet
+          </a>
+        ) : null}
+
+        {dm ? <SheetActions player={player} /> : null}
       </div>
-
-      <Divider />
-
-      <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
-      <Passives stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
-
-      <Conditions player={player} />
-
-      {player.characterId ? (
-        <a
-          className="outline-link"
-          href={`https://www.dndbeyond.com/characters/${player.characterId}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Icon id="external" size={15} />
-          Open D&amp;D Beyond sheet
-        </a>
-      ) : null}
-
-      {dm ? <SheetActions player={player} /> : null}
     </aside>
   )
 }
@@ -167,119 +169,121 @@ function StatBlock({ player }: { player: Player }) {
   const ratio = hpRatio(stats.hp, stats.hpMax)
 
   return (
-    <aside className="panel sheet is-foe" aria-label={`${characterNameOf(player)} stat block`}>
-      <SheetHead player={player} editable={editable} size={46}>
-        {editable && editing === 'klass' ? (
-          <input
-            className="stat-input is-wide"
-            defaultValue={stats.klass}
-            autoFocus
-            aria-label="Creature type"
-            placeholder="Medium undead, neutral evil"
-            onBlur={(event) => commit('klass', event.target.value)}
-            onKeyDown={(event) => {
-              event.stopPropagation()
-              if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
-              if (event.key === 'Escape') setEditing(null)
-            }}
-          />
-        ) : (
+    <aside className="panel sheet is-foe scroll-v" aria-label={`${characterNameOf(player)} stat block`}>
+      <div className="sheet-body">
+        <SheetHead player={player} editable={editable} size={46}>
+          {editable && editing === 'klass' ? (
+            <input
+              className="stat-input is-wide"
+              defaultValue={stats.klass}
+              autoFocus
+              aria-label="Creature type"
+              placeholder="Medium undead, neutral evil"
+              onBlur={(event) => commit('klass', event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation()
+                if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+                if (event.key === 'Escape') setEditing(null)
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="link-text sheet-type"
+              disabled={!editable}
+              onClick={() => setEditing('klass')}
+              title={editable ? 'Edit creature type' : undefined}
+            >
+              {stats.klass || (editable ? 'Add creature type' : '')}
+            </button>
+          )}
+        </SheetHead>
+
+        <div className="reveal-bar">
+          <span>
+            <Icon id={visible ? 'eye' : 'eyeOff'} size={15} />
+            {visible ? 'Visible to players' : 'Hidden from players'}
+            {room ? ` · ${room.name}` : ''}
+          </span>
           <button
             type="button"
-            className="link-text sheet-type"
-            disabled={!editable}
-            onClick={() => setEditing('klass')}
-            title={editable ? 'Edit creature type' : undefined}
+            className="chip-btn"
+            onClick={() => useDungeonStore.getState().setPlayerVisible(player.id, !visible)}
           >
-            {stats.klass || (editable ? 'Add creature type' : '')}
+            {visible ? 'Hide' : 'Reveal'}
           </button>
-        )}
-      </SheetHead>
-
-      <div className="reveal-bar">
-        <span>
-          <Icon id={visible ? 'eye' : 'eyeOff'} size={15} />
-          {visible ? 'Visible to players' : 'Hidden from players'}
-          {room ? ` · ${room.name}` : ''}
-        </span>
-        <button
-          type="button"
-          className="chip-btn"
-          onClick={() => useDungeonStore.getState().setPlayerVisible(player.id, !visible)}
-        >
-          {visible ? 'Hide' : 'Reveal'}
-        </button>
-      </div>
-
-      <Divider tone="foe" />
-
-      <div className="block-lines">
-        <div>
-          <span className="block-label">Armor Class</span>{' '}
-          <EditableValue
-            label="Armor class"
-            value={stats.ac}
-            editing={editing === 'ac'}
-            editable={editable}
-            className="is-inline"
-            onEdit={() => setEditing('ac')}
-            onCommit={(value) => commit('ac', value)}
-            onCancel={() => setEditing(null)}
-          />
         </div>
-        <div className="block-hp">
-          <span className="block-label">Hit Points</span>
-          <EditableValue
-            label="Hit points"
-            value={stats.hp}
-            display={`${stats.hp ?? '–'} / ${stats.hpMax ?? '–'}`}
-            editing={editing === 'hp'}
-            editable={editable}
-            className="is-inline"
-            onEdit={() => setEditing('hp')}
-            onCommit={(value) => commit('hp', value)}
-            onCancel={() => setEditing(null)}
-          />
-          <span className="hp-bar">
-            <span className={`hp-fill is-${hpTone(stats.hp, stats.hpMax)}`} style={{ width: `${(ratio ?? 0) * 100}%` }} />
-          </span>
+
+        <Divider tone="foe" />
+
+        <div className="block-lines">
+          <div>
+            <span className="block-label">Armor Class</span>{' '}
+            <EditableValue
+              label="Armor class"
+              value={stats.ac}
+              editing={editing === 'ac'}
+              editable={editable}
+              className="is-inline"
+              onEdit={() => setEditing('ac')}
+              onCommit={(value) => commit('ac', value)}
+              onCancel={() => setEditing(null)}
+            />
+          </div>
+          <div className="block-hp">
+            <span className="block-label">Hit Points</span>
+            <EditableValue
+              label="Hit points"
+              value={stats.hp}
+              display={`${stats.hp ?? '–'} / ${stats.hpMax ?? '–'}`}
+              editing={editing === 'hp'}
+              editable={editable}
+              className="is-inline"
+              onEdit={() => setEditing('hp')}
+              onCommit={(value) => commit('hp', value)}
+              onCancel={() => setEditing(null)}
+            />
+            <span className="hp-bar">
+              <span className={`hp-fill is-${hpTone(stats.hp, stats.hpMax)}`} style={{ width: `${(ratio ?? 0) * 100}%` }} />
+            </span>
+          </div>
+          <div>
+            <span className="block-label">Speed</span>{' '}
+            <EditableValue
+              label="Speed"
+              value={stats.speed}
+              display={stats.speed != null ? `${stats.speed} ft` : '–'}
+              editing={editing === 'speed'}
+              editable={editable}
+              className="is-inline"
+              onEdit={() => setEditing('speed')}
+              onCommit={(value) => commit('speed', value)}
+              onCancel={() => setEditing(null)}
+            />
+          </div>
         </div>
-        <div>
-          <span className="block-label">Speed</span>{' '}
-          <EditableValue
-            label="Speed"
-            value={stats.speed}
-            display={stats.speed != null ? `${stats.speed} ft` : '–'}
-            editing={editing === 'speed'}
-            editable={editable}
-            className="is-inline"
-            onEdit={() => setEditing('speed')}
-            onCommit={(value) => commit('speed', value)}
-            onCancel={() => setEditing(null)}
-          />
+
+        <Divider tone="foe" />
+
+        <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
+
+        {editable ? <HpAdjust player={player} stats={stats} /> : null}
+
+        <Conditions player={player} />
+
+        <div className="sheet-actions">
+          <button
+            type="button"
+            className="outline-btn"
+            disabled={player.initiativeRoll != null}
+            title={player.initiativeRoll != null ? `Rolled ${player.initiativeRoll}` : undefined}
+            onClick={() => rollInitiativeFor([player])}
+          >
+            <Icon id="d20" size={15} />
+            {player.initiativeRoll != null ? `Initiative ${player.initiativeRoll}` : 'Roll initiative'}
+          </button>
+          <RemoveButton player={player} />
         </div>
-      </div>
-
-      <Divider tone="foe" />
-
-      <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
-
-      {editable ? <HpAdjust player={player} stats={stats} /> : null}
-
-      <Conditions player={player} />
-
-      <div className="sheet-actions">
-        <button
-          type="button"
-          className="outline-btn"
-          disabled={player.initiativeRoll != null}
-          title={player.initiativeRoll != null ? `Rolled ${player.initiativeRoll}` : undefined}
-          onClick={() => rollInitiativeFor([player])}
-        >
-          <Icon id="d20" size={15} />
-          {player.initiativeRoll != null ? `Initiative ${player.initiativeRoll}` : 'Roll initiative'}
-        </button>
-        <RemoveButton player={player} />
       </div>
     </aside>
   )

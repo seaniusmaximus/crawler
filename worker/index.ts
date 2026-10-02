@@ -128,6 +128,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     const id = match[1]
     const rest = match[2] ?? ''
     if (!(await library.owns(id))) return Response.json({ error: 'Not found' }, { status: 404 })
+    if (rest.startsWith('/maps')) return maps(request, env.TABLE.get(env.TABLE.idFromName(id)), rest)
     if (rest) return saves(request, env.TABLE.get(env.TABLE.idFromName(id)), rest)
     if (request.method === 'PATCH') {
       await library.rename(id, await nameFrom(request))
@@ -142,6 +143,36 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   }
 
   return new Response(null, { status: 404 })
+}
+
+/**
+ * /api/campaigns/:id/maps[/:mapId] — the campaign's maps. Moving the party to a
+ * map goes through the DM's live connection instead, since their browser brings
+ * the party over.
+ */
+async function maps(request: Request, room: DurableObjectStub<TableRoom>, rest: string): Promise<Response> {
+  const match = /^\/maps(?:\/([0-9a-f-]{36}))?$/.exec(rest)
+  if (!match) return new Response(null, { status: 404 })
+  const mapId = match[1] ?? null
+  try {
+    if (!mapId) {
+      if (request.method === 'GET') return Response.json({ maps: await room.listMaps() })
+      if (request.method === 'POST') {
+        const body = await jsonBody(request)
+        const from = typeof body.from === 'string' ? body.from : null
+        return Response.json({ map: await room.createMap(cleanName(body.name, 'New map'), from) }, { status: 201 })
+      }
+    } else if (request.method === 'PATCH') {
+      await room.renameMap(mapId, cleanName((await jsonBody(request)).name, 'Map'))
+      return new Response(null, { status: 204 })
+    } else if (request.method === 'DELETE') {
+      await room.deleteMap(mapId)
+      return new Response(null, { status: 204 })
+    }
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : 'Failed' }, { status: 400 })
+  }
+  return new Response(null, { status: 405 })
 }
 
 /** /api/campaigns/:id/saves[/:saveId[/restore]] — the campaign's save points. */

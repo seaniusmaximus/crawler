@@ -36,7 +36,7 @@ export function DiceTray() {
   return (
     <div className="dice-dock" data-dice-tray="1">
       {open ? (
-        <section className="panel dice-panel" aria-label="Dice">
+        <section className="panel dice-panel scroll-v" aria-label="Dice">
           <header className="panel-head">
             <h2 className="panel-title">
               <Diamond />
@@ -121,7 +121,7 @@ export function DiceTray() {
 
       <button
         type="button"
-        className={`panel dice-fab${open ? ' is-open' : ''}`}
+        className={`panel dice-fab scroll-h${open ? ' is-open' : ''}`}
         onClick={() => dice.setOpen(!open)}
         aria-expanded={open}
         aria-label={open ? 'Close dice tray' : 'Open dice tray'}

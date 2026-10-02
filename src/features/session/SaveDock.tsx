@@ -31,7 +31,7 @@ export function SaveDock() {
       {open ? <SavePanel onClose={() => setOpen(false)} /> : null}
       <button
         type="button"
-        className={`panel save-fab${open ? ' is-open' : ''}`}
+        className={`panel save-fab chest${open ? ' is-open' : ''}`}
         aria-expanded={open}
         aria-label={`Save: ${BUBBLE_LABEL[saveState]}`}
         onClick={() => setOpen(!open)}
@@ -52,34 +52,36 @@ function SavePanel({ onClose }: { onClose: () => void }) {
   const signedIn = useAccountStore((state) => state.user !== null)
 
   return (
-    <section className="panel save-panel" aria-label="Save">
-      <header className="panel-head">
-        <h2 className="panel-title">
-          <Diamond />
-          <span>Save</span>
-        </h2>
-        <button type="button" className="icon-btn is-boxed" aria-label="Close" onClick={onClose}>
-          <Icon id="close" size={15} />
-        </button>
-      </header>
+    <section className="panel save-panel chest-panel" aria-label="Save">
+      <div className="panel-body">
+        <header className="panel-head">
+          <h2 className="panel-title">
+            <Diamond />
+            <span>Save</span>
+          </h2>
+          <button type="button" className="icon-btn is-boxed" aria-label="Close" onClick={onClose}>
+            <Icon id="close" size={15} />
+          </button>
+        </header>
 
-      <SaveStatus />
+        <SaveStatus />
 
-      {role === 'host' && roomId ? (
-        <>
-          <span className="kicker">Save points</span>
-          <SavePoints campaignId={roomId} />
-        </>
-      ) : null}
+        {role === 'host' && roomId ? (
+          <>
+            <span className="kicker">Save points</span>
+            <SavePoints campaignId={roomId} />
+          </>
+        ) : null}
 
-      {signedIn ? (
-        <>
-          <span className="kicker">Your campaigns</span>
-          <CampaignList empty="No saved campaigns yet." />
-        </>
-      ) : null}
+        {signedIn ? (
+          <>
+            <span className="kicker">Your campaigns</span>
+            <CampaignList empty="No saved campaigns yet." />
+          </>
+        ) : null}
 
-      <SaveFileActions />
+        <SaveFileActions />
+      </div>
     </section>
   )
 }

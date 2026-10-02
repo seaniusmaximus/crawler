@@ -34,6 +34,18 @@ const KEEP = { auto: 20, restore: 10, named: 50 } as const
 
 export type SaveKind = keyof typeof KEEP
 
+/** One map in the campaign, with a few details for the maps list. */
+export interface MapInfo {
+  id: string
+  name: string
+  live: boolean
+  floors: number
+  rooms: number
+  monsters: number
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SavePoint {
   id: number
   name: string
@@ -43,7 +55,7 @@ export interface SavePoint {
   size: number
 }
 
-const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel'])
+const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'switchMap'])
 const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel', 'resync'])
 
 /**
@@ -53,6 +65,8 @@ const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'openi
  * is connected.
  */
 export class TableRoom extends DurableObject<RoomEnv> {
+  private migrated = false
+
   /** Created on demand: deleteAll() drops them, and the instance may live on. */
   private ensureTables(): void {
     this.ctx.storage.sql.exec(`
@@ -62,7 +76,8 @@ export class TableRoom extends DurableObject<RoomEnv> {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         kind TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        map_id TEXT
       );
       CREATE TABLE IF NOT EXISTS save_chunks (
         save_id INTEGER NOT NULL,
@@ -76,18 +91,189 @@ export class TableRoom extends DurableObject<RoomEnv> {
         data BLOB NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS maps (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        sort INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        floors INTEGER NOT NULL DEFAULT 0,
+        rooms INTEGER NOT NULL DEFAULT 0,
+        monsters INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS map_chunks (
+        map_id TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (map_id, idx)
+      );
     `)
+    if (this.migrated) return
+    this.migrated = true
+    // Campaigns from before maps: their save points gain a map column.
+    const columns = this.ctx.storage.sql.exec<{ name: string }>('PRAGMA table_info(saves)').toArray()
+    if (!columns.some((column) => column.name === 'map_id')) {
+      this.ctx.storage.sql.exec('ALTER TABLE saves ADD COLUMN map_id TEXT')
+    }
+  }
+
+  // ---------- Maps ----------
+  //
+  // The live map (the one players see) is kept in `snapshot`, exactly as before
+  // maps existed; every other map's data sits in `map_chunks`. Switching swaps
+  // them. Save points belong to the map they were taken on.
+
+  /** The live map's id; a campaign from before maps gets its one map, "Map 1", here. */
+  private liveMapId(): string {
+    const id = this.meta('liveMapId')
+    if (id) return id
+    const created = crypto.randomUUID()
+    const now = Date.now()
+    this.ctx.storage.sql.exec(
+      'INSERT INTO maps (id, name, sort, created_at, updated_at) VALUES (?, ?, 0, ?, ?)',
+      created,
+      'Map 1',
+      now,
+      now,
+    )
+    this.setMeta('liveMapId', created)
+    this.ctx.storage.sql.exec('UPDATE saves SET map_id = ? WHERE map_id IS NULL', created)
+    const snapshot = this.loadSnapshot()
+    if (snapshot) this.recordSummary(created, snapshot)
+    return created
+  }
+
+  listMaps(): MapInfo[] {
+    this.ensureTables()
+    const live = this.liveMapId()
+    return this.ctx.storage.sql
+      .exec<{
+        id: string
+        name: string
+        floors: number
+        rooms: number
+        monsters: number
+        created_at: number
+        updated_at: number
+      }>('SELECT id, name, floors, rooms, monsters, created_at, updated_at FROM maps ORDER BY sort, created_at')
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        live: row.id === live,
+        floors: row.floors,
+        rooms: row.rooms,
+        monsters: row.monsters,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }))
+  }
+
+  /** A new map: blank, or a copy of another map (`from`). */
+  createMap(name: string, from: string | null): MapInfo {
+    this.ensureTables()
+    const live = this.liveMapId()
+    const sql = this.ctx.storage.sql
+    if (from && !sql.exec('SELECT 1 FROM maps WHERE id = ?', from).toArray().length) throw new Error('Map not found')
+    const id = crypto.randomUUID()
+    const now = Date.now()
+    const sort = sql.exec<{ n: number | null }>('SELECT MAX(sort) AS n FROM maps').one().n ?? 0
+    this.ctx.storage.transactionSync(() => {
+      sql.exec(
+        'INSERT INTO maps (id, name, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+        id,
+        name,
+        sort + 1,
+        now,
+        now,
+      )
+      if (!from) return
+      if (from === live) sql.exec('INSERT INTO map_chunks (map_id, idx, data) SELECT ?, idx, data FROM snapshot', id)
+      else sql.exec('INSERT INTO map_chunks (map_id, idx, data) SELECT ?, idx, data FROM map_chunks WHERE map_id = ?', id, from)
+      const source = sql
+        .exec<{ floors: number; rooms: number; monsters: number }>('SELECT floors, rooms, monsters FROM maps WHERE id = ?', from)
+        .one()
+      sql.exec('UPDATE maps SET floors = ?, rooms = ?, monsters = ? WHERE id = ?', source.floors, source.rooms, source.monsters, id)
+    })
+    return this.listMaps().find((map) => map.id === id)!
+  }
+
+  renameMap(id: string, name: string): void {
+    this.ensureTables()
+    this.ctx.storage.sql.exec('UPDATE maps SET name = ? WHERE id = ?', name, id)
+  }
+
+  /** Delete a map that isn't live, with its save points. */
+  deleteMap(id: string): void {
+    this.ensureTables()
+    if (id === this.liveMapId()) throw new Error("The map the party is on can't be deleted; move them first")
+    const sql = this.ctx.storage.sql
+    this.ctx.storage.transactionSync(() => {
+      sql.exec('DELETE FROM map_chunks WHERE map_id = ?', id)
+      sql.exec('DELETE FROM save_chunks WHERE save_id IN (SELECT id FROM saves WHERE map_id = ?)', id)
+      sql.exec('DELETE FROM saves WHERE map_id = ?', id)
+      sql.exec('DELETE FROM maps WHERE id = ?', id)
+    })
+  }
+
+  /** Make `mapId` live and hand its saved map to the DM's browser, which brings the party over. */
+  private switchMap(ws: WebSocket, mapId: string): void {
+    const live = this.liveMapId()
+    const sql = this.ctx.storage.sql
+    if (!sql.exec('SELECT 1 FROM maps WHERE id = ?', mapId).toArray().length) {
+      ws.send(JSON.stringify({ type: 'mapError', message: 'That map no longer exists' }))
+      return
+    }
+    if (mapId !== live) {
+      this.ctx.storage.transactionSync(() => {
+        sql.exec('DELETE FROM map_chunks WHERE map_id = ?', live)
+        sql.exec('INSERT INTO map_chunks (map_id, idx, data) SELECT ?, idx, data FROM snapshot', live)
+        sql.exec('DELETE FROM snapshot')
+        sql.exec('INSERT INTO snapshot (idx, data) SELECT idx, data FROM map_chunks WHERE map_id = ?', mapId)
+        sql.exec('DELETE FROM map_chunks WHERE map_id = ?', mapId)
+        this.setMeta('liveMapId', mapId)
+      })
+    }
+    const snapshot = this.loadSnapshot()
+    ws.send(`{"type":"mapLoad","mapId":${JSON.stringify(mapId)},"snapshot":${snapshot ?? 'null'}}`)
+  }
+
+  /** Floors, rooms and monsters for the maps list, read from a saved snapshot. */
+  private recordSummary(mapId: string, snapshot: string): void {
+    let floors = 0
+    let rooms = 0
+    let monsters = 0
+    try {
+      const dungeon = (JSON.parse(snapshot) as { dungeon?: { floors?: { rooms?: unknown[] }[]; players?: { kind?: string }[] } }).dungeon
+      floors = dungeon?.floors?.length ?? 0
+      rooms = (dungeon?.floors ?? []).reduce((sum, floor) => sum + (floor.rooms?.length ?? 0), 0)
+      monsters = (dungeon?.players ?? []).filter((player) => player.kind === 'monster').length
+    } catch {
+      return
+    }
+    this.ctx.storage.sql.exec(
+      'UPDATE maps SET floors = ?, rooms = ?, monsters = ?, updated_at = ? WHERE id = ?',
+      floors,
+      rooms,
+      monsters,
+      Date.now(),
+      mapId,
+    )
   }
 
   // ---------- Save points ----------
 
+  /** The live map's save points. */
   listSaves(): SavePoint[] {
     this.ensureTables()
+    const live = this.liveMapId()
     return this.ctx.storage.sql
       .exec<{ id: number; name: string; kind: SaveKind; created_at: number; size: number }>(
         `SELECT s.id, s.name, s.kind, s.created_at, COALESCE(SUM(LENGTH(c.data)), 0) AS size
          FROM saves s LEFT JOIN save_chunks c ON c.save_id = s.id
+         WHERE s.map_id = ?
          GROUP BY s.id ORDER BY s.created_at DESC, s.id DESC`,
+        live,
       )
       .toArray()
       .map((row) => ({ id: row.id, name: row.name, kind: row.kind, createdAt: row.created_at, size: row.size }))
@@ -98,7 +284,9 @@ export class TableRoom extends DurableObject<RoomEnv> {
     this.ensureTables()
     if (!this.hasSnapshot()) throw new Error('Nothing saved yet — open the campaign first')
     if (kind === 'named') {
-      const count = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM saves WHERE kind = 'named'").one().n
+      const count = this.ctx.storage.sql
+        .exec<{ n: number }>("SELECT COUNT(*) AS n FROM saves WHERE kind = 'named' AND map_id = ?", this.liveMapId())
+        .one().n
       if (count >= KEEP.named) throw new Error(`You can keep up to ${KEEP.named} named save points; delete one first`)
     }
     const id = this.ctx.storage.transactionSync(() => this.copyCurrent(name, kind))
@@ -108,8 +296,10 @@ export class TableRoom extends DurableObject<RoomEnv> {
   /** Put a save point back as the current map, keeping what it replaces as its own save point. */
   restoreSave(id: number): void {
     this.ensureTables()
-    const save = this.ctx.storage.sql.exec<{ name: string }>('SELECT name FROM saves WHERE id = ?', id).toArray()[0]
-    if (!save) throw new Error('Save point not found')
+    const save = this.ctx.storage.sql
+      .exec<{ name: string }>('SELECT name FROM saves WHERE id = ? AND map_id = ?', id, this.liveMapId())
+      .toArray()[0]
+    if (!save) throw new Error('Save point not found on this map')
     this.ctx.storage.transactionSync(() => {
       if (this.hasSnapshot()) this.copyCurrent(`Before restoring “${save.name}”`, 'restore')
       this.ctx.storage.sql.exec('DELETE FROM snapshot')
@@ -142,12 +332,18 @@ export class TableRoom extends DurableObject<RoomEnv> {
   /** Copy the current snapshot into a new save point (inside a transaction), then prune. */
   private copyCurrent(name: string, kind: SaveKind): number {
     const sql = this.ctx.storage.sql
-    sql.exec('INSERT INTO saves (name, kind, created_at) VALUES (?, ?, ?)', name, kind, Date.now())
+    const live = this.liveMapId()
+    sql.exec('INSERT INTO saves (name, kind, created_at, map_id) VALUES (?, ?, ?, ?)', name, kind, Date.now(), live)
     const id = sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id
     sql.exec('INSERT INTO save_chunks (save_id, idx, data) SELECT ?, idx, data FROM snapshot', id)
     if (kind !== 'named') {
       const stale = sql
-        .exec<{ id: number }>('SELECT id FROM saves WHERE kind = ? ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?', kind, KEEP[kind])
+        .exec<{ id: number }>(
+          'SELECT id FROM saves WHERE kind = ? AND map_id = ? ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?',
+          kind,
+          live,
+          KEEP[kind],
+        )
         .toArray()
       for (const row of stale) {
         sql.exec('DELETE FROM save_chunks WHERE save_id = ?', row.id)
@@ -160,7 +356,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
   /** Every so often while the DM edits, keep a copy they can go back to. */
   private maybeAutoSave(): void {
     const last = this.ctx.storage.sql
-      .exec<{ at: number | null }>("SELECT MAX(created_at) AS at FROM saves WHERE kind = 'auto'")
+      .exec<{ at: number | null }>("SELECT MAX(created_at) AS at FROM saves WHERE kind = 'auto' AND map_id = ?", this.liveMapId())
       .one().at
     if (last !== null && Date.now() - last < AUTO_EVERY_MS) return
     const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ')
@@ -251,7 +447,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if (typeof message !== 'string') return
     const seat = seatOf(ws)
     if (!seat) return
-    let parsed: { type?: unknown; clientId?: unknown; seq?: unknown; fromHost?: unknown; quiet?: unknown }
+    let parsed: { type?: unknown; clientId?: unknown; seq?: unknown; fromHost?: unknown; quiet?: unknown; mapId?: unknown }
     try {
       parsed = JSON.parse(message)
     } catch {
@@ -263,8 +459,14 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if ('clientId' in parsed && parsed.clientId !== seat.id) return
     if (parsed.fromHost && seat.role !== 'host') return
 
+    if (type === 'switchMap') {
+      if (typeof parsed.mapId === 'string') this.switchMap(ws, parsed.mapId)
+      return
+    }
+
     if (type === 'snapshot') {
       this.saveSnapshot(message)
+      this.recordSummary(this.liveMapId(), message)
       // Tell the DM this exact version is safe, so the page can say "Saved".
       if (typeof parsed.seq === 'number') ws.send(JSON.stringify({ type: 'saved', seq: parsed.seq }))
       // A save-only copy: players already have these changes as patches.

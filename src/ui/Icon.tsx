@@ -60,8 +60,16 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M9.9 9.9a3 3 0 004.2 4.2" />
     </>
   ),
+  copy: <path d="M9 9h10a1 1 0 011 1v9a1 1 0 01-1 1H10a1 1 0 01-1-1zM5 15V5a1 1 0 011-1h9" />,
   trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
   share: <path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7M16 6l-4-4-4 4M12 2v13" />,
+  /** A parchment scroll: the campaign's maps. */
+  scroll: (
+    <>
+      <path d="M17 20H7a3 3 0 01-3-3v-1h11v1a3 3 0 003 3 3 3 0 003-3V6a2 2 0 00-2-2H8a2 2 0 00-2 2v10" />
+      <path d="M10 8h6M10 12h6" />
+    </>
+  ),
   save: <path d="M6 4h10l4 4v11a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 4v5h7V4M8 20v-6h8v6" />,
   download: <path d="M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4M8 10l4 4 4-4M12 14V3" />,
   external: <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" />,

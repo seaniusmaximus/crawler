@@ -27,6 +27,18 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return (response.status === 204 ? null : await response.json()) as T
 }
 
+/** A map in the campaign; exactly one is live (the one players see). */
+export interface MapInfo {
+  id: string
+  name: string
+  live: boolean
+  floors: number
+  rooms: number
+  monsters: number
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SavePoint {
   id: number
   name: string
@@ -59,6 +71,24 @@ export async function renameCampaign(id: string, name: string): Promise<void> {
 
 export async function deleteCampaign(id: string): Promise<void> {
   await call(`/api/campaigns/${id}`, { method: 'DELETE' })
+}
+
+export async function listMaps(campaignId: string): Promise<MapInfo[]> {
+  return (await call<{ maps: MapInfo[] }>(`/api/campaigns/${campaignId}/maps`)).maps
+}
+
+/** A new map: blank, or a copy of `from`. */
+export async function createMap(campaignId: string, name: string, from: string | null): Promise<MapInfo> {
+  const body = JSON.stringify({ name, from })
+  return (await call<{ map: MapInfo }>(`/api/campaigns/${campaignId}/maps`, { method: 'POST', body })).map
+}
+
+export async function renameMap(campaignId: string, mapId: string, name: string): Promise<void> {
+  await call(`/api/campaigns/${campaignId}/maps/${mapId}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+}
+
+export async function deleteMap(campaignId: string, mapId: string): Promise<void> {
+  await call(`/api/campaigns/${campaignId}/maps/${mapId}`, { method: 'DELETE' })
 }
 
 export async function listSaves(campaignId: string): Promise<SavePoint[]> {

@@ -46,6 +46,11 @@ export type NetMessage =
    * whose map isn't at `base` asks for a resync instead of applying it.
    */
   | { type: 'patch'; base: number; rev: number; patch: DungeonPatch; you?: Record<string, string | null> }
+  /** The DM moves the party to another map; the relay answers with `mapLoad` or `mapError`. */
+  | { type: 'switchMap'; mapId: string }
+  /** That map, as last saved (null when it's brand new), now live. */
+  | { type: 'mapLoad'; mapId: string; snapshot: SnapshotMessage | null }
+  | { type: 'mapError'; message: string }
   /** A player's map fell out of step: the DM answers with a full snapshot. */
   | { type: 'resync'; clientId: string }
   /** The relay stored the DM's snapshot with this `seq`. */
