@@ -7,6 +7,7 @@ import { RadialMenu } from '../features/menus/RadialMenu.tsx'
 import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
 import { TokenSheet } from '../features/party/TokenSheet.tsx'
 import { TurnBanner } from '../features/party/TurnBanner.tsx'
+import { SaveDock } from '../features/session/SaveDock.tsx'
 import { SeatPrompt } from '../features/session/SeatPrompt.tsx'
 import { Brand, TableMenu } from '../features/session/SessionPanel.tsx'
 import { StairUsePrompt } from '../features/stairs/StairUsePrompt.tsx'
@@ -69,6 +70,7 @@ export function EditorPage() {
         </div>
         <div className="hud-bottom-center">
           <FloorDock />
+          <SaveDock />
         </div>
         <div className="hud-bottom-right">
           <CameraControls />

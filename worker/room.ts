@@ -24,6 +24,22 @@ const CLOSE_NO_TABLE = 4004
 /** Stay under the 2 MB per-row limit; snapshots carry PNG portraits. */
 const CHUNK = 1_000_000
 
+/** An automatic save point at most this often while the DM is editing. */
+const AUTO_EVERY_MS = 10 * 60 * 1000
+/** How many of each kind of save point to keep; the oldest go first. */
+const KEEP = { auto: 20, restore: 10, named: 50 } as const
+
+export type SaveKind = keyof typeof KEEP
+
+export interface SavePoint {
+  id: number
+  name: string
+  kind: SaveKind
+  createdAt: number
+  /** Characters of JSON, roughly bytes. */
+  size: number
+}
+
 const HOST_SENDS = new Set(['snapshot', 'focus', 'dice'])
 const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel'])
 
@@ -39,7 +55,107 @@ export class TableRoom extends DurableObject<RoomEnv> {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS snapshot (idx INTEGER PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS saves (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS save_chunks (
+        save_id INTEGER NOT NULL,
+        idx INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        PRIMARY KEY (save_id, idx)
+      );
     `)
+  }
+
+  // ---------- Save points ----------
+
+  listSaves(): SavePoint[] {
+    this.ensureTables()
+    return this.ctx.storage.sql
+      .exec<{ id: number; name: string; kind: SaveKind; created_at: number; size: number }>(
+        `SELECT s.id, s.name, s.kind, s.created_at, COALESCE(SUM(LENGTH(c.data)), 0) AS size
+         FROM saves s LEFT JOIN save_chunks c ON c.save_id = s.id
+         GROUP BY s.id ORDER BY s.created_at DESC, s.id DESC`,
+      )
+      .toArray()
+      .map((row) => ({ id: row.id, name: row.name, kind: row.kind, createdAt: row.created_at, size: row.size }))
+  }
+
+  /** A save point of the map as it is now: named by the DM, or a 'restore' safety copy. */
+  createSave(name: string, kind: 'named' | 'restore' = 'named'): SavePoint {
+    this.ensureTables()
+    if (!this.hasSnapshot()) throw new Error('Nothing saved yet — open the campaign first')
+    if (kind === 'named') {
+      const count = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM saves WHERE kind = 'named'").one().n
+      if (count >= KEEP.named) throw new Error(`You can keep up to ${KEEP.named} named save points; delete one first`)
+    }
+    const id = this.ctx.storage.transactionSync(() => this.copyCurrent(name, kind))
+    return this.listSaves().find((save) => save.id === id)!
+  }
+
+  /** Put a save point back as the current map, keeping what it replaces as its own save point. */
+  restoreSave(id: number): void {
+    this.ensureTables()
+    const save = this.ctx.storage.sql.exec<{ name: string }>('SELECT name FROM saves WHERE id = ?', id).toArray()[0]
+    if (!save) throw new Error('Save point not found')
+    this.ctx.storage.transactionSync(() => {
+      if (this.hasSnapshot()) this.copyCurrent(`Before restoring “${save.name}”`, 'restore')
+      this.ctx.storage.sql.exec('DELETE FROM snapshot')
+      this.ctx.storage.sql.exec('INSERT INTO snapshot (idx, data) SELECT idx, data FROM save_chunks WHERE save_id = ?', id)
+    })
+    const snapshot = this.loadSnapshot()
+    if (!snapshot) return
+    // Players just see the map change; the DM's browser adopts it as its own.
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.send(seatOf(ws)?.role === 'host' ? `{"type":"restore","snapshot":${snapshot}}` : snapshot)
+      } catch {
+        // Going away.
+      }
+    }
+  }
+
+  deleteSave(id: number): void {
+    this.ensureTables()
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec('DELETE FROM save_chunks WHERE save_id = ?', id)
+      this.ctx.storage.sql.exec('DELETE FROM saves WHERE id = ?', id)
+    })
+  }
+
+  private hasSnapshot(): boolean {
+    return this.ctx.storage.sql.exec('SELECT 1 FROM snapshot LIMIT 1').toArray().length > 0
+  }
+
+  /** Copy the current snapshot into a new save point (inside a transaction), then prune. */
+  private copyCurrent(name: string, kind: SaveKind): number {
+    const sql = this.ctx.storage.sql
+    sql.exec('INSERT INTO saves (name, kind, created_at) VALUES (?, ?, ?)', name, kind, Date.now())
+    const id = sql.exec<{ id: number }>('SELECT last_insert_rowid() AS id').one().id
+    sql.exec('INSERT INTO save_chunks (save_id, idx, data) SELECT ?, idx, data FROM snapshot', id)
+    if (kind !== 'named') {
+      const stale = sql
+        .exec<{ id: number }>('SELECT id FROM saves WHERE kind = ? ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?', kind, KEEP[kind])
+        .toArray()
+      for (const row of stale) {
+        sql.exec('DELETE FROM save_chunks WHERE save_id = ?', row.id)
+        sql.exec('DELETE FROM saves WHERE id = ?', row.id)
+      }
+    }
+    return id
+  }
+
+  /** Every so often while the DM edits, keep a copy they can go back to. */
+  private maybeAutoSave(): void {
+    const last = this.ctx.storage.sql
+      .exec<{ at: number | null }>("SELECT MAX(created_at) AS at FROM saves WHERE kind = 'auto'")
+      .one().at
+    if (last !== null && Date.now() - last < AUTO_EVERY_MS) return
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ')
+    this.copyCurrent(`Autosave ${stamp} UTC`, 'auto')
   }
 
   /** Called once by the Worker when a DM creates the campaign. */
@@ -101,7 +217,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if (typeof message !== 'string') return
     const seat = seatOf(ws)
     if (!seat) return
-    let parsed: { type?: unknown; clientId?: unknown }
+    let parsed: { type?: unknown; clientId?: unknown; seq?: unknown }
     try {
       parsed = JSON.parse(message)
     } catch {
@@ -112,7 +228,11 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if (!allowed.has(type)) return
     if ('clientId' in parsed && parsed.clientId !== seat.id) return
 
-    if (type === 'snapshot') this.saveSnapshot(message)
+    if (type === 'snapshot') {
+      this.saveSnapshot(message)
+      // Tell the DM this exact version is safe, so the page can say "Saved".
+      if (typeof parsed.seq === 'number') ws.send(JSON.stringify({ type: 'saved', seq: parsed.seq }))
+    }
 
     // The DM speaks to everyone; players speak to the DM, except dice, which
     // everyone sees straight away even while the DM is away.
@@ -178,6 +298,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
         this.ctx.storage.sql.exec('INSERT INTO snapshot (idx, data) VALUES (?, ?)', idx, message.slice(start, end))
         start = end
       }
+      this.maybeAutoSave()
     })
   }
 

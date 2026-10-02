@@ -169,6 +169,9 @@ a:hover {
   position: absolute;
   left: 50%;
   bottom: 24px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
   transform: translateX(-50%);
 }
 
@@ -920,6 +923,145 @@ a:hover {
 .campaign-meta {
   font-size: 11px;
   color: var(--text-faint);
+}
+
+.campaign-row.is-current {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+}
+
+.campaign-tag {
+  padding: 2px 8px;
+  border: 1px solid var(--gold-line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--gold);
+}
+
+/* ---------- Save dock (bottom centre, beside the floors) ---------- */
+
+.save-dock {
+  position: relative;
+}
+
+.save-fab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--floor-tower-height, 56px);
+  padding: 0 16px 0 14px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.save-fab:hover,
+.save-fab.is-open {
+  border-color: rgba(232, 196, 104, 0.45);
+}
+
+.save-fab-copy {
+  display: grid;
+  gap: 1px;
+  max-width: 260px;
+}
+
+.save-fab-state {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.save-fab-state.is-good {
+  color: var(--good);
+}
+
+.save-fab-state.is-warn {
+  color: var(--gold);
+}
+
+.save-fab-name {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--floor-tower-height, 56px) + 16px);
+  z-index: 5;
+  width: 400px;
+  max-height: calc(100vh - 220px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  background: rgba(17, 18, 23, 0.94);
+}
+
+.save-status {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--wash);
+}
+
+.save-status.is-warn {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+}
+
+.save-status-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.save-status.is-busy .status-pip {
+  animation: seat-pulse 1.4s ease-in-out infinite;
+}
+
+.save-status-body {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.save-status-body .panel-note {
+  margin: 0;
+}
+
+.saves-list {
+  max-height: min(280px, 40vh);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-status.is-busy .status-pip {
+    animation: none;
+  }
+}
+
+.save-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
+  background: var(--gold-wash);
+}
+
+.save-confirm .panel-note {
+  margin: 0;
 }
 
 .outline-btn.is-small {
@@ -2999,6 +3141,16 @@ a.dialog-button {
   color: var(--text-dim);
 }
 
+.seat-tokens {
+  display: grid;
+  gap: 6px;
+  max-height: min(320px, 50vh);
+  margin: 0 0 16px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
 .seat-name {
   display: block;
   width: 100%;
@@ -3065,5 +3217,17 @@ a.dialog-button {
 
   .tool-hint {
     display: none;
+  }
+
+  .save-fab {
+    padding: 0 16px;
+  }
+
+  .save-fab-copy {
+    display: none;
+  }
+
+  .save-panel {
+    width: min(400px, calc(100vw - 32px));
   }
 }

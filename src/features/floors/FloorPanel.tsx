@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { FOCUS_INSET } from '../../app/layout.ts'
 import { floorTag, floorsTopDown, GROUND_ORDER } from '../../model/floors.ts'
 import { playersInRoom } from '../../model/players.ts'
@@ -55,6 +55,26 @@ export function FloorDock() {
   )
 }
 
+/**
+ * Publish the collapsed tower's height as --floor-tower-height on the bottom-centre
+ * dock, so neighbours (the save bubble) can match it. It keeps the last value
+ * while the drawer is open.
+ */
+function useShareTowerHeight() {
+  const ref = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    const dock = el?.closest<HTMLElement>('.hud-bottom-center')
+    if (!el || !dock) return
+    const observer = new ResizeObserver(() => {
+      dock.style.setProperty('--floor-tower-height', `${el.offsetHeight}px`)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  return ref
+}
+
 function FloorTower({
   floors,
   activeId,
@@ -67,9 +87,10 @@ function FloorTower({
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
   const viewMode = useEditorStore((state) => state.viewMode)
   const setActiveFloor = useEditorStore((state) => state.setActiveFloor)
+  const tower = useShareTowerHeight()
 
   return (
-    <section className="panel floor-tower" aria-label="Floors">
+    <section ref={tower} className="panel floor-tower" aria-label="Floors">
       <FloorStack floors={floors} activeId={activeId} width={140} height={stackHeight(floors.length, 132)} />
       {floors.length === 0 ? (
         <p className="panel-empty">No revealed rooms</p>

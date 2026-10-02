@@ -9,6 +9,7 @@ import {
   type DdbCharacter,
   type NetMessage,
   type SessionPeer,
+  type SnapshotMessage,
 } from '../net/protocol.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
@@ -19,8 +20,21 @@ import { useEditorStore } from './editorStore.ts'
 export type SessionRole = 'solo' | 'host' | 'guest'
 export type SessionStatus = 'idle' | 'connecting' | 'reconnecting' | 'live' | 'error'
 
+/**
+ * Whether the map in this tab is safe on the server: 'idle' when there's nothing
+ * to save, 'unsaved' for edits made without a campaign open, 'saving' until the
+ * relay confirms, 'offline' when the DM is hosting but disconnected.
+ */
+export type SaveState = 'idle' | 'unsaved' | 'saving' | 'saved' | 'offline'
+
 /** How a joining player wants to sit at the table. */
-export type SeatChoice = { mode: 'ddb' } | { mode: 'native'; name: string }
+/**
+ * `playerId` on a native seat is an existing token the player picked to take back;
+ * `characterId` is that token's D&D Beyond character, whose sheet keeps syncing to it.
+ */
+export type SeatChoice =
+  | { mode: 'ddb' }
+  | { mode: 'native'; name: string; playerId?: string | null; characterId?: string | null }
 
 interface SessionState {
   role: SessionRole
@@ -33,6 +47,10 @@ interface SessionState {
   /** Whether the DM is connected; guests keep the last table while the DM is away. */
   hostOnline: boolean
   peers: SessionPeer[]
+  /** Guests: who holds which token (client id → player id), from the DM's latest snapshot. */
+  claims: Record<string, string | null>
+  /** Guests: the other players connected right now, from the relay. */
+  presentGuests: string[]
   myPlayerId: string | null
   character: DdbCharacter | null
   /** The guest's seat; null until they pick one (or if they only watch). */
@@ -40,6 +58,9 @@ interface SessionState {
   seatPrompt: boolean
   /** The campaign being hosted, for the DM's own display. */
   campaignName: string | null
+  saveState: SaveState
+  /** When the relay last confirmed a save of this campaign. */
+  savedAt: number | null
   /** Open a saved campaign; `restore` loads its saved map instead of sending this tab's. */
   hostCampaign: (campaign: ActiveCampaign, restore: boolean) => void
   /** Save and step away; the campaign stays in the DM's list. */
@@ -57,6 +78,11 @@ interface SessionState {
 }
 
 const clientId = crypto.randomUUID()
+
+/** This tab's id at the table, as it appears in the DM's claims. */
+export function myClientId(): string {
+  return clientId
+}
 
 /** Relay close codes that mean stop retrying (see worker/index.ts). */
 const CLOSE_REPLACED = 4001
@@ -85,6 +111,14 @@ let wired = false
 let awaitingPresence = false
 /** A DM resuming after a reload adopts the relay's saved table once. */
 let restorePending = false
+/** Numbers each DM snapshot so the relay's "saved" reply can be matched to the latest one. */
+let snapshotSeq = 0
+let lastSentSeq = 0
+let snapshotQueued = false
+/** A token picked from the "played here before" list, until the DM confirms or refuses it. */
+let pickPending = false
+/** Close table waits on this for the relay to confirm the final save. */
+let closeWaiter: (() => void) | null = null
 
 /** The campaign this tab is hosting, so a reload picks it back up. */
 function readActive(): ActiveCampaign | null {
@@ -112,7 +146,12 @@ function readSeat(room: string): SavedSeat | null {
     const parsed = raw ? (JSON.parse(raw) as Partial<SavedSeat>) : null
     if (parsed?.mode === 'ddb') return { mode: 'ddb' }
     if (parsed?.mode === 'native') {
-      return { mode: 'native', name: String(parsed.name ?? ''), playerId: parsed.playerId ?? null }
+      return {
+        mode: 'native',
+        name: String(parsed.name ?? ''),
+        playerId: parsed.playerId ?? null,
+        characterId: parsed.characterId ?? null,
+      }
     }
     return null
   } catch {
@@ -120,9 +159,10 @@ function readSeat(room: string): SavedSeat | null {
   }
 }
 
-function writeSeat(room: string, seat: SavedSeat): void {
+function writeSeat(room: string, seat: SavedSeat | null): void {
   try {
-    window.localStorage.setItem(SEAT_KEY + room, JSON.stringify(seat))
+    if (seat) window.localStorage.setItem(SEAT_KEY + room, JSON.stringify(seat))
+    else window.localStorage.removeItem(SEAT_KEY + room)
   } catch {
     // Storage blocked: the player is asked again after a reload.
   }
@@ -151,7 +191,7 @@ function claims(): Record<string, string | null> {
   return you
 }
 
-function snapshotMessage(): NetMessage {
+function snapshotMessage(): SnapshotMessage {
   return {
     type: 'snapshot',
     dungeon: useDungeonStore.getState().dungeon,
@@ -160,10 +200,35 @@ function snapshotMessage(): NetMessage {
   }
 }
 
+function setSaveState(saveState: SaveState): void {
+  if (useSessionStore.getState().saveState !== saveState) useSessionStore.setState({ saveState })
+}
+
+function connected(): boolean {
+  return socket?.readyState === WebSocket.OPEN
+}
+
+/** Send the DM's map to the relay, which saves it and shows it to the players. */
+function sendSnapshot(): void {
+  window.clearTimeout(snapshotTimer)
+  snapshotQueued = false
+  if (useSessionStore.getState().role !== 'host') return
+  if (!connected()) {
+    setSaveState('offline')
+    return
+  }
+  snapshotSeq += 1
+  lastSentSeq = snapshotSeq
+  send({ ...snapshotMessage(), seq: snapshotSeq })
+  setSaveState('saving')
+}
+
 function scheduleSnapshot(): void {
   if (useSessionStore.getState().role !== 'host' || isRemoteApply() || restorePending) return
   window.clearTimeout(snapshotTimer)
-  snapshotTimer = window.setTimeout(() => send(snapshotMessage()), 120)
+  snapshotQueued = true
+  setSaveState(connected() ? 'saving' : 'offline')
+  snapshotTimer = window.setTimeout(sendSnapshot, 120)
 }
 
 function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void {
@@ -176,8 +241,10 @@ function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void
     useDungeonStore.getState().replaceDungeon(message.dungeon)
     useDiceStore.getState().replaceRolls(message.rolls)
     const claimed = message.you?.[clientId]
-    if (claimed) useSessionStore.setState({ myPlayerId: claimed })
+    useSessionStore.setState({ claims: message.you ?? {}, ...(claimed ? { myPlayerId: claimed } : {}) })
+    if (claimed) pickPending = false
   })
+  refusePickIfTaken()
   const { seat, roomId, myPlayerId } = useSessionStore.getState()
   if (seat?.mode === 'native' && roomId && myPlayerId) writeSeat(roomId, { ...seat, playerId: myPlayerId })
   const playerId = useSessionStore.getState().myPlayerId
@@ -189,8 +256,27 @@ function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void
   }
 }
 
+/** The DM said no to a picked token (someone else holds it): forget that seat and ask again. */
+function refusePickIfTaken(): void {
+  const { seat, roomId, claims, presentGuests, myPlayerId } = useSessionStore.getState()
+  if (!pickPending || myPlayerId || seat?.mode !== 'native' || !seat.playerId || !roomId) return
+  const taken = Object.entries(claims).some(
+    ([id, playerId]) => id !== clientId && playerId === seat.playerId && presentGuests.includes(id),
+  )
+  if (!taken) return
+  pickPending = false
+  writeSeat(roomId, null)
+  useSessionStore.setState({ seat: null, seatPrompt: true })
+}
+
 function upsertPeer(peers: SessionPeer[], next: SessionPeer): SessionPeer[] {
   return [...peers.filter((item) => item.id !== next.id), next]
+}
+
+/** Whether this sheet belongs to the D&D Beyond token a returning player took back. */
+function sheetMatchesSeat(character: DdbCharacter | null): character is DdbCharacter {
+  const { seat } = useSessionStore.getState()
+  return Boolean(seat?.mode === 'native' && seat.characterId && character?.characterId === seat.characterId)
 }
 
 function sendSeat(): void {
@@ -198,8 +284,10 @@ function sendSeat(): void {
   if (seat?.mode === 'ddb') send({ type: 'claim', clientId, character })
   if (seat?.mode === 'native') {
     const saved = roomId ? readSeat(roomId) : null
-    const playerId = myPlayerId ?? (saved?.mode === 'native' ? (saved.playerId ?? null) : null)
-    send({ type: 'spawn', clientId, name: seat.name, playerId })
+    const playerId = myPlayerId ?? seat.playerId ?? (saved?.mode === 'native' ? (saved.playerId ?? null) : null)
+    send({ type: 'spawn', clientId, name: seat.name, playerId, pick: pickPending || undefined })
+    // A reclaimed D&D Beyond token: the sheet's latest stats land on the same token.
+    if (sheetMatchesSeat(character)) send({ type: 'claim', clientId, character })
   }
 }
 
@@ -219,6 +307,24 @@ function handleHostMessage(message: NetMessage): void {
     })
     return
   }
+  if (message.type === 'saved') {
+    if (message.seq === lastSentSeq && !snapshotQueued) {
+      useSessionStore.setState({ saveState: 'saved', savedAt: Date.now() })
+      closeWaiter?.()
+    }
+    return
+  }
+  if (message.type === 'restore') {
+    // The DM restored a save point: adopt it, then send it back so player claims stay current.
+    window.clearTimeout(snapshotTimer)
+    snapshotQueued = false
+    applyRemote(() => {
+      useDungeonStore.getState().replaceDungeon(message.snapshot.dungeon)
+      useDiceStore.getState().replaceRolls(message.snapshot.rolls)
+    })
+    sendSnapshot()
+    return
+  }
   if (message.type === 'presence') {
     const live = new Set(message.guests)
     useSessionStore.setState({ hostOnline: true, peers: session.peers.filter((peer) => live.has(peer.id)) })
@@ -228,7 +334,7 @@ function handleHostMessage(message: NetMessage): void {
       restorePending = false
       const character = session.character
       if (character) applyRemote(() => useDungeonStore.getState().claimCharacter(character))
-      send(snapshotMessage())
+      sendSnapshot()
     }
     return
   }
@@ -248,7 +354,7 @@ function handleHostMessage(message: NetMessage): void {
         name: character?.name || 'Player',
       }),
     })
-    send(snapshotMessage())
+    sendSnapshot()
     return
   }
   if (message.type === 'spawn') {
@@ -256,25 +362,30 @@ function handleHostMessage(message: NetMessage): void {
     // A playerId only comes from this browser's saved seat, so another tab of the
     // same player shares the token rather than spawning a twin.
     let playerId: string | null = null
-    applyRemote(() => {
-      playerId = useDungeonStore.getState().spawnPlayer(message.name, message.playerId)
-    })
+    const taken =
+      message.pick && session.peers.some((peer) => peer.id !== id && peer.playerId === message.playerId)
+    // A picked token someone else holds stays theirs; the player is left unseated to choose again.
+    if (!taken) {
+      applyRemote(() => {
+        playerId = useDungeonStore.getState().spawnPlayer(message.name, message.playerId)
+      })
+    }
     useSessionStore.setState({
       peers: upsertPeer(session.peers, { id, playerId, name: message.name.trim() || 'Player' }),
     })
-    send(snapshotMessage())
+    sendSnapshot()
     return
   }
   if (message.type === 'move') {
     applyRemote(() => {
       useDungeonStore.getState().movePlayer(message.playerId, message.floorId, message.x, message.y)
     })
-    send(snapshotMessage())
+    sendSnapshot()
     return
   }
   if (message.type === 'player') {
     applyRemote(() => useDungeonStore.getState().upsertPlayer(message.player))
-    send(snapshotMessage())
+    sendSnapshot()
     return
   }
   if (message.type === 'opening') {
@@ -283,7 +394,7 @@ function handleHostMessage(message: NetMessage): void {
         .getState()
         .toggleConnectedOpenings(message.floorId, message.roomId, message.x, message.y)
     })
-    send(snapshotMessage())
+    sendSnapshot()
     return
   }
   if (message.type === 'dice') {
@@ -293,14 +404,14 @@ function handleHostMessage(message: NetMessage): void {
   }
   if (message.type === 'travel') {
     applyRemote(() => useDungeonStore.getState().setTravel(message.travel))
-    send(snapshotMessage())
+    sendSnapshot()
   }
 }
 
 function handleGuestMessage(message: NetMessage): void {
   if (message.type === 'presence') {
     const wasOnline = useSessionStore.getState().hostOnline
-    useSessionStore.setState({ hostOnline: message.host })
+    useSessionStore.setState({ hostOnline: message.host, presentGuests: message.guests })
     // Introduce ourselves on every (re)connect, and again whenever the DM returns.
     if (message.host && (awaitingPresence || !wasOnline)) greet()
     awaitingPresence = false
@@ -411,13 +522,18 @@ function socketEnded(code: number): void {
         links: [],
         peers: [],
         error: final,
+        saveState: session.saveState === 'saved' ? 'idle' : 'unsaved',
       })
       return
     }
     useSessionStore.setState({ status: 'error', error: final, hostOnline: false })
     return
   }
-  useSessionStore.setState({ status: 'reconnecting', hostOnline: false })
+  useSessionStore.setState({
+    status: 'reconnecting',
+    hostOnline: false,
+    ...(session.role === 'host' ? { saveState: 'offline' as const } : {}),
+  })
   scheduleReconnect()
 }
 
@@ -432,6 +548,8 @@ function hostTable(campaign: ActiveCampaign, restore: boolean): void {
     status: 'connecting',
     roomId: room,
     campaignName: campaign.name,
+    saveState: 'saving',
+    savedAt: null,
     joinId: null,
     error: null,
     hostOnline: true,
@@ -500,20 +618,37 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   error: null,
   hostOnline: false,
   peers: [],
+  claims: {},
+  presentGuests: [],
   myPlayerId: null,
   character: null,
   seat: null,
   seatPrompt: false,
-
   campaignName: null,
+  saveState: 'idle',
+  savedAt: null,
 
   hostCampaign: (campaign, restore) => hostTable(campaign, restore),
 
   closeTable: () => {
     if (get().role !== 'host') return
-    // Flush any pending change so the saved copy matches what the DM sees.
-    if (!restorePending) send(snapshotMessage())
-    get().leave()
+    if (restorePending || get().saveState === 'saved') {
+      get().leave()
+      return
+    }
+    // Flush the latest change and give the relay a moment to confirm it before leaving.
+    sendSnapshot()
+    if (get().saveState !== 'saving') {
+      get().leave()
+      return
+    }
+    const done = (): void => {
+      window.clearTimeout(timer)
+      closeWaiter = null
+      if (get().role === 'host') get().leave()
+    }
+    const timer = window.setTimeout(done, 4000)
+    closeWaiter = done
   },
 
   join: (input) => {
@@ -529,7 +664,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     destroySocket()
     wireSync()
     const saved = readSeat(parsed.room)
-    if (saved?.mode === 'ddb') requestDdbCharacter()
+    if (saved?.mode === 'ddb' || (saved?.mode === 'native' && saved.characterId)) requestDdbCharacter()
     set({
       seat: saved,
       seatPrompt: !saved,
@@ -540,6 +675,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       error: null,
       hostOnline: false,
       peers: [],
+      claims: {},
+      presentGuests: [],
       myPlayerId: null,
       link: null,
       links: [],
@@ -549,10 +686,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   leave: () => {
-    if (get().role === 'host') writeActive(null)
+    const wasHost = get().role === 'host'
+    if (wasHost) writeActive(null)
     restorePending = false
+    closeWaiter = null
     destroySocket()
     set({
+      // A DM leaving before the relay confirmed keeps a "not saved" warning on the map in hand.
+      saveState: wasHost && get().saveState !== 'saved' ? 'unsaved' : 'idle',
       role: 'solo',
       status: 'idle',
       roomId: null,
@@ -580,15 +721,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       send({ type: 'claim', clientId, character })
       if (character) set({ seatPrompt: false })
     }
+    // Other sheets are ignored on a native seat, except the one its token came from.
+    if (session.role === 'guest' && sheetMatchesSeat(character)) send({ type: 'claim', clientId, character })
   },
 
   chooseSeat: (seat) => {
     const session = get()
     if (session.role !== 'guest' || !session.roomId) return
     writeSeat(session.roomId, seat)
-    // Switching seats starts fresh; the host keeps any old token on the map.
-    set({ seat, myPlayerId: null, seatPrompt: seat.mode === 'ddb' && !session.character })
+    pickPending = seat.mode === 'native' && Boolean(seat.playerId)
+    // Switching seats starts fresh; the host keeps any old token on the map. The prompt
+    // stays up while waiting on a D&D Beyond sheet or the DM's answer to a pick.
+    set({
+      seat,
+      myPlayerId: null,
+      seatPrompt: (seat.mode === 'ddb' && !session.character) || pickPending,
+    })
     if (seat.mode === 'ddb' && !session.character) requestDdbCharacter()
+    if (seat.mode === 'native' && seat.characterId) requestDdbCharacter()
     sendSeat()
   },
 
@@ -636,3 +786,14 @@ export function bootSessionFromUrl(): void {
   const active = readActive()
   if (active) hostTable(active, true)
 }
+
+// Edits on a solo table aren't going anywhere: say so, and warn before the tab closes.
+useDungeonStore.subscribe((state, prev) => {
+  if (state.dungeon === prev.dungeon || isRemoteApply()) return
+  if (useSessionStore.getState().role === 'solo') setSaveState('unsaved')
+})
+
+window.addEventListener('beforeunload', (event) => {
+  const { saveState } = useSessionStore.getState()
+  if (saveState === 'unsaved' || saveState === 'saving' || saveState === 'offline') event.preventDefault()
+})

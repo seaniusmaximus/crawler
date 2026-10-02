@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { signInHref, type Campaign } from '../../net/api.ts'
 import { useAccountStore } from '../../state/accountStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
@@ -9,7 +9,6 @@ export function CampaignPanel() {
   const loaded = useAccountStore((state) => state.loaded)
   const available = useAccountStore((state) => state.signInAvailable)
   const user = useAccountStore((state) => state.user)
-  const campaigns = useAccountStore((state) => state.campaigns)
   const busy = useAccountStore((state) => state.busy)
   const error = useAccountStore((state) => state.error)
   const [name, setName] = useState('')
@@ -63,56 +62,110 @@ export function CampaignPanel() {
       </form>
       <p className="panel-note">A new campaign starts from the map you have open.</p>
 
-      {campaigns.length ? (
-        <ul className="campaign-list" aria-label="Your campaigns">
-          {campaigns.map((campaign) => (
-            <CampaignRow key={campaign.id} campaign={campaign} busy={busy} />
-          ))}
-        </ul>
-      ) : null}
+      <CampaignList />
       {error ? <p className="panel-note is-error">{error}</p> : null}
     </>
   )
 }
 
-function CampaignRow({ campaign, busy }: { campaign: Campaign; busy: boolean }) {
-  const [confirming, setConfirming] = useState(false)
+/** The signed-in DM's saved campaigns, newest played first. */
+export function CampaignList({ empty }: { empty?: string }) {
+  const user = useAccountStore((state) => state.user)
+  const campaigns = useAccountStore((state) => state.campaigns)
+
+  // "Played" times move whenever a campaign is hosted; pick that up on open.
+  useEffect(() => {
+    if (useAccountStore.getState().user) void useAccountStore.getState().refreshCampaigns()
+  }, [])
+
+  if (!user) return null
+  if (!campaigns.length) return empty ? <p className="panel-note">{empty}</p> : null
+  return (
+    <ul className="campaign-list" aria-label="Your campaigns">
+      {campaigns.map((campaign) => (
+        <CampaignRow key={campaign.id} campaign={campaign} />
+      ))}
+    </ul>
+  )
+}
+
+function CampaignRow({ campaign }: { campaign: Campaign }) {
+  const busy = useAccountStore((state) => state.busy)
+  const role = useSessionStore((state) => state.role)
+  const roomId = useSessionStore((state) => state.roomId)
+  const saveState = useSessionStore((state) => state.saveState)
+  const [confirming, setConfirming] = useState<'delete' | 'replace' | null>(null)
+
+  const current = role === 'host' && roomId === campaign.id
+  // Switching campaigns mid-save could drop the last change to the open one.
+  const waitForSave = role === 'host' && !current && saveState !== 'saved'
+
+  function resume(): void {
+    if (role === 'solo' && saveState === 'unsaved' && confirming !== 'replace') {
+      setConfirming('replace')
+      return
+    }
+    setConfirming(null)
+    useSessionStore.getState().hostCampaign(campaign, true)
+  }
 
   return (
-    <li className="campaign-row">
+    <li className={`campaign-row${current ? ' is-current' : ''}`}>
       <span className="campaign-copy">
         <span className="campaign-name">{campaign.name}</span>
-        <span className="campaign-meta">Played {ago(campaign.playedAt)}</span>
+        <span className="campaign-meta">
+          {confirming === 'replace'
+            ? "Replace the unsaved map you're working on?"
+            : confirming === 'delete'
+              ? current
+                ? 'Delete it and end this table?'
+                : 'Delete it and all its save points?'
+              : current
+                ? 'Open now'
+                : `Played ${ago(campaign.playedAt)}`}
+        </span>
       </span>
       {confirming ? (
         <>
-          <button type="button" className="text-btn" onClick={() => setConfirming(false)}>
-            Keep
+          <button type="button" className="text-btn" onClick={() => setConfirming(null)}>
+            Cancel
           </button>
-          <button
-            type="button"
-            className="outline-btn is-danger is-small"
-            disabled={busy}
-            onClick={() => void useAccountStore.getState().deleteCampaign(campaign.id)}
-          >
-            Delete
-          </button>
+          {confirming === 'delete' ? (
+            <button
+              type="button"
+              className="outline-btn is-danger is-small"
+              disabled={busy}
+              onClick={() => void useAccountStore.getState().deleteCampaign(campaign.id)}
+            >
+              Delete
+            </button>
+          ) : (
+            <button type="button" className="outline-btn is-danger is-small" onClick={resume}>
+              Replace
+            </button>
+          )}
         </>
       ) : (
         <>
-          <button
-            type="button"
-            className="outline-btn is-small"
-            onClick={() => useSessionStore.getState().hostCampaign(campaign, true)}
-          >
-            Resume
-          </button>
+          {current ? (
+            <span className="campaign-tag">Open</span>
+          ) : (
+            <button
+              type="button"
+              className="outline-btn is-small"
+              disabled={waitForSave}
+              title={waitForSave ? 'Wait until the open campaign says Saved' : undefined}
+              onClick={resume}
+            >
+              Resume
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn"
             aria-label={`Delete ${campaign.name}`}
             title="Delete campaign"
-            onClick={() => setConfirming(true)}
+            onClick={() => setConfirming('delete')}
           >
             <Icon id="close" size={14} />
           </button>
@@ -121,7 +174,6 @@ function CampaignRow({ campaign, busy }: { campaign: Campaign; busy: boolean }) 
     </li>
   )
 }
-
 function ago(time: number): string {
   const minutes = Math.round((Date.now() - time) / 60_000)
   if (minutes < 1) return 'just now'

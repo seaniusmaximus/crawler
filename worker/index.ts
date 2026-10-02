@@ -75,10 +75,12 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     return new Response(null, { status: 405 })
   }
 
-  const match = /^\/api\/campaigns\/([a-z0-9]{4,32})$/.exec(path)
+  const match = /^\/api\/campaigns\/([a-z0-9]{4,32})(\/.*)?$/.exec(path)
   if (match) {
     const id = match[1]
+    const rest = match[2] ?? ''
     if (!(await library.owns(id))) return Response.json({ error: 'Not found' }, { status: 404 })
+    if (rest) return saves(request, env.TABLE.get(env.TABLE.idFromName(id)), rest)
     if (request.method === 'PATCH') {
       await library.rename(id, await nameFrom(request))
       return new Response(null, { status: 204 })
@@ -94,14 +96,47 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   return new Response(null, { status: 404 })
 }
 
-async function nameFrom(request: Request): Promise<string> {
+/** /api/campaigns/:id/saves[/:saveId[/restore]] — the campaign's save points. */
+async function saves(request: Request, room: DurableObjectStub<TableRoom>, rest: string): Promise<Response> {
+  const match = /^\/saves(?:\/(\d+)(\/restore)?)?$/.exec(rest)
+  if (!match) return new Response(null, { status: 404 })
+  const saveId = match[1] ? Number(match[1]) : null
   try {
-    const body = (await request.json()) as { name?: unknown }
-    const name = typeof body.name === 'string' ? body.name.trim().slice(0, MAX_NAME) : ''
-    return name || 'Untitled campaign'
-  } catch {
-    return 'Untitled campaign'
+    if (saveId === null) {
+      if (request.method === 'GET') return Response.json({ saves: await room.listSaves() })
+      if (request.method === 'POST') {
+        const body = await jsonBody(request)
+        const save = await room.createSave(cleanName(body.name, 'Save point'), body.kind === 'restore' ? 'restore' : 'named')
+        return Response.json({ save }, { status: 201 })
+      }
+    } else if (match[2] && request.method === 'POST') {
+      await room.restoreSave(saveId)
+      return new Response(null, { status: 204 })
+    } else if (!match[2] && request.method === 'DELETE') {
+      await room.deleteSave(saveId)
+      return new Response(null, { status: 204 })
+    }
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : 'Failed' }, { status: 400 })
   }
+  return new Response(null, { status: 405 })
+}
+
+async function jsonBody(request: Request): Promise<Record<string, unknown>> {
+  try {
+    const body = await request.json()
+    return body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function cleanName(value: unknown, fallback: string): string {
+  return (typeof value === 'string' ? value.trim().slice(0, MAX_NAME) : '') || fallback
+}
+
+async function nameFrom(request: Request): Promise<string> {
+  return cleanName((await jsonBody(request)).name, 'Untitled campaign')
 }
 
 function campaignId(): string {

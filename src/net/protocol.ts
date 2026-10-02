@@ -19,9 +19,13 @@ export interface SessionPeer {
 export type NetMessage =
   | { type: 'hello'; clientId: string }
   | { type: 'claim'; clientId: string; character: DdbCharacter | null }
-  /** A player without D&D Beyond asks for a token; `playerId` reclaims one they had. */
-  | { type: 'spawn'; clientId: string; name: string; playerId: string | null }
-  | { type: 'snapshot'; dungeon: Dungeon; rolls: DiceRoll[]; you: Record<string, string | null> }
+  /**
+   * A player without D&D Beyond asks for a token; `playerId` reclaims one they had.
+   * `pick` marks a choice from the "played here before" list, which the DM refuses
+   * if someone else at the table already holds that token.
+   */
+  | { type: 'spawn'; clientId: string; name: string; playerId: string | null; pick?: boolean }
+  | SnapshotMessage
   | { type: 'move'; playerId: string; floorId: string; x: number; y: number }
   | { type: 'player'; player: Player }
   | { type: 'opening'; floorId: string; roomId: string; x: number; y: number }
@@ -32,6 +36,19 @@ export type NetMessage =
   | { type: 'presence'; host: boolean; guests: string[] }
   /** Sent by the relay just before it closes a socket for good (see worker/room.ts). */
   | { type: 'kicked'; code: number; reason: string }
+  /** The relay stored the DM's snapshot with this `seq`. */
+  | { type: 'saved'; seq: number }
+  /** A save point was restored: the DM's browser takes this as its map. */
+  | { type: 'restore'; snapshot: SnapshotMessage }
+
+export interface SnapshotMessage {
+  type: 'snapshot'
+  dungeon: Dungeon
+  rolls: DiceRoll[]
+  you: Record<string, string | null>
+  /** Set by the DM so the relay can confirm exactly which version it saved. */
+  seq?: number
+}
 
 export function isNetMessage(value: unknown): value is NetMessage {
   return Boolean(value && typeof value === 'object' && 'type' in value)

@@ -27,6 +27,15 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return (response.status === 204 ? null : await response.json()) as T
 }
 
+export interface SavePoint {
+  id: number
+  name: string
+  /** 'auto' every ~10 minutes of editing, 'restore' before a restore or file open, 'named' by the DM. */
+  kind: 'auto' | 'restore' | 'named'
+  createdAt: number
+  size: number
+}
+
 export async function fetchMe(): Promise<{ user: Account | null; signIn: boolean }> {
   try {
     return await call('/api/me')
@@ -50,6 +59,24 @@ export async function renameCampaign(id: string, name: string): Promise<void> {
 
 export async function deleteCampaign(id: string): Promise<void> {
   await call(`/api/campaigns/${id}`, { method: 'DELETE' })
+}
+
+export async function listSaves(campaignId: string): Promise<SavePoint[]> {
+  return (await call<{ saves: SavePoint[] }>(`/api/campaigns/${campaignId}/saves`)).saves
+}
+
+/** `safety` keeps it as an automatic "before" copy instead of a named save point. */
+export async function createSave(campaignId: string, name: string, safety = false): Promise<SavePoint> {
+  const body = JSON.stringify({ name, kind: safety ? 'restore' : 'named' })
+  return (await call<{ save: SavePoint }>(`/api/campaigns/${campaignId}/saves`, { method: 'POST', body })).save
+}
+
+export async function restoreSave(campaignId: string, saveId: number): Promise<void> {
+  await call(`/api/campaigns/${campaignId}/saves/${saveId}/restore`, { method: 'POST' })
+}
+
+export async function deleteSave(campaignId: string, saveId: number): Promise<void> {
+  await call(`/api/campaigns/${campaignId}/saves/${saveId}`, { method: 'DELETE' })
 }
 
 export async function signOut(): Promise<void> {
