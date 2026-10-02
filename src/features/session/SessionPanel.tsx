@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { characterNameOf } from '../../model/players.ts'
 import type { SessionPeer } from '../../net/protocol.ts'
+import { useAccountStore } from '../../state/accountStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { bootSessionFromUrl, useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
+import { CampaignPanel } from './CampaignPanel.tsx'
 
 /** Wordmark and a one-line read of the table's connection, top-left. */
 export function Brand() {
@@ -17,9 +19,11 @@ export function Brand() {
   )
   const character = useSessionStore((state) => state.character)
   const hostOnline = useSessionStore((state) => state.hostOnline)
+  const campaignName = useSessionStore((state) => state.campaignName)
 
   useEffect(() => {
     bootSessionFromUrl()
+    void useAccountStore.getState().load()
   }, [])
 
   let line: string
@@ -27,7 +31,7 @@ export function Brand() {
   else if (status === 'reconnecting') line = 'Reconnecting…'
   else if (status === 'error') line = 'Connection lost'
   else if (role === 'guest' && !hostOnline) line = 'Waiting for the DM…'
-  else if (role === 'host') line = `Table ${roomId ?? ''} · ${playerCount(peers)} ${playerCount(peers) === 1 ? 'player' : 'players'} joined`
+  else if (role === 'host') line = `${campaignName || `Table ${roomId ?? ''}`} · ${playerCount(peers)} ${playerCount(peers) === 1 ? 'player' : 'players'} joined`
   else if (role === 'guest') {
     const name = me ? characterNameOf(me) : character?.name
     line = name ? `Playing as ${name}${me?.name && me.name !== name ? ` · ${me.name}` : ''}` : 'Connected to the DM'
@@ -62,6 +66,15 @@ export function TableMenu() {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [code, setCode] = useState('')
+
+  // Show why hosting stopped (signed out, campaign deleted) without making the DM go looking.
+  useEffect(
+    () =>
+      useSessionStore.subscribe((state, prev) => {
+        if (state.error && state.error !== prev.error) setOpen(true)
+      }),
+    [],
+  )
 
   async function copy(value = link): Promise<void> {
     if (!value) return
@@ -102,9 +115,8 @@ export function TableMenu() {
 
           {role === 'solo' ? (
             <div className="table-actions">
-              <button type="button" className="roll-btn is-small" onClick={() => useSessionStore.getState().startHost()}>
-                Host table
-              </button>
+              <CampaignPanel />
+              <span className="kicker">Join a table</span>
               <form
                 className="table-join"
                 onSubmit={(event) => {
@@ -176,9 +188,25 @@ export function TableMenu() {
               {role === 'host' ? (
                 <p className="panel-note">Share the LAN link (not localhost) so other computers can reach this table.</p>
               ) : null}
-              <button type="button" className="outline-btn is-danger" onClick={() => useSessionStore.getState().leave()}>
-                {role === 'host' ? 'End table' : 'Leave'}
-              </button>
+              {role === 'host' ? (
+                <>
+                  <button
+                    type="button"
+                    className="outline-btn"
+                    onClick={() => {
+                      useSessionStore.getState().closeTable()
+                      void useAccountStore.getState().refreshCampaigns()
+                    }}
+                  >
+                    Close table
+                  </button>
+                  <p className="panel-note">Closing saves the campaign; resume it any time from this menu.</p>
+                </>
+              ) : (
+                <button type="button" className="outline-btn is-danger" onClick={() => useSessionStore.getState().leave()}>
+                  Leave
+                </button>
+              )}
             </div>
           )}
           {error ? <p className="panel-note is-error">{error}</p> : null}

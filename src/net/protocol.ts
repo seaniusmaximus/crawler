@@ -30,6 +30,8 @@ export type NetMessage =
   | { type: 'focus'; floorId: string; roomId: string }
   /** Sent by the table relay itself whenever someone connects or drops. */
   | { type: 'presence'; host: boolean; guests: string[] }
+  /** Sent by the relay just before it closes a socket for good (see worker/room.ts). */
+  | { type: 'kicked'; code: number; reason: string }
 
 export function isNetMessage(value: unknown): value is NetMessage {
   return Boolean(value && typeof value === 'object' && 'type' in value)

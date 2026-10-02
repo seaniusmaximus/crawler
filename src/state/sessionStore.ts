@@ -6,7 +6,6 @@ import {
   joinIdFromUrl,
   joinLinks,
   parseJoinInput,
-  roomCode,
   type DdbCharacter,
   type NetMessage,
   type SessionPeer,
@@ -39,7 +38,12 @@ interface SessionState {
   /** The guest's seat; null until they pick one (or if they only watch). */
   seat: SeatChoice | null
   seatPrompt: boolean
-  startHost: () => void
+  /** The campaign being hosted, for the DM's own display. */
+  campaignName: string | null
+  /** Open a saved campaign; `restore` loads its saved map instead of sending this tab's. */
+  hostCampaign: (campaign: ActiveCampaign, restore: boolean) => void
+  /** Save and step away; the campaign stays in the DM's list. */
+  closeTable: () => void
   join: (input: string) => void
   leave: () => void
   setCharacter: (character: DdbCharacter | null) => void
@@ -56,18 +60,19 @@ const clientId = crypto.randomUUID()
 
 /** Relay close codes that mean stop retrying (see worker/index.ts). */
 const CLOSE_REPLACED = 4001
+const CLOSE_SIGNED_OUT = 4002
 const CLOSE_NOT_HOST = 4003
 const CLOSE_NO_TABLE = 4004
 
-const HOSTED_KEY = 'crawler.hostedTable'
+const ACTIVE_KEY = 'crawler.activeCampaign'
 const SEAT_KEY = 'crawler.seat.'
 
 /** A guest's seat, remembered per table so a reload doesn't ask again or spawn a twin. */
 type SavedSeat = SeatChoice & { playerId?: string | null }
 
-interface HostedTable {
-  room: string
-  token: string
+export interface ActiveCampaign {
+  id: string
+  name: string
 }
 
 let socket: WebSocket | null = null
@@ -76,29 +81,28 @@ let retryTimer = 0
 let retries = 0
 let lastDiceIds = ''
 let wired = false
-let hosted: HostedTable | null = null
 /** Set until the relay's first presence after each (re)connect. */
 let awaitingPresence = false
 /** A DM resuming after a reload adopts the relay's saved table once. */
 let restorePending = false
 
-function readHosted(): HostedTable | null {
+/** The campaign this tab is hosting, so a reload picks it back up. */
+function readActive(): ActiveCampaign | null {
   try {
-    const raw = window.localStorage.getItem(HOSTED_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Partial<HostedTable>) : null
-    return parsed?.room && parsed.token ? { room: parsed.room, token: parsed.token } : null
+    const raw = window.localStorage.getItem(ACTIVE_KEY)
+    const parsed = raw ? (JSON.parse(raw) as Partial<ActiveCampaign>) : null
+    return parsed?.id ? { id: parsed.id, name: String(parsed.name ?? '') } : null
   } catch {
     return null
   }
 }
 
-function writeHosted(table: HostedTable | null): void {
-  hosted = table
+function writeActive(campaign: ActiveCampaign | null): void {
   try {
-    if (table) window.localStorage.setItem(HOSTED_KEY, JSON.stringify(table))
-    else window.localStorage.removeItem(HOSTED_KEY)
+    if (campaign) window.localStorage.setItem(ACTIVE_KEY, JSON.stringify(campaign))
+    else window.localStorage.removeItem(ACTIVE_KEY)
   } catch {
-    // Storage blocked: the table still works, it just won't survive a reload.
+    // Storage blocked: the campaign is still saved, it just won't reopen on reload.
   }
 }
 
@@ -325,6 +329,12 @@ function onSocketMessage(event: MessageEvent): void {
     }
   }
   if (!isNetMessage(data)) return
+  if (data.type === 'kicked') {
+    const ws = socket
+    socketEnded(data.code)
+    ws?.close()
+    return
+  }
   if (useSessionStore.getState().role === 'host') handleHostMessage(data)
   else handleGuestMessage(data)
 }
@@ -352,9 +362,14 @@ function scheduleReconnect(): void {
   }, delay)
 }
 
-function closeReason(code: number): string | null {
-  if (code === CLOSE_NO_TABLE) return 'No table with that code. Ask the DM for a fresh join link.'
-  if (code === CLOSE_NOT_HOST) return 'That table belongs to another DM. Host a new one.'
+function closeReason(code: number, role: SessionRole): string | null {
+  if (code === CLOSE_NO_TABLE) {
+    return role === 'host'
+      ? 'This campaign no longer exists.'
+      : 'No table with that code. Ask the DM for a fresh join link.'
+  }
+  if (code === CLOSE_SIGNED_OUT) return 'Sign in with Google to host this campaign.'
+  if (code === CLOSE_NOT_HOST) return 'This campaign belongs to a different Google account.'
   if (code === CLOSE_REPLACED) return 'This table was opened in another tab.'
   return null
 }
@@ -362,7 +377,6 @@ function closeReason(code: number): string | null {
 function connect(room: string, role: SessionRole): void {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const params = new URLSearchParams({ room, role, id: clientId })
-  if (role === 'host' && hosted) params.set('token', hosted.token)
   const next = new WebSocket(`${protocol}//${window.location.host}/crawler-sync?${params}`)
   socket = next
   next.addEventListener('message', onSocketMessage)
@@ -373,30 +387,51 @@ function connect(room: string, role: SessionRole): void {
     useSessionStore.setState({ status: 'live', error: null })
   })
   next.addEventListener('close', (event) => {
-    if (socket !== next) return
-    socket = null
-    const session = useSessionStore.getState()
-    if (session.role === 'solo' || session.status === 'idle') return
-    const final = closeReason(event.code)
-    if (final) {
-      if (session.role === 'host' && event.code !== CLOSE_REPLACED) writeHosted(null)
-      useSessionStore.setState({ status: 'error', error: final, hostOnline: false })
-      return
-    }
-    useSessionStore.setState({ status: 'reconnecting', hostOnline: false })
-    scheduleReconnect()
+    if (socket === next) socketEnded(event.code)
   })
 }
 
-function hostTable(table: HostedTable, restore: boolean): void {
+/** The current socket is gone, by close frame or a `kicked` message: give up or retry. */
+function socketEnded(code: number): void {
+  socket = null
+  const session = useSessionStore.getState()
+  if (session.role === 'solo' || session.status === 'idle') return
+  const final = closeReason(code, session.role)
+  if (final) {
+    // Keep the campaign to reopen after signing in; forget one that's gone or not ours.
+    if (session.role === 'host' && (code === CLOSE_NO_TABLE || code === CLOSE_NOT_HOST)) writeActive(null)
+    if (session.role === 'host') {
+      // Back to the solo table with the map still in hand; the menu explains why.
+      useSessionStore.setState({
+        role: 'solo',
+        status: 'idle',
+        roomId: null,
+        campaignName: null,
+        link: null,
+        links: [],
+        peers: [],
+        error: final,
+      })
+      return
+    }
+    useSessionStore.setState({ status: 'error', error: final, hostOnline: false })
+    return
+  }
+  useSessionStore.setState({ status: 'reconnecting', hostOnline: false })
+  scheduleReconnect()
+}
+
+function hostTable(campaign: ActiveCampaign, restore: boolean): void {
   destroySocket()
   wireSync()
-  writeHosted(table)
+  writeActive(campaign)
   restorePending = restore
+  const room = campaign.id
   useSessionStore.setState({
     role: 'host',
     status: 'connecting',
-    roomId: table.room,
+    roomId: room,
+    campaignName: campaign.name,
     joinId: null,
     error: null,
     hostOnline: true,
@@ -406,10 +441,10 @@ function hostTable(table: HostedTable, restore: boolean): void {
     link: null,
   })
   useEditorStore.getState().setViewMode('dm')
-  connect(table.room, 'host')
+  connect(room, 'host')
   void tableOrigins().then((origins) => {
-    if (useSessionStore.getState().roomId !== table.room) return
-    const links = joinLinks(origins, table.room)
+    if (useSessionStore.getState().roomId !== room) return
+    const links = joinLinks(origins, room)
     useSessionStore.setState({
       links,
       link: links.find((item) => !item.includes('localhost')) ?? links[0] ?? null,
@@ -470,7 +505,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   seat: null,
   seatPrompt: false,
 
-  startHost: () => hostTable({ room: roomCode(), token: crypto.randomUUID() }, false),
+  campaignName: null,
+
+  hostCampaign: (campaign, restore) => hostTable(campaign, restore),
+
+  closeTable: () => {
+    if (get().role !== 'host') return
+    // Flush any pending change so the saved copy matches what the DM sees.
+    if (!restorePending) send(snapshotMessage())
+    get().leave()
+  },
 
   join: (input) => {
     const parsed = parseJoinInput(input)
@@ -505,7 +549,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   leave: () => {
-    if (get().role === 'host') writeHosted(null)
+    if (get().role === 'host') writeActive(null)
     restorePending = false
     destroySocket()
     set({
@@ -521,6 +565,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       myPlayerId: null,
       seat: null,
       seatPrompt: false,
+      campaignName: null,
     })
   },
 
@@ -588,6 +633,6 @@ export function bootSessionFromUrl(): void {
     return
   }
   // A DM who reloads mid-session picks the same table back up from the relay.
-  const saved = readHosted()
-  if (saved) hostTable(saved, true)
+  const active = readActive()
+  if (active) hostTable(active, true)
 }

@@ -5,10 +5,18 @@
   "main": "./worker/index.ts",
   "assets": {
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/crawler-sync", "/crawler-sync/*"],
+    "run_worker_first": ["/crawler-sync", "/crawler-sync/*", "/auth/*", "/api/*"],
   },
   "durable_objects": {
-    "bindings": [{ "name": "TABLE", "class_name": "TableRoom" }],
+    "bindings": [
+      { "name": "TABLE", "class_name": "TableRoom" },
+      { "name": "LIBRARY", "class_name": "DmLibrary" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TableRoom"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TableRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["DmLibrary"] },
+  ],
+  // Secrets (wrangler secret put …; locally in .dev.vars):
+  // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET
 }
