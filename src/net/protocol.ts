@@ -26,13 +26,15 @@ export type NetMessage =
   | { type: 'dice'; rolls: DiceRoll[] }
   | { type: 'travel'; travel: TokenTravel | null }
   | { type: 'focus'; floorId: string; roomId: string }
+  /** Sent by the table relay itself whenever someone connects or drops. */
+  | { type: 'presence'; host: boolean; guests: string[] }
 
 export function isNetMessage(value: unknown): value is NetMessage {
   return Boolean(value && typeof value === 'object' && 'type' in value)
 }
 
 export function roomCode(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(4))
+  const bytes = crypto.getRandomValues(new Uint8Array(10))
   return [...bytes].map((byte) => (byte % 36).toString(36)).join('')
 }
 

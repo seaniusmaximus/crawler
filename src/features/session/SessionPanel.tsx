@@ -15,6 +15,7 @@ export function Brand() {
     myPlayerId ? (state.dungeon.players ?? []).find((player) => player.id === myPlayerId) : undefined,
   )
   const character = useSessionStore((state) => state.character)
+  const hostOnline = useSessionStore((state) => state.hostOnline)
 
   useEffect(() => {
     bootSessionFromUrl()
@@ -22,7 +23,9 @@ export function Brand() {
 
   let line: string
   if (status === 'connecting') line = role === 'host' ? 'Opening the table…' : 'Joining the table…'
+  else if (status === 'reconnecting') line = 'Reconnecting…'
   else if (status === 'error') line = 'Connection lost'
+  else if (role === 'guest' && !hostOnline) line = 'Waiting for the DM…'
   else if (role === 'host') line = `Table ${roomId ?? ''} · ${peers.length} ${peers.length === 1 ? 'player' : 'players'} joined`
   else if (role === 'guest') {
     const name = me ? characterNameOf(me) : character?.name
@@ -129,9 +132,13 @@ export function TableMenu() {
               <p className="panel-note">
                 {status === 'connecting'
                   ? 'Connecting…'
-                  : role === 'host'
-                    ? `Hosting · ${peers.length} connected`
-                    : 'Connected to the DM'}
+                  : status === 'reconnecting'
+                    ? 'Reconnecting…'
+                    : status === 'error'
+                      ? 'Disconnected'
+                      : role === 'host'
+                        ? `Hosting · ${peers.length} connected`
+                        : 'Connected to the DM'}
               </p>
               {character ? <p className="panel-note">D&amp;D Beyond: {character.name}</p> : null}
               {roomId ? <code className="field is-code">{roomId}</code> : null}
