@@ -10,7 +10,7 @@ import { useSessionStore } from '../../state/sessionStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Divider, Icon } from '../../ui/Icon.tsx'
 import { rollInitiativeFor } from './tokenRolls.ts'
-import { AbilityGrid, EditableValue, HpAdjust, HpBlock, Passives } from './PlayerStats.tsx'
+import { AbilityGrid, EditableValue, HpAdjust, HpBlock, HpEdit, Passives } from './PlayerStats.tsx'
 import { useStatEditing } from './useStatEditing.ts'
 import { hpTone, placeLabel, tokenPlace } from './tokenInfo.ts'
 
@@ -232,17 +232,22 @@ function StatBlock({ player }: { player: Player }) {
           </div>
           <div className="block-hp">
             <span className="block-label">Hit Points</span>
-            <EditableValue
-              label="Hit points"
-              value={stats.hp}
-              display={`${stats.hp ?? '–'} / ${stats.hpMax ?? '–'}`}
-              editing={editing === 'hp'}
-              editable={editable}
-              className="is-inline"
-              onEdit={() => setEditing('hp')}
-              onCommit={(value) => commit('hp', value)}
-              onCancel={() => setEditing(null)}
-            />
+            {/* Both numbers edit, as on a character sheet: current, then Tab to max. */}
+            {editable && editing === 'hp' ? (
+              <HpEdit player={player} stats={stats} setEditing={setEditing} />
+            ) : (
+              <EditableValue
+                label="Hit points"
+                value={stats.hp}
+                display={`${stats.hp ?? '–'} / ${stats.hpMax ?? '–'}`}
+                editing={false}
+                editable={editable}
+                className="is-inline"
+                onEdit={() => setEditing('hp')}
+                onCommit={() => {}}
+                onCancel={() => setEditing(null)}
+              />
+            )}
             <span className="hp-bar">
               <span className={`hp-fill is-${hpTone(stats.hp, stats.hpMax)}`} style={{ width: `${(ratio ?? 0) * 100}%` }} />
             </span>

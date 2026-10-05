@@ -46,6 +46,8 @@ interface EditorState {
   tool: Tool
   doorStyle: DoorStyle
   stairsDir: StairsDir
+  /** The Stairs tool is set to join rooms on this floor rather than lead to another floor. */
+  stairsBetween: boolean
   activeFloorId: string | null
   selectedRoomId: string | null
   hoverRoomId: string | null
@@ -68,6 +70,7 @@ interface EditorState {
   setTool: (tool: Tool) => void
   setDoorStyle: (style: DoorStyle) => void
   setStairsDir: (dir: StairsDir) => void
+  setStairsBetween: () => void
   setActiveFloor: (floorId: string) => void
   selectRoom: (roomId: string | null) => void
   setHoverRoom: (roomId: string | null) => void
@@ -94,6 +97,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   tool: 'select',
   doorStyle: 'door',
   stairsDir: 'both',
+  stairsBetween: false,
   activeFloorId: null,
   selectedRoomId: null,
   hoverRoomId: null,
@@ -118,9 +122,17 @@ export const useEditorStore = create<EditorState>((set) => ({
       camera: zoomAt(state.camera, state.viewport.width / 2, state.viewport.height / 2, factor),
     })),
   // Resize handles belong to the rooms tool, so leaving it ends resize mode.
-  setTool: (tool) => set({ tool, menu: null, resizeRoomId: null, linkRoomId: null }),
+  // Picking Stairs comes back to whichever kind was last chosen.
+  setTool: (tool) =>
+    set((state) => ({
+      tool: tool === 'stairs' && state.stairsBetween ? 'ramp' : tool,
+      menu: null,
+      resizeRoomId: null,
+      linkRoomId: null,
+    })),
   setDoorStyle: (doorStyle) => set({ doorStyle, tool: 'doors' }),
-  setStairsDir: (stairsDir) => set({ stairsDir, tool: 'stairs' }),
+  setStairsDir: (stairsDir) => set({ stairsDir, stairsBetween: false, tool: 'stairs' }),
+  setStairsBetween: () => set({ stairsBetween: true, tool: 'ramp' }),
   // Selection, hover and resize all point at rooms on the floor being left.
   setActiveFloor: (floorId) =>
     set({

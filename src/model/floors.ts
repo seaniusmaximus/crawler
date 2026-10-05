@@ -38,3 +38,21 @@ export function resolveFloor(floors: readonly Floor[], activeFloorId: string | n
   if (!floor) throw new Error('Dungeon has no floor')
   return floor
 }
+
+/**
+ * Close the gap a deleted floor leaves: floors keep their order in the stack but
+ * number on from the ground floor again (the lowest above-ground floor, or the
+ * top basement when none is left). Floors still wearing a default name take
+ * their new number's name.
+ */
+export function packFloors(floors: readonly Floor[]): Floor[] {
+  const sorted = [...floors].sort((a, b) => a.order - b.order)
+  const below = sorted.filter((floor) => floor.order < GROUND_ORDER).length
+  const ground = below === sorted.length ? below - 1 : below
+  return sorted.map((floor, index) => {
+    const order = GROUND_ORDER + index - ground
+    if (order === floor.order) return floor
+    const name = floor.name === floorName(floor.order) ? floorName(order) : floor.name
+    return { ...floor, order, name }
+  })
+}

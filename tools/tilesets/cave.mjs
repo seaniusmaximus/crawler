@@ -283,6 +283,23 @@ function stakes() {
   return img
 }
 
+/** A step's top: a broad flat shelf of rock. */
+function tread(seed) {
+  return floorTile(seed, { cell: 64, tone: 1.08 })
+}
+
+/** A step's face: the rock's layers. */
+function riser(seed) {
+  return strataFace(seed, { tone: 0.98 })
+}
+
+/** The shaft of a stair going down: deeper, darker strata. */
+function shaft(seed) {
+  const img = strataFace(seed, { tone: 0.64 })
+  grime(img, seed + 7, 0.2)
+  return img
+}
+
 function foundation(seed) {
   const img = newFace()
   stoneField(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, PALETTE.wallRock, PALETTE.wallDark, seed, {
@@ -311,6 +328,7 @@ writeSheet('cave', {
     wallTop(12200 + i * 23, { cell: 36 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
   ),
   stairs: stairs(14400),
+  stairParts: { tread: tread(14410), riser: riser(14420), shaft: shaft(14430) },
   walls: faceFeatures.map((feature, i) => strataFace(15500 + i * 29, { tone: tones[(i + 5) % tones.length], feature })),
   door: doorLeaf(16600),
   shutters: hideShutters(16700),

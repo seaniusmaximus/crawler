@@ -18,6 +18,9 @@ const FALLBACK_FACE: Record<FaceKind, string> = {
   window: '#547a96',
   'window-open': '#2e3036',
   foundation: '#2f3138',
+  tread: '#a39782',
+  riser: '#6e6658',
+  shaft: '#24252b',
 }
 
 type Slot = `top:${TileSprite}` | `face:${FaceKind}`

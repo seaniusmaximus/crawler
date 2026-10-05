@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
+import { rollDice, type RollRequest } from '../src/model/dice.ts'
 import type { DmLibrary } from './library.ts'
 
 export interface RoomEnv {
@@ -55,8 +56,12 @@ export interface SavePoint {
   size: number
 }
 
-const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'switchMap'])
-const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel', 'resync'])
+const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'switchMap', 'roll'])
+const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel', 'resync', 'roll'])
+
+/** Each connection may ask for this many rolls per window; enough for initiative, not for spam. */
+const ROLLS_PER_WINDOW = 20
+const ROLL_WINDOW_MS = 10_000
 
 /**
  * One campaign, kept for as long as its DM wants it. The DM's browser stays
@@ -66,6 +71,8 @@ const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'openi
  */
 export class TableRoom extends DurableObject<RoomEnv> {
   private migrated = false
+  /** Recent roll times per connection, for the rate limit (lost on hibernation, which is fine). */
+  private rollTimes = new Map<WebSocket, number[]>()
 
   /** Created on demand: deleteAll() drops them, and the instance may live on. */
   private ensureTables(): void {
@@ -236,6 +243,29 @@ export class TableRoom extends DurableObject<RoomEnv> {
     }
     const snapshot = this.loadSnapshot()
     ws.send(`{"type":"mapLoad","mapId":${JSON.stringify(mapId)},"snapshot":${snapshot ?? 'null'}}`)
+  }
+
+  /**
+   * Roll for someone at the table and show everyone, the roller included. The
+   * numbers come from here, so no browser can choose its own.
+   */
+  private rollForTable(ws: WebSocket, request: unknown): void {
+    if (!request || typeof request !== 'object') return
+    const now = Date.now()
+    const recent = (this.rollTimes.get(ws) ?? []).filter((at) => now - at < ROLL_WINDOW_MS)
+    if (recent.length >= ROLLS_PER_WINDOW) return
+    recent.push(now)
+    this.rollTimes.set(ws, recent)
+    // rollDice clamps every number and string in the request.
+    const roll = rollDice(request as RollRequest, 'table')
+    const message = JSON.stringify({ type: 'dice', rolls: [roll] })
+    for (const peer of this.ctx.getWebSockets()) {
+      try {
+        peer.send(message)
+      } catch {
+        // Going away.
+      }
+    }
   }
 
   /** Floors, rooms and monsters for the maps list, read from a saved snapshot. */
@@ -447,7 +477,16 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if (typeof message !== 'string') return
     const seat = seatOf(ws)
     if (!seat) return
-    let parsed: { type?: unknown; clientId?: unknown; seq?: unknown; fromHost?: unknown; quiet?: unknown; mapId?: unknown }
+    let parsed: {
+      type?: unknown
+      clientId?: unknown
+      seq?: unknown
+      fromHost?: unknown
+      quiet?: unknown
+      mapId?: unknown
+      request?: unknown
+      rolls?: unknown
+    }
     try {
       parsed = JSON.parse(message)
     } catch {
@@ -458,6 +497,13 @@ export class TableRoom extends DurableObject<RoomEnv> {
     if (!allowed.has(type)) return
     if ('clientId' in parsed && parsed.clientId !== seat.id) return
     if (parsed.fromHost && seat.role !== 'host') return
+
+    if (type === 'roll') {
+      this.rollForTable(ws, parsed.request)
+      return
+    }
+    // Browsers can't hand in their own results: only D&D Beyond rolls (which can't come from here) pass.
+    if (type === 'dice' && !onlyBeyondRolls(parsed.rolls)) return
 
     if (type === 'switchMap') {
       if (typeof parsed.mapId === 'string') this.switchMap(ws, parsed.mapId)
@@ -493,10 +539,12 @@ export class TableRoom extends DurableObject<RoomEnv> {
     } catch {
       // Already closed.
     }
+    this.rollTimes.delete(ws)
     this.broadcastPresence(ws)
   }
 
   webSocketError(ws: WebSocket): void {
+    this.rollTimes.delete(ws)
     this.broadcastPresence(ws)
   }
 
@@ -560,6 +608,16 @@ function kick(ws: WebSocket, code: number, reason: string): void {
   } catch {
     // Already gone.
   }
+}
+
+/** A browser's `dice` message may only carry rolls from D&D Beyond. */
+function onlyBeyondRolls(rolls: unknown): boolean {
+  return (
+    Array.isArray(rolls) &&
+    rolls.length > 0 &&
+    rolls.length <= 20 &&
+    rolls.every((roll) => roll && typeof roll === 'object' && (roll as { source?: unknown }).source === 'ddb')
+  )
 }
 
 function seatOf(ws: WebSocket): Seat | null {

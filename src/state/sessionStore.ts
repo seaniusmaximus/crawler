@@ -17,7 +17,7 @@ import { isMonster } from '../model/players.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
-import { useDiceStore } from './diceStore.ts'
+import { setTableRoller, useDiceStore } from './diceStore.ts'
 import { useDungeonStore } from './dungeonStore.ts'
 import { useEditorStore } from './editorStore.ts'
 import { useTravelStore } from './travelStore.ts'
@@ -609,8 +609,8 @@ function handleHostMessage(message: NetMessage): void {
     return
   }
   if (message.type === 'dice') {
+    // The relay already sent these to everyone.
     applyRemote(() => useDiceStore.getState().ingest(message.rolls))
-    send({ type: 'dice', rolls: message.rolls })
     return
   }
 }
@@ -1094,4 +1094,11 @@ useDungeonStore.subscribe((state, prev) => {
 window.addEventListener('beforeunload', (event) => {
   const { saveState } = useSessionStore.getState()
   if (saveState === 'unsaved' || saveState === 'saving' || saveState === 'offline') event.preventDefault()
+})
+
+// At a table, the relay rolls the dice (see worker/room.ts): no browser picks its own numbers.
+setTableRoller((request) => {
+  if (useSessionStore.getState().role === 'solo' || !connected()) return false
+  send({ type: 'roll', clientId, request })
+  return true
 })

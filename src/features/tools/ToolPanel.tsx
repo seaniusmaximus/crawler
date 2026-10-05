@@ -22,8 +22,7 @@ const TOOLS: readonly ToolDef[] = [
   { id: 'walls', label: 'Walls', shortcut: 'A', hint: 'Drag to add or erase walls' },
   { id: 'doors', label: 'Doors', shortcut: 'D', hint: 'Drag along a wall · Right-click a door to open or close it', options: 'doors' },
   { id: 'windows', label: 'Windows', shortcut: 'W', hint: 'Drag along a wall · Right-click a window to open or close it' },
-  { id: 'stairs', label: 'Stairs', shortcut: 'S', hint: 'Drag to link dungeon floors', options: 'stairs', group: true },
-  { id: 'ramp', label: 'Ramp', shortcut: 'C', hint: 'Drag between rooms to step elevation' },
+  { id: 'stairs', label: 'Stairs', shortcut: 'S', hint: 'Drag inside a room to lead up or down a floor', options: 'stairs', group: true },
   { id: 'link', label: 'Link', shortcut: 'L', hint: 'Click two rooms to link them' },
 ]
 
@@ -32,11 +31,14 @@ const DOOR_STYLES: ReadonlyArray<{ id: DoorStyle; label: string }> = [
   { id: 'open', label: 'Archway' },
 ]
 
-const STAIRS_DIRS: ReadonlyArray<{ id: StairsDir; label: string }> = [
-  { id: 'up', label: 'Up' },
-  { id: 'down', label: 'Down' },
-  { id: 'both', label: 'Both' },
+const STAIRS_DIRS: ReadonlyArray<{ id: StairsDir; label: string; title: string }> = [
+  { id: 'up', label: 'Up', title: 'Stairs up to the next floor' },
+  { id: 'down', label: 'Down', title: 'Stairs down to the floor below' },
+  { id: 'both', label: 'Both', title: 'Stairs to the floors above and below' },
 ]
+
+/** The Stairs tool set to "Between rooms" works as its own tool, with its own hint. */
+const BETWEEN_HINT = 'Drag from one room into a higher or lower one to join them with stairs'
 
 export function ToolPanel() {
   const viewMode = useEditorStore((state) => state.viewMode)
@@ -44,7 +46,10 @@ export function ToolPanel() {
   const setTool = useEditorStore((state) => state.setTool)
 
   if (viewMode === 'player') return null
-  const active = TOOLS.find((item) => item.id === tool)
+  // "Between rooms" is a setting of the Stairs button.
+  const shown = tool === 'ramp' ? 'stairs' : tool
+  const active = TOOLS.find((item) => item.id === shown)
+  const hint = tool === 'ramp' ? BETWEEN_HINT : active?.hint
 
   return (
     <div className="tool-dock">
@@ -55,9 +60,9 @@ export function ToolPanel() {
             <div className="tool-block">
               <button
                 type="button"
-                className={`tool${item.id === tool ? ' is-active' : ''}`}
+                className={`tool${item.id === shown ? ' is-active' : ''}`}
                 onClick={() => setTool(item.id)}
-                aria-pressed={item.id === tool}
+                aria-pressed={item.id === shown}
                 aria-label={`${item.label} (${item.shortcut})`}
                 title={`${item.label} (${item.shortcut}) — ${item.hint}`}
               >
@@ -73,7 +78,7 @@ export function ToolPanel() {
       </div>
       {active ? (
         <p className="tool-hint">
-          <strong>{active.label}</strong> · {active.hint}
+          <strong>{active.label}</strong> · {hint}
         </p>
       ) : null}
     </div>
@@ -126,22 +131,39 @@ function DoorOptions() {
 
 function StairsOptions() {
   const stairsDir = useEditorStore((state) => state.stairsDir)
+  const between = useEditorStore((state) => state.stairsBetween)
   const setStairsDir = useEditorStore((state) => state.setStairsDir)
+  const setStairsBetween = useEditorStore((state) => state.setStairsBetween)
 
   return (
-    <ul className="tool-options" aria-label="Stairs direction">
-      {STAIRS_DIRS.map((option) => (
-        <li key={option.id}>
-          <button
-            type="button"
-            className={`tool-option${option.id === stairsDir ? ' is-active' : ''}`}
-            onClick={() => setStairsDir(option.id)}
-            aria-pressed={option.id === stairsDir}
-          >
-            {option.label}
-          </button>
-        </li>
-      ))}
+    <ul className="tool-options" aria-label="Where the stairs lead">
+      {STAIRS_DIRS.map((option) => {
+        const active = !between && option.id === stairsDir
+        return (
+          <li key={option.id}>
+            <button
+              type="button"
+              className={`tool-option${active ? ' is-active' : ''}`}
+              onClick={() => setStairsDir(option.id)}
+              aria-pressed={active}
+              title={option.title}
+            >
+              {option.label}
+            </button>
+          </li>
+        )
+      })}
+      <li>
+        <button
+          type="button"
+          className={`tool-option${between ? ' is-active' : ''}`}
+          onClick={setStairsBetween}
+          aria-pressed={between}
+          title="Stairs joining rooms of different heights on this floor"
+        >
+          Between rooms
+        </button>
+      </li>
     </ul>
   )
 }

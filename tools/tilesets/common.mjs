@@ -349,20 +349,26 @@ export const newFace = () => createImage(FACE_W, FACE_H)
 /**
  * Lays out and writes `src/tiles/sets/<id>.png`:
  *   rows 0-1  16 floor tops
- *   rows 2-3  12 wall tops, then stairs
+ *   rows 2-3  12 wall tops, then stairs (flat, for ramps), then the 3D stair
+ *             parts: a step's tread (a top), its riser and the shaft wall of a
+ *             stairwell going down (both faces, FACE_H tall, top-aligned)
  *   rows 4-5  16 wall faces (FACE_H tall)
  *   row  6    door, shutters, bars, 4 foundations
  */
-export function writeSheet(id, { floors, wallTops, stairs, walls, door, shutters, open, foundations }) {
+export function writeSheet(id, { floors, wallTops, stairs, stairParts, walls, door, shutters, open, foundations }) {
   const expect = { floors: [floors, 16], wallTops: [wallTops, 12], walls: [walls, 16], foundations: [foundations, 4] }
   for (const [name, [list, count]] of Object.entries(expect)) {
     if (list.length !== count) throw new Error(`${id}: ${name} needs ${count} cells, got ${list.length}`)
+  }
+  const { tread, riser, shaft } = stairParts ?? {}
+  for (const [name, img, w, h] of [['tread', tread, TOP, TOP], ['riser', riser, FACE_W, FACE_H], ['shaft', shaft, FACE_W, FACE_H]]) {
+    if (!img || img.w !== w || img.h !== h) throw new Error(`${id}: stairParts.${name} must be ${w}x${h}`)
   }
   const rows = [
     { y: 0, cells: floors.slice(0, COLS) },
     { y: TOP, cells: floors.slice(COLS) },
     { y: TOP * 2, cells: wallTops.slice(0, COLS) },
-    { y: TOP * 3, cells: [...wallTops.slice(COLS), stairs] },
+    { y: TOP * 3, cells: [...wallTops.slice(COLS), stairs, tread, riser, shaft] },
     { y: TOP * 4, cells: walls.slice(0, COLS) },
     { y: TOP * 4 + FACE_H, cells: walls.slice(COLS) },
     { y: TOP * 4 + FACE_H * 2, cells: [door, shutters, open, ...foundations] },

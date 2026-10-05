@@ -271,6 +271,26 @@ function hotBars() {
   return img
 }
 
+/** A step's top: a cooled basalt slab, only faintly glowing at its seams. */
+function tread(seed) {
+  return floorTile(seed, { cell: 64, tone: 1.05, glow: 0.3, cooled: 0.7 })
+}
+
+/** A step's face: basalt block. */
+function riser(seed) {
+  return brickFace(seed, { tone: 0.92, short: 40, long: 60 })
+}
+
+/** The shaft of a stair going down: dark rock, lit red by the heat below. */
+function shaft(seed) {
+  const img = brickFace(seed, { tone: 0.6 })
+  for (let y = 0; y < FACE_H; y++) {
+    const heatUp = (y / FACE_H) ** 2
+    for (let x = 0; x < FACE_W; x++) blend(img, x, y, PALETTE.lava, 0.32 * heatUp)
+  }
+  return img
+}
+
 function foundation(seed) {
   const img = newFace()
   stoneField(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, PALETTE.obsidian, PALETTE.ember, seed, {
@@ -298,6 +318,7 @@ writeSheet('lava', {
     wallTop(32200 + i * 23, { min: 40 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
   ),
   stairs: stairs(34400),
+  stairParts: { tread: tread(34410), riser: riser(34420), shaft: shaft(34430) },
   walls: faceFeatures.map((feature, i) =>
     brickFace(35500 + i * 29, {
       tone: tones[(i + 5) % tones.length],

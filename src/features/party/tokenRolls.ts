@@ -1,8 +1,7 @@
-import { rollLocal } from '../../model/dice.ts'
 import { characterNameOf } from '../../model/players.ts'
 import { normalizeStats, type AbilityKey } from '../../model/stats.ts'
 import type { Player } from '../../model/types.ts'
-import { useDiceStore } from '../../state/diceStore.ts'
+import { requestRoll } from '../../state/diceStore.ts'
 
 const ABILITY_NAME: Record<AbilityKey, string> = {
   str: 'Strength',
@@ -13,11 +12,12 @@ const ABILITY_NAME: Record<AbilityKey, string> = {
   cha: 'Charisma',
 }
 
-/** Rolls 1d20 + bonus for a token into the shared dice log, which syncs it to the table. */
+/** Rolls 1d20 + bonus for a token into the shared dice log (by the table's relay when connected). */
 function rollD20For(token: Player, bonus: number, title: string, kind: string): void {
-  const roll = rollLocal(1, 20, bonus)
-  useDiceStore.getState().ingest({
-    ...roll,
+  requestRoll({
+    count: 1,
+    faces: 20,
+    modifier: bonus,
     title,
     kind,
     character: characterNameOf(token),

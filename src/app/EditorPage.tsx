@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { MapStage } from '../canvas/MapStage.tsx'
 import { DiceTray } from '../features/dice/DiceTray.tsx'
+import { PhysicalDice } from '../features/dice/PhysicalDice.tsx'
 import { RollToasts } from '../features/dice/RollToasts.tsx'
 import { FloorDock } from '../features/floors/FloorPanel.tsx'
 import { RadialMenu } from '../features/menus/RadialMenu.tsx'
@@ -46,6 +47,7 @@ export function EditorPage() {
     >
       <MapStage />
       <div className="map-vignette" aria-hidden />
+      <PhysicalDice />
       <RollToasts />
 
       <div className="hud">

@@ -12,14 +12,14 @@ import { statusEffect } from '../model/status.ts'
 import type { StatusId } from '../model/status.ts'
 import { sameLink } from '../model/links.ts'
 import { rectContains } from '../model/rect.ts'
-import { edgeDelta, rampOccupancy } from '../model/ramps.ts'
+import { rampFlight, rampOccupancy } from '../model/ramps.ts'
 import type { RampDraft, RampSlice } from '../model/ramps.ts'
-import { cellKey, openingAt, openingIsOpen, spriteAt, stairsAt, stairsBlocks } from '../model/tiles.ts'
+import { cellKey, openingAt, openingIsOpen, spriteAt, stairsAt } from '../model/tiles.ts'
 import { stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import { sharedWalls } from '../model/walls.ts'
 import type { SharedWalls } from '../model/walls.ts'
 import type { FeatureDraft, FeatureTool } from '../model/tools.ts'
-import type { Camera, Cell, CellRect, ElevationRamp, Link, Player, Room, TileSprite } from '../model/types.ts'
+import type { Camera, Cell, CellRect, Edge, ElevationRamp, Link, Player, Room, StairsBlock, TileSprite } from '../model/types.ts'
 import type { ViewMode } from '../model/visibility.ts'
 import type { TileCache } from '../tiles/TileCache.ts'
 import { seedFor, type FaceKind, type Variant } from '../tiles/tileset.ts'
@@ -34,7 +34,6 @@ import {
   lift,
   liftCorners,
   rectCorners,
-  rectPaintDepth,
   roomLift,
   screenCorners,
   screenToCell,
@@ -114,8 +113,6 @@ export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
   const painted: DrawView = { ...view, rooms: shown }
   drawSupports(ctx, painted, top, rampCells)
   drawTiles(ctx, painted, bounds, shared, top, rampCells)
-  drawStairsAll(ctx, painted, top, rampCells)
-  drawRampChevrons(ctx, painted, top, rampCells)
 
   const selected =
     view.viewMode === 'player' ? undefined : painted.rooms.find((room) => room.id === view.selectedRoomId)
@@ -285,23 +282,6 @@ function drawSupports(
       }
     }
   })
-  for (const slice of rampCells.values()) {
-    if (slice.elevation <= slice.prevElev) continue
-    cells.push({
-      x: slice.x,
-      y: slice.y,
-      bottom: slice.prevElev,
-      elevation: slice.elevation,
-      depth: isoDepth(slice.x, slice.y, view.camera.yaw),
-      dim: view.viewMode === 'dm' && occupantRoom(view.rooms, slice.x, slice.y)?.visible === false,
-      hideFace: (nx, ny) => {
-        const other = rampCells.get(cellKey(nx, ny))
-        if (other && other.rampId === slice.rampId && other.slice === slice.slice) return true
-        if (other && other.elevation >= slice.elevation) return true
-        return !other && elevationAt(view.rooms, top, nx, ny) >= slice.elevation
-      },
-    })
-  }
   cells.sort((a, b) => a.depth - b.depth || a.elevation - b.elevation)
   for (const cell of cells) {
     if (cell.dim) ctx.globalAlpha = 0.42
@@ -353,7 +333,9 @@ interface QueuedTile {
   sprite: TileSprite
   bitmap: ImageBitmap
   variant: Variant
-  stairs: boolean
+  stairs: StairsBlock | undefined
+  /** A cell of stairs between rooms. */
+  ramp?: RampSlice
   open: boolean
   dim: boolean
 }
@@ -401,7 +383,7 @@ function drawTiles(
           roomIndex,
           sprite,
           bitmap,
-          stairs: Boolean(stairsAt(room, x, y)),
+          stairs: stairsAt(room, x, y),
           open: openingIsOpen(room, x, y),
           dim: view.viewMode === 'dm' && !room.visible,
         })
@@ -415,12 +397,13 @@ function drawTiles(
         x: slice.x,
         y: slice.y,
         depth: isoDepth(slice.x, slice.y, yaw),
-        elevation: slice.elevation,
+        elevation: slice.prevElev,
         roomIndex: view.rooms.length,
         sprite: 'stairs',
         bitmap: stairsBitmap,
         variant: { x: slice.x, y: slice.y, seed: 0 },
-        stairs: false,
+        stairs: undefined,
+        ramp: slice,
         open: false,
         dim: view.viewMode === 'dm' && occupantRoom(view.rooms, slice.x, slice.y)?.visible === false,
       })
@@ -431,13 +414,17 @@ function drawTiles(
   for (const tile of queue) {
     drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () => {
       if (tile.dim) ctx.globalAlpha = 0.42
-      if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
+      if (tile.ramp) {
+        // Its stone reaches down to the ground, or to a lower neighbour's floor.
+        const bottom = Math.min(tile.ramp.ramp.fromElev, supportBottom(view.rooms, top, tile.x, tile.y, tile.ramp.ramp.fromElev))
+        drawRampStairs(ctx, view, tile.ramp, bottom, tile.variant)
+      } else if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
         drawFloor(ctx, view, tile.x, tile.y, tile.bitmap, tile.elevation)
       } else if (tile.sprite === 'wall') {
         drawWall(ctx, view, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
       } else drawOpening(ctx, view, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant)
-      if (tile.stairs && stairsBitmap) {
-        drawFloor(ctx, view, tile.x, tile.y, stairsBitmap, tile.elevation)
+      if (tile.stairs && tile.sprite === 'floor') {
+        drawStairs(ctx, view, tile.x, tile.y, tile.stairs, tile.elevation, tile.variant)
       }
       ctx.globalAlpha = 1
     })
@@ -487,17 +474,6 @@ function drawingUnderOccluders(
         })
       }
     }
-  }
-  for (const slice of rampCells.values()) {
-    if (slice.elevation <= elevation) continue
-    if (isoDepth(slice.x, slice.y, yaw) <= tileDepth) continue
-    if (Math.abs(slice.x - x) > 8 || Math.abs(slice.y - y) > 8) continue
-    if (slice.elevation <= slice.prevElev) continue
-    const base = screenCorners(cellCorners(slice.x, slice.y, view.camera))
-    solids.push({
-      ground: liftCorners(base, view.camera, roomLift(slice.prevElev)),
-      deck: liftCorners(base, view.camera, roomLift(slice.elevation)),
-    })
   }
   if (solids.length === 0) {
     paint()
@@ -917,111 +893,362 @@ function diamondPath(ctx: CanvasRenderingContext2D, diamond: IsoCorners): void {
   ctx.closePath()
 }
 
-function drawStairsAll(
+/** How far a climbing stair rises over its run: one wall, onto the wall tops. */
+const STAIR_RISE = WALL_HEIGHT
+
+/** Steps per cell of run: three on short flights, two on long ones so the steps keep some height. */
+function stairSteps(length: number): number {
+  return length * (length <= 2 ? 3 : 2)
+}
+
+/** Steps on a flight between rooms: three to a level of height. */
+const STEPS_PER_LEVEL = 3
+
+/** How deep a stair well drops: a wall's height, deeper for long flights. */
+function stairDrop(length: number): number {
+  return WALL_HEIGHT * Math.min(2, Math.max(1, length / 2))
+}
+
+/**
+ * A stair block in its own terms: `a` runs along the flight from its foot, `c`
+ * across it from the side nearer the camera. Stairs to other floors have no set
+ * foot, so they climb or drop away from the viewer and face the camera at every
+ * rotation; stairs between rooms climb toward the higher room, `uphill`.
+ */
+interface StairFrame {
+  length: number
+  width: number
+  /** The flight's foot is the end nearer the camera. */
+  footNear: boolean
+  /** The grid point `a` along and `c` across. */
+  at(a: number, c: number): Point
+  /** A cell's footprint in frame terms. */
+  cell(x: number, y: number): { a0: number; a1: number; c0: number; c1: number }
+}
+
+function stairFrame(rect: CellRect, yaw: Camera['yaw'], uphill?: Edge): StairFrame {
+  const alongX = uphill ? uphill === 'left' || uphill === 'right' : rect.maxX - rect.minX >= rect.maxY - rect.minY
+  const [runMin, runMax, crossMin, crossMax] = alongX
+    ? [rect.minX, rect.maxX + 1, rect.minY, rect.maxY + 1]
+    : [rect.minY, rect.maxY + 1, rect.minX, rect.maxX + 1]
+  const grid = (run: number, cross: number): Point => (alongX ? { x: run, y: cross } : { x: cross, y: run })
+  const depth = (run: number, cross: number) => {
+    const p = grid(run, cross)
+    return isoDepth(p.x, p.y, yaw)
+  }
+  // A larger depth is nearer the camera.
+  const runMid = (runMin + runMax) / 2
+  const crossMid = (crossMin + crossMax) / 2
+  const maxNearer = depth(runMax, crossMid) > depth(runMin, crossMid)
+  const runFromMax = uphill ? uphill === 'left' || uphill === 'top' : maxNearer
+  const crossFromMax = depth(runMid, crossMax) > depth(runMid, crossMin)
+  const toRun = (a: number) => (runFromMax ? runMax - a : runMin + a)
+  const toCross = (c: number) => (crossFromMax ? crossMax - c : crossMin + c)
+  // Each mapping is its own inverse up to the offset.
+  const fromRun = (g: number) => (runFromMax ? runMax - g : g - runMin)
+  const fromCross = (g: number) => (crossFromMax ? crossMax - g : g - crossMin)
+  return {
+    length: runMax - runMin,
+    width: crossMax - crossMin,
+    footNear: runFromMax === maxNearer,
+    at: (a, c) => grid(toRun(a), toCross(c)),
+    cell: (x, y) => {
+      const [r, s] = alongX ? [x, y] : [y, x]
+      const a = [fromRun(r), fromRun(r + 1)]
+      const c = [fromCross(s), fromCross(s + 1)]
+      return { a0: Math.min(a[0], a[1]), a1: Math.max(a[0], a[1]), c0: Math.min(c[0], c[1]), c1: Math.max(c[0], c[1]) }
+    },
+  }
+}
+
+/** What a stair cell draws with: its frame, its footprint, and a pen for points on it. */
+interface StairPen {
+  frame: StairFrame
+  cell: { a0: number; a1: number; c0: number; c1: number }
+  tiles: TileCache
+  variant: Variant
+  /** Screen point `a` along, `c` across, `z` above the flight's foot. */
+  at(a: number, c: number, z: number): Point
+  /** Light on the flight's faces that look toward the camera: along the run, and across it. */
+  runLight: number
+  crossLight: number
+}
+
+function stairPen(view: DrawView, frame: StairFrame, x: number, y: number, elevation: number, variant: Variant): StairPen {
+  const camera = view.camera
+  const base = roomLift(elevation)
+  const at = (a: number, c: number, z: number) => {
+    const g = frame.at(a, c)
+    return lift(cellToScreen(g.x, g.y, camera), camera, base + z)
+  }
+  // A face leaning left on screen takes the left light. The run face that shows
+  // is the foot's when the foot is near, the head's when it is far.
+  const shade = view.tileCache.tileset.shade
+  const footLeft = at(0, 0, 0).x < at(1, 0, 0).x
+  const runLeft = frame.footNear ? footLeft : !footLeft
+  const crossLeft = at(0, 0, 0).x < at(0, 1, 0).x
+  return {
+    frame,
+    cell: frame.cell(x, y),
+    tiles: view.tileCache,
+    variant,
+    at,
+    runLight: runLeft ? shade.left : shade.right,
+    crossLight: crossLeft ? shade.left : shade.right,
+  }
+}
+
+/** A flat piece of a step: `n`→`e` runs across the stair, `n`→`w` toward its nose at `a0` or `a1`. */
+function stairTop(pen: StairPen, a0: number, a1: number, c0: number, c1: number, z: number, nose: 'a0' | 'a1'): IsoCorners {
+  const [back, front] = nose === 'a0' ? [a1, a0] : [a0, a1]
+  return { n: pen.at(back, c0, z), e: pen.at(back, c1, z), s: pen.at(front, c1, z), w: pen.at(front, c0, z) }
+}
+
+/** An upright face across the run at `a`. */
+function stairRunFace(pen: StairPen, a: number, c0: number, c1: number, z0: number, z1: number): WallFace {
+  return { axis: 'h', lo: pen.at(a, c0, z0), hi: pen.at(a, c1, z0), loTop: pen.at(a, c0, z1), hiTop: pen.at(a, c1, z1) }
+}
+
+/** An upright face along the run at `c`. */
+function stairSideFace(pen: StairPen, c: number, a0: number, a1: number, z0: number, z1: number): WallFace {
+  return { axis: 'v', lo: pen.at(a0, c, z0), hi: pen.at(a1, c, z0), loTop: pen.at(a0, c, z1), hiTop: pen.at(a1, c, z1) }
+}
+
+/** Wall art up a face of any height, a wall's height at a time from the bottom, so the stone keeps its scale. */
+function paintColumn(
+  ctx: CanvasRenderingContext2D,
+  art: ImageBitmap | undefined,
+  face: (z0: number, z1: number) => WallFace,
+  z0: number,
+  z1: number,
+  light: number,
+  u: { u0: number; u1: number },
+): void {
+  for (let low = z0; low < z1 - 0.01; low += WALL_HEIGHT) {
+    const high = Math.min(z1, low + WALL_HEIGHT)
+    paintFace(ctx, art, face(low, high), light, { ...u, v0: 1 - (high - low) / WALL_HEIGHT, v1: 1 })
+  }
+}
+
+function strokeEdge(ctx: CanvasRenderingContext2D, from: Point, to: Point, color: string): void {
+  ctx.beginPath()
+  ctx.moveTo(from.x, from.y)
+  ctx.lineTo(to.x, to.y)
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1
+  ctx.stroke()
+}
+
+const STAIR_NOSE = 'rgba(255, 240, 210, 0.22)'
+const STAIR_LIP = 'rgba(0, 0, 0, 0.55)'
+const STAIR_WELL = '#09090c'
+
+/**
+ * Stairs to other floors stand in their cell: going up, a flight of steps
+ * climbing away from the camera to wall-top height; going down, a well cut into
+ * the floor with the steps dropping away inside it; both ways, the well on the
+ * near side and the climb behind it. Treads, risers and the well's walls come
+ * from the tileset.
+ */
+function drawStairs(
   ctx: CanvasRenderingContext2D,
   view: DrawView,
-  top: Map<string, number>,
-  rampCells: Map<string, RampSlice>,
+  x: number,
+  y: number,
+  block: StairsBlock,
+  elevation: number,
+  variant: Variant,
 ): void {
-  const blocks = view.rooms.flatMap((room, roomIndex) =>
-    stairsBlocks(room).map((block) => ({ block, roomIndex, elevation: room.elevation })),
-  )
-  blocks.sort(
-    (a, b) =>
-      rectPaintDepth(a.block.rect, view.camera.yaw) -
-        rectPaintDepth(b.block.rect, view.camera.yaw) ||
-      (a.elevation ?? 0) - (b.elevation ?? 0) ||
-      a.roomIndex - b.roomIndex,
-  )
-  for (const { block, roomIndex, elevation } of blocks) {
-    const cx = Math.round((block.rect.minX + block.rect.maxX) / 2)
-    const cy = Math.round((block.rect.minY + block.rect.maxY) / 2)
-    if (top.get(cellKey(cx, cy)) !== roomIndex) continue
-    if (rampCells.has(cellKey(cx, cy))) continue
-    drawingUnderOccluders(ctx, view, top, rampCells, cx, cy, elevation ?? 0, () => {
-      const mid = lift(
-        cellCenter(
-          (block.rect.minX + block.rect.maxX) / 2,
-          (block.rect.minY + block.rect.maxY) / 2,
-          view.camera,
-        ),
-        view.camera,
-        roomLift(elevation),
-      )
-      const cols = block.rect.maxX - block.rect.minX + 1
-      const rows = block.rect.maxY - block.rect.minY + 1
-      const half = Math.min(cols, rows) * TILE_HEIGHT * view.camera.zoom * 0.22
-      ctx.fillStyle = '#1a1b21'
-      if (block.dir === 'both') {
-        chevron(ctx, mid.x, mid.y - half * 1.1, half, true)
-        chevron(ctx, mid.x, mid.y + half * 1.1, half, false)
-      } else {
-        chevron(ctx, mid.x, mid.y, half * 1.4, block.dir === 'up')
+  const frame = stairFrame(block.rect, view.camera.yaw)
+  const pen = stairPen(view, frame, x, y, elevation, variant)
+  const flight: Flight = { rise: STAIR_RISE, steps: stairSteps(frame.length), bottom: 0, start: 0, length: frame.length }
+  const half = frame.width / 2
+  if (block.dir === 'down') drawStairsDown(ctx, pen, 0, frame.width)
+  else if (block.dir === 'up') drawFlight(ctx, pen, flight, 0, frame.width)
+  else {
+    drawStairsDown(ctx, pen, 0, half)
+    drawFlight(ctx, pen, flight, half, frame.width)
+  }
+}
+
+/**
+ * One cell of the stairs between two rooms: its part of a single flight from
+ * the lower room's floor to the higher room's, in the same steps as stairs to
+ * other floors, standing on solid stone down to the ground beneath.
+ */
+function drawRampStairs(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  slice: RampSlice,
+  bottom: number,
+  variant: Variant,
+): void {
+  const { ramp } = slice
+  const frame = stairFrame(ramp.rect, view.camera.yaw, ramp.up)
+  const pen = stairPen(view, frame, slice.x, slice.y, ramp.fromElev, variant)
+  const levels = ramp.toElev - ramp.fromElev
+  const { start, length } = rampFlight(ramp)
+  const flight: Flight = {
+    rise: roomLift(levels),
+    steps: Math.max(1, Math.round(levels * STEPS_PER_LEVEL)),
+    bottom: roomLift(bottom) - roomLift(ramp.fromElev),
+    start,
+    length,
+  }
+  drawFlight(ctx, pen, flight, 0, frame.width)
+}
+
+/**
+ * A climbing flight: its height and steps, how far below its foot its stone
+ * reaches, and where along the run the steps sit; any run before them is a
+ * landing at the foot's height, any after a landing at the top's.
+ */
+interface Flight {
+  rise: number
+  steps: number
+  bottom: number
+  start: number
+  length: number
+}
+
+/** A step or a landing: `a0`–`a1` along the run, its top at `z`. */
+interface FlightPiece {
+  a0: number
+  a1: number
+  z: number
+  step: number | null
+}
+
+function flightPieces(flight: Flight, runLength: number): FlightPiece[] {
+  const pieces: FlightPiece[] = []
+  if (flight.start > 0) pieces.push({ a0: 0, a1: flight.start, z: 0, step: null })
+  const run = flight.length / flight.steps
+  for (let k = 0; k < flight.steps; k++) {
+    pieces.push({ a0: flight.start + k * run, a1: flight.start + (k + 1) * run, z: ((k + 1) / flight.steps) * flight.rise, step: k })
+  }
+  const end = flight.start + flight.length
+  if (end < runLength) pieces.push({ a0: end, a1: runLength, z: flight.rise, step: null })
+  return pieces
+}
+
+/** This cell's part of a climbing flight across `[s0, s1]`, far pieces first. */
+function drawFlight(ctx: CanvasRenderingContext2D, pen: StairPen, flight: Flight, s0: number, s1: number): void {
+  const { frame, cell, tiles, variant } = pen
+  const c0 = Math.max(cell.c0, s0)
+  const c1 = Math.min(cell.c1, s1)
+  if (c1 <= c0) return
+  const { bottom } = flight
+  const tread = tiles.face('tread', variant, 0)
+  const riser = tiles.face('riser', variant, 0)
+  const wall = tiles.face('wall', variant, 0)
+  const floor = tiles.top('floor', variant)
+  // Treads and risers span the whole flight, so a runner or a slab crosses it once.
+  const u = { u0: (c0 - s0) / (s1 - s0), u1: (c1 - s0) / (s1 - s0) }
+  const pieces = flightPieces(flight, frame.length)
+  const order = pieces.map((_, i) => i)
+  if (frame.footNear) order.reverse()
+  for (const i of order) {
+    const piece = pieces[i]
+    const a0 = Math.max(piece.a0, cell.a0)
+    const a1 = Math.min(piece.a1, cell.a1)
+    if (a1 <= a0) continue
+    const { z } = piece
+    const along = { u0: a0 - cell.a0, u1: a1 - cell.a0 }
+    // The flight's open side, faced like the walls; inner cuts are covered by the next cell's piece.
+    if (c0 === s0 && z > bottom) {
+      paintColumn(ctx, wall, (low, high) => stairSideFace(pen, c0, a0, a1, low, high), bottom, z, pen.crossLight, along)
+    }
+    if (frame.footNear && a0 === piece.a0) {
+      // Under the foot, the stone the flight stands on.
+      if (i === 0 && bottom < 0) {
+        paintColumn(ctx, wall, (low, high) => stairRunFace(pen, a0, c0, c1, low, high), bottom, 0, pen.runLight, u)
       }
-    })
+      // Only a riser's own height shows; nearer pieces hide the rest of the column.
+      const under = i > 0 ? pieces[i - 1].z : 0
+      if (piece.step !== null && z > under) {
+        const band = Math.min(1, (z - under) / WALL_HEIGHT)
+        const v0 = ((piece.step * 0.37) % 1) * (1 - band)
+        paintFace(ctx, riser, stairRunFace(pen, a0, c0, c1, under, z), pen.runLight, { ...u, v0, v1: v0 + band })
+      }
+    }
+    // Climbing toward the camera, the risers face away; only the head's end shows, as stone.
+    if (!frame.footNear && a1 === frame.length && z > bottom) {
+      paintColumn(ctx, wall, (low, high) => stairRunFace(pen, a1, c0, c1, low, high), bottom, z, pen.runLight, u)
+    }
+    const top = stairTop(pen, a0, a1, c0, c1, z, 'a0')
+    if (piece.step === null && floor) {
+      mapBitmap(ctx, floor, top, { u0: c0 - cell.c0, u1: c1 - cell.c0, v0: 1 - (a1 - cell.a0), v1: 1 - (a0 - cell.a0) })
+    } else if (piece.step !== null && tread) {
+      const depth = piece.a1 - piece.a0
+      mapBitmap(ctx, tread, top, { ...u, v0: 1 - (a1 - piece.a0) / depth, v1: 1 - (a0 - piece.a0) / depth })
+    } else {
+      ctx.beginPath()
+      diamondPath(ctx, top)
+      ctx.fillStyle = '#a39782'
+      ctx.fill()
+    }
+    if (piece.step !== null && a0 === piece.a0) strokeEdge(ctx, pen.at(a0, c0, z), pen.at(a0, c1, z), STAIR_NOSE)
   }
 }
 
-function chevron(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  half: number,
-  up: boolean,
-): void {
-  const tip = up ? cy - half * 0.7 : cy + half * 0.7
-  const base = up ? cy + half * 0.7 : cy - half * 0.7
-  ctx.beginPath()
-  ctx.moveTo(cx - half, base)
-  ctx.lineTo(cx, tip)
-  ctx.lineTo(cx + half, base)
-  ctx.closePath()
-  ctx.fill()
-}
+/**
+ * This cell's opening onto a well across `[s0, s1]`. Through it shows whatever
+ * of the well lies below: the far walls and the steps going down, darker as they go.
+ */
+function drawStairsDown(ctx: CanvasRenderingContext2D, pen: StairPen, s0: number, s1: number): void {
+  const { frame, cell, tiles, variant } = pen
+  const c0 = Math.max(cell.c0, s0)
+  const c1 = Math.min(cell.c1, s1)
+  if (c1 <= c0) return
+  const drop = stairDrop(frame.length)
+  const steps = stairSteps(frame.length)
+  const run = frame.length / steps
+  const shaft = tiles.face('shaft', variant, 0)
+  const tread = tiles.face('tread', variant, 0)
 
-function chevronToward(ctx: CanvasRenderingContext2D, from: Point, to: Point, half: number): void {
-  const dx = to.x - from.x
-  const dy = to.y - from.y
-  const len = Math.hypot(dx, dy)
-  if (len < 0.001) return
-  const ux = dx / len
-  const uy = dy / len
-  const px = -uy
-  const py = ux
-  const tip = { x: from.x + ux * half * 0.7, y: from.y + uy * half * 0.7 }
-  const base = { x: from.x - ux * half * 0.45, y: from.y - uy * half * 0.45 }
+  const opening = stairTop(pen, cell.a0, cell.a1, c0, c1, 0, 'a0')
+  ctx.save()
   ctx.beginPath()
-  ctx.moveTo(base.x + px * half, base.y + py * half)
-  ctx.lineTo(tip.x, tip.y)
-  ctx.lineTo(base.x - px * half, base.y - py * half)
-  ctx.closePath()
+  diamondPath(ctx, opening)
+  ctx.clip()
+  ctx.fillStyle = STAIR_WELL
   ctx.fill()
-}
 
-function drawRampChevrons(
-  ctx: CanvasRenderingContext2D,
-  view: DrawView,
-  top: Map<string, number>,
-  rampCells: Map<string, RampSlice>,
-): void {
-  const half = TILE_HEIGHT * view.camera.zoom * 0.28
-  ctx.fillStyle = '#1a1b21'
-  for (const slice of rampCells.values()) {
-    drawingUnderOccluders(ctx, view, top, rampCells, slice.x, slice.y, slice.elevation, () => {
-      const from = lift(
-        cellCenter(slice.x, slice.y, view.camera),
-        view.camera,
-        roomLift(slice.elevation),
-      )
-      const step = edgeDelta(slice.up)
-      const to = lift(
-        cellCenter(slice.x + step.dx, slice.y + step.dy, view.camera),
-        view.camera,
-        roomLift(slice.elevation + Math.max(0, slice.elevation - slice.prevElev)),
-      )
-      chevronToward(ctx, from, to, half)
-    })
+  // The well's far walls, in wall-height bands so the art keeps its scale.
+  const bands: [number, number][] = []
+  for (let top = 0; top > -drop; top -= WALL_HEIGHT) bands.push([Math.max(-drop, top - WALL_HEIGHT), top])
+  for (const [zLow, zHigh] of bands) {
+    const v = { v0: -zHigh / WALL_HEIGHT - Math.floor(-zHigh / WALL_HEIGHT), v1: 0 }
+    v.v1 = v.v0 + (zHigh - zLow) / WALL_HEIGHT
+    for (let j = Math.floor(s0); j < s1; j++) {
+      const w0 = Math.max(s0, j)
+      const w1 = Math.min(s1, j + 1)
+      const end = stairRunFace(pen, frame.length, w0, w1, zLow, zHigh)
+      paintFace(ctx, shaft, end, pen.runLight * 0.8, { u0: w0 - j, u1: w1 - j, ...v })
+    }
+    for (let j = 0; j < frame.length; j++) {
+      paintFace(ctx, shaft, stairSideFace(pen, s1, j, j + 1, zLow, zHigh), pen.crossLight * 0.8, { u0: 0, u1: 1, ...v })
+    }
   }
+
+  // The steps, farthest and deepest first, so each higher one laps the next.
+  for (let k = steps - 1; k >= 0; k--) {
+    const a0 = k * run
+    const a1 = a0 + run
+    const z = -((k + 1) / steps) * drop
+    const top = stairTop(pen, a0, a1, s0, s1, z, 'a1')
+    if (tread) mapBitmap(ctx, tread, top, { u0: 0, u1: 1, v0: Math.max(0, 1 - run), v1: 1 })
+    ctx.beginPath()
+    diamondPath(ctx, top)
+    ctx.fillStyle = `rgba(0, 0, 0, ${(0.18 + 0.55 * ((k + 1) / steps)).toFixed(3)})`
+    ctx.fill()
+    strokeEdge(ctx, pen.at(a1, s0, z), pen.at(a1, s1, z), STAIR_NOSE)
+  }
+  ctx.restore()
+
+  // The floor's lip on the near edges of the well.
+  if (cell.a0 === 0) strokeEdge(ctx, pen.at(0, c0, 0), pen.at(0, c1, 0), STAIR_LIP)
+  if (c0 === s0) strokeEdge(ctx, pen.at(cell.a0, c0, 0), pen.at(cell.a1, c0, 0), STAIR_LIP)
 }
 
 function drawRampPreview(ctx: CanvasRenderingContext2D, view: DrawView, draft: RampDraft): void {
@@ -1041,10 +1268,10 @@ function drawRampPreview(ctx: CanvasRenderingContext2D, view: DrawView, draft: R
 
   const east = screenCorners(diamond).e
   const label = draft.erase
-    ? 'Erase ramp'
+    ? 'Erase stairs'
     : ramp
-      ? `${ramp.fromElev} → ${ramp.toElev}`
-      : 'Ramp'
+      ? `Stairs ${ramp.fromElev} → ${ramp.toElev}`
+      : 'Stairs'
   drawChip(ctx, label, east.x + 6, east.y, color)
 }
 
@@ -1072,6 +1299,8 @@ function drawOnePath(
   const first = points[0]
   if (!first) return
   ctx.save()
+  // A token hidden from players (shown faded to the DM) gets a faded path to match.
+  if (flyer && !flyer.visible) ctx.globalAlpha = 0.42
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
   ctx.shadowColor = 'rgba(0, 0, 0, 0.72)'

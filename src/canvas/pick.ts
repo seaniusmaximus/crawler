@@ -62,8 +62,8 @@ export function groundCell(sx: number, sy: number, camera: Camera): Point {
 }
 
 /**
- * Floor cell under the pointer, using each tile's own elevation so ramp treads
- * pick at their step height instead of a neighbouring room's deck.
+ * Floor cell under the pointer, using each tile's own elevation so stairs
+ * between rooms pick at their steps' height instead of a neighbouring room's deck.
  */
 export function pickFloorCell(
   rooms: readonly Room[],
@@ -75,12 +75,12 @@ export function pickFloorCell(
   const occupancy = rampOccupancy(ramps, rooms)
   const elevations = new Set<number>()
   for (const room of rooms) elevations.add(room.elevation ?? 0)
-  for (const slice of occupancy.values()) elevations.add(slice.elevation)
+  for (const slice of occupancy.values()) elevations.add(slice.stand)
 
   let best: { x: number; y: number; depth: number; elevation: number } | undefined
   for (const elevation of elevations) {
     const cell = screenToCellAt(sx, sy, camera, elevation)
-    const actual = occupancy.get(cellKey(cell.x, cell.y))?.elevation ?? occupantRoom(rooms, cell.x, cell.y)?.elevation ?? 0
+    const actual = occupancy.get(cellKey(cell.x, cell.y))?.stand ?? occupantRoom(rooms, cell.x, cell.y)?.elevation ?? 0
     if (actual !== elevation) continue
     if (!isStandable(rooms, cell.x, cell.y, ramps)) continue
     const depth = isoDepth(cell.x, cell.y, camera.yaw)
@@ -190,7 +190,7 @@ export function cellElevation(
   y: number,
 ): number {
   const slice = rampOccupancy(ramps, rooms).get(cellKey(x, y))
-  if (slice) return slice.elevation
+  if (slice) return slice.stand
   return occupantRoom(rooms, x, y)?.elevation ?? 0
 }
 

@@ -33,6 +33,10 @@ export function standardTileset(id: string, name: string, sheet: string, shade: 
       window: [windowShutters!],
       'window-open': [windowBars!],
       foundation: cells(FACES_Y + FACE_H * 2, FACE_W, FACE_H, 4, 3),
+      // The 3D stair parts sit after the flat stairs: a square tread, then two faces top-aligned in their cells.
+      tread: cells(TOP * 3, TOP, TOP, 1, 5),
+      riser: [{ x: TOP * 6, y: TOP * 3, w: FACE_W, h: FACE_H }],
+      shaft: [{ x: TOP * 7, y: TOP * 3, w: FACE_W, h: FACE_H }],
     },
     shade,
   }

@@ -111,6 +111,34 @@ export function HpAdjust({ player, stats }: { player: Player; stats: CharacterSt
   )
 }
 
+/**
+ * Current and max hit points as two inputs, for characters and monsters alike.
+ * Current saves without closing, so Tab moves on to max; max closes the editor.
+ */
+export function HpEdit({ player, stats, setEditing }: { player: Player; stats: CharacterStats; setEditing: (key: Editing) => void }) {
+  return (
+    <span className="hp-edit">
+      <StatInput
+        label="HP"
+        value={stats.hp}
+        onCommit={(value) => useDungeonStore.getState().setPlayerStat(player.id, 'hp', value)}
+        onCancel={() => setEditing(null)}
+      />
+      <span aria-hidden="true">/</span>
+      <StatInput
+        label="Max HP"
+        value={stats.hpMax}
+        autoFocus={false}
+        onCommit={(value) => {
+          useDungeonStore.getState().setPlayerStat(player.id, 'hpMax', value)
+          setEditing(null)
+        }}
+        onCancel={() => setEditing(null)}
+      />
+    </span>
+  )
+}
+
 /** Hit points as a readout and bar; the numbers themselves are click-to-edit. */
 export function HpBlock({
   player,
@@ -137,25 +165,7 @@ export function HpBlock({
           Hit points
         </span>
         {editable && editing === 'hp' ? (
-          <span className="hp-edit">
-            <StatInput
-              label="HP"
-              value={stats.hp}
-              onCommit={(value) => useDungeonStore.getState().setPlayerStat(player.id, 'hp', value)}
-              onCancel={() => setEditing(null)}
-            />
-            <span aria-hidden="true">/</span>
-            <StatInput
-              label="Max HP"
-              value={stats.hpMax}
-              autoFocus={false}
-              onCommit={(value) => {
-                useDungeonStore.getState().setPlayerStat(player.id, 'hpMax', value)
-                setEditing(null)
-              }}
-              onCancel={() => setEditing(null)}
-            />
-          </span>
+          <HpEdit player={player} stats={stats} setEditing={setEditing} />
         ) : (
           <button
             type="button"

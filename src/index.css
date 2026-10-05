@@ -634,6 +634,12 @@ a:hover {
   font-weight: 500;
 }
 
+.name-input.is-floor {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .stat-input {
   width: 52px;
   height: 26px;
@@ -698,7 +704,7 @@ a:hover {
   width: auto;
   height: 100%;
   /* The tile's mass sits above its falling rubble; lift it to line up with the text. */
-  transform: translateY(-3px);
+  transform: translateY(-10px);
 }
 
 /* The Dice Bridge icon (it carries its own tile), beside links to the extension. */
@@ -2230,10 +2236,21 @@ a:hover {
   stroke-width: 1;
 }
 
+/* Three floors show (34px rows, 3px apart); more scroll, so the collapsed tray stays short. */
 .floor-tower-list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 3px;
+  max-height: calc(3 * 34px + 2 * 3px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+.floor-tower-list > * {
+  flex: none;
 }
 
 .floor-pick {
@@ -2318,10 +2335,109 @@ a:hover {
 
 .floor-tower-tools {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 4px;
   padding-left: 8px;
   border-left: 1px solid var(--line);
+}
+
+/* Add and delete floor (DM): a column in the tower, a row in the drawer's head. */
+.floor-edit {
+  position: relative;
+  display: flex;
+  gap: 4px;
+}
+
+.floor-edit.is-column {
+  flex-direction: column;
+}
+
+.floor-edit .icon-btn:disabled {
+  opacity: 0.35;
+  background: transparent;
+  cursor: default;
+}
+
+.floor-drawer-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.floor-popover {
+  position: absolute;
+  z-index: 20;
+  right: -6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 240px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: rgba(17, 18, 23, 0.97);
+  box-shadow: var(--shadow);
+}
+
+/* The tower sits on the bottom edge, so its card opens upward; the drawer's opens down. */
+.floor-edit.is-column .floor-popover {
+  bottom: calc(100% + 18px);
+}
+
+.floor-edit.is-row .floor-popover {
+  top: calc(100% + 8px);
+}
+
+.floor-popover-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.floor-popover-option:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.floor-popover-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 4px 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.floor-popover-copy span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.floor-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.floor-pick.is-renaming .name-input {
+  width: 150px;
+}
+
+.floor-row.is-renaming {
+  cursor: default;
+}
+
+.floor-row.is-renaming .name-input {
+  flex: 1;
 }
 
 .floor-drawer {
@@ -2850,6 +2966,126 @@ a:hover {
   color: var(--low);
 }
 
+/*
+ * Rolls read die by die. d20s: each result on its own ("19  25"), each 20 in gold
+ * and each 1 in red. Other dice: "2 + 5 + 6" in small type beside the total. Both
+ * wrap within a set width, so many dice never push past the row or the toast. A
+ * dropped die is struck through.
+ */
+.roll-split {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 2px 12px;
+  max-width: 190px;
+  line-height: 1.1;
+}
+
+.roll-each.is-crit {
+  color: var(--gold);
+}
+
+.roll-each.is-fumble {
+  color: var(--low);
+}
+
+.roll-each.is-dropped {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.roll-more {
+  font-size: 0.7em;
+  color: var(--text-faint);
+}
+
+/* The total sits level with the middle of the dice beside it, however many lines they take. */
+.roll-sum {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.roll-parts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 150px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--text-dim);
+  text-shadow: none;
+}
+
+.roll-parts .roll-each + .roll-each::before {
+  content: '+';
+  margin: 0 4px;
+  color: var(--text-faint);
+}
+
+/* The newest roll is big; a row of d20 results steps down a size so it fits. */
+.dice-log-item:first-child .roll-total.roll-split {
+  font-size: 24px;
+}
+
+.dice-log-item:first-child .roll-parts {
+  font-size: 13px;
+}
+
+.dice-fab-total.roll-split {
+  flex-wrap: nowrap;
+  max-width: none;
+  gap: 8px;
+}
+
+/* In a toast: wrap inside the bubble, results reading from the left. */
+.roll-toast-total.roll-split {
+  justify-content: flex-start;
+  max-width: 132px;
+  font-size: 18px;
+  white-space: normal;
+}
+
+.roll-toast-total.roll-sum {
+  white-space: normal;
+}
+
+.roll-toast-total .roll-parts {
+  max-width: 112px;
+  font-size: 11px;
+}
+
+/* ---------- Dice thrown on the table (a WebGL canvas, see features/dice/three) ---------- */
+
+.dice-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.dice-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.dice-physical {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.dice-physical input {
+  accent-color: var(--gold);
+}
+
 /* ---------- Roll toasts over tokens ---------- */
 
 .roll-toasts {
@@ -2866,7 +3102,8 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 260px;
+  /* Room for a name beside a wrapped row of results. */
+  max-width: 340px;
   padding: 6px 12px 6px 8px;
   border: 1px solid var(--gold-line);
   border-radius: 12px;

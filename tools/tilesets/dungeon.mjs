@@ -103,6 +103,23 @@ function stairs(seed) {
   )
 }
 
+/** A step's top: one long worn slab, a touch lighter than the floor around it. */
+function tread(seed) {
+  const img = newTop()
+  const base = tint(PALETTE.floor, 1.1)
+  stoneField(img, { x: 0, y: 0, w: TOP, h: TOP }, base, tint(base, 0.78), seed, {
+    min: 120,
+    gap: 2,
+    grain: 0.08,
+    light: 1.06,
+    dark: 0.9,
+    crack: 0.1,
+    corner: 2,
+  })
+  grime(img, seed + 3, 0.08)
+  return img
+}
+
 // ---------- Faces ----------
 
 function brickFace(seed, { tone = 1, short = 30, long = 46, feature = null } = {}) {
@@ -164,6 +181,18 @@ function windowBars() {
   return img
 }
 
+/** A step's face: one course of dressed stone. */
+function riser(seed) {
+  return brickFace(seed, { tone: 0.96, short: 40, long: 60 })
+}
+
+/** The shaft of a stair going down: older brick, damp and darker. */
+function shaft(seed) {
+  const img = brickFace(seed, { tone: 0.68, feature: 'moss' })
+  grime(img, seed + 7, 0.2)
+  return img
+}
+
 function foundation(seed) {
   const img = newFace()
   stoneField(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, PALETTE.rubble, PALETTE.mortar, seed, {
@@ -191,6 +220,7 @@ writeSheet('dungeon', {
     wallTop(2200 + i * 23, { min: 40 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
   ),
   stairs: stairs(4400),
+  stairParts: { tread: tread(4410), riser: riser(4420), shaft: shaft(4430) },
   walls: faceFeatures.map((feature, i) =>
     brickFace(5500 + i * 29, {
       tone: tones[(i + 5) % tones.length],

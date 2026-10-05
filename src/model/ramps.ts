@@ -7,14 +7,25 @@ export interface RampDraft {
   ramp: Omit<ElevationRamp, 'id'> | null
 }
 
+/**
+ * One cell of the stairs between rooms (see `rampFlight`): its steps run from
+ * `prevElev` at its downhill edge to `elevation` at its uphill one, in
+ * fractions of a level; a landing cell is flat.
+ */
 export interface RampSlice {
   x: number
   y: number
+  /** Height at the cell's uphill edge. */
   elevation: number
+  /** Height at the cell's downhill edge. */
   prevElev: number
+  /** Where a token on this cell stands: halfway up its steps. */
+  stand: number
   slice: number
   rampId: string
   up: Edge
+  /** The flight this cell belongs to, with its ends resolved to the rooms they meet. */
+  ramp: ElevationRamp
 }
 
 export function edgeDelta(edge: Edge): { dx: number; dy: number } {
@@ -56,9 +67,9 @@ export function rampAt(
 }
 
 /**
- * Drag from one room toward another. Length is at least the elevation gap so
- * each jump gets a tread; a longer drag stretches the same rise into a gentler
- * run. Width follows the cross-axis of the drag.
+ * Drag from one room toward another. Length is at least the elevation gap; a
+ * longer drag adds landings either side of the steps (see `rampFlight`). Width
+ * follows the cross-axis of the drag.
  */
 export function rampFromDrag(
   start: Cell,
@@ -133,9 +144,26 @@ function sliceIndex(ramp: Pick<ElevationRamp, 'rect' | 'up'>, x: number, y: numb
   }
 }
 
-function sliceElevation(fromElev: number, toElev: number, slice: number, length: number): number {
-  if (length <= 0) return toElev
-  return fromElev + Math.round(((slice + 1) / length) * (toElev - fromElev))
+/** Cells of run a flight takes for each level it climbs: a stair's pitch, not a slope. */
+export const CELLS_PER_LEVEL = 2
+
+/**
+ * Where the steps sit along a run between rooms, in cells from its downhill end.
+ * A run longer than the stairs need gets flat landings at each room's height
+ * either side of a flight of real pitch, in the middle.
+ */
+export function rampFlight(ramp: Pick<ElevationRamp, 'rect' | 'up' | 'fromElev' | 'toElev'>): { start: number; length: number } {
+  const run = runLength(ramp)
+  const length = Math.min(run, Math.abs(ramp.toElev - ramp.fromElev) * CELLS_PER_LEVEL)
+  return { start: Math.floor((run - length) / 2), length }
+}
+
+/** Height `along` cells up a run from its downhill edge. */
+function flightHeight(ramp: ElevationRamp, along: number): number {
+  const { start, length } = rampFlight(ramp)
+  if (length <= 0) return ramp.toElev
+  const t = Math.min(1, Math.max(0, (along - start) / length))
+  return ramp.fromElev + t * (ramp.toElev - ramp.fromElev)
 }
 
 /** Prefer the rooms currently sitting on each end so later raise/lower stays honest. */
@@ -163,25 +191,21 @@ export function resolveRamp(
 export function rampSlices(ramp: ElevationRamp, rooms: readonly Room[]): RampSlice[] {
   const resolved = resolveRamp(ramp, rooms)
   if (!resolved) return []
-  const length = runLength(resolved)
   const slices: RampSlice[] = []
   const rect = resolved.rect
   for (let y = rect.minY; y <= rect.maxY; y++) {
     for (let x = rect.minX; x <= rect.maxX; x++) {
       const slice = sliceIndex(resolved, x, y)
-      const elevation = sliceElevation(resolved.fromElev, resolved.toElev, slice, length)
-      const prevElev =
-        slice === 0
-          ? resolved.fromElev
-          : sliceElevation(resolved.fromElev, resolved.toElev, slice - 1, length)
       slices.push({
         x,
         y,
-        elevation,
-        prevElev,
+        elevation: flightHeight(resolved, slice + 1),
+        prevElev: flightHeight(resolved, slice),
+        stand: flightHeight(resolved, slice + 0.5),
         slice,
         rampId: resolved.id,
         up: resolved.up,
+        ramp: resolved,
       })
     }
   }

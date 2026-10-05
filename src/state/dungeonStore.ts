@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { applyDungeonPatch, type DungeonPatch } from '../net/patch.ts'
-import { floorAtOrder, floorName } from '../model/floors.ts'
+import { floorAtOrder, floorName, packFloors } from '../model/floors.ts'
 import { linkedFloors, roomStairLandings, stairLandings, stripStairs } from '../model/stairs.ts'
 import type { StairLanding } from '../model/stairs.ts'
 import {
@@ -235,6 +235,15 @@ function linksThrough(floor: Floor, roomId: string, cells: readonly Cell[]): Lin
 
 interface DungeonState {
   dungeon: Dungeon
+  /** A new empty floor on top of the stack, or a new basement under it; returns its id. */
+  addFloor: (where: 'above' | 'below') => string
+  renameFloor: (floorId: string, name: string) => void
+  /**
+   * Remove a floor and everything on it; the last floor stays. Stairs that led
+   * there lose that way, monsters on it go, and the party steps onto the floor
+   * below it (or above). The floors around it renumber to close the gap.
+   */
+  deleteFloor: (floorId: string) => void
   addRoom: (floorId: string, rect: CellRect) => string
   moveRoom: (floorId: string, roomId: string, rect: CellRect) => void
   resizeRoom: (floorId: string, roomId: string, rect: CellRect) => void
@@ -316,6 +325,54 @@ interface DungeonState {
  */
 export const useDungeonStore = create<DungeonState>((set, get) => ({
   dungeon: createDungeon(),
+
+  addFloor: (where) => {
+    const dungeon = get().dungeon
+    const orders = dungeon.floors.map((floor) => floor.order)
+    const floor = createFloor(where === 'above' ? Math.max(...orders) + 1 : Math.min(...orders) - 1)
+    set({ dungeon: { ...dungeon, floors: [...dungeon.floors, floor] } })
+    return floor.id
+  },
+
+  renameFloor: (floorId, name) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    set({ dungeon: mapFloor(get().dungeon, floorId, (floor) => ({ ...floor, name: trimmed })) })
+  },
+
+  deleteFloor: (floorId) => {
+    const doomed = get().dungeon.floors.find((floor) => floor.id === floorId)
+    if (!doomed || get().dungeon.floors.length <= 1) return
+    // Stairs on the floors either side that led here now lead nowhere.
+    get().clearStairLandings(doomed.rooms.flatMap((room) => roomStairLandings(get().dungeon.floors, doomed, room)))
+
+    const dungeon = get().dungeon
+    const rest = dungeon.floors.filter((floor) => floor.id !== floorId)
+    const refuge = floorAtOrder(rest, doomed.order - 1) ?? floorAtOrder(rest, doomed.order + 1) ?? rest[0]
+    // Monsters go with the floor; each of the party takes a free spot on the refuge, in turn.
+    const staying = (dungeon.players ?? []).filter((player) => player.floorId !== floorId || !isMonster(player))
+    const players = [...staying]
+    staying.forEach((player, index) => {
+      if (player.floorId !== floorId) return
+      const spot = standOnFloor(refuge, players, player.id)
+      players[index] = { ...player, floorId: refuge.id, ...(spot ?? {}) }
+    })
+    const turnPlayerId = dungeon.combat?.turnPlayerId ?? null
+    set({
+      dungeon: {
+        ...dungeon,
+        floors: packFloors(rest),
+        players,
+        combat: {
+          turnPlayerId:
+            turnPlayerId && !players.some((player) => player.id === turnPlayerId)
+              ? nextTurnPlayerId(players, null)
+              : turnPlayerId,
+        },
+        travel: dungeon.travel?.floorId === floorId ? null : dungeon.travel,
+      },
+    })
+  },
 
   addRoom: (floorId, rect) => {
     const id = uid()

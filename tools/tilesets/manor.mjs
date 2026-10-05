@@ -336,6 +336,47 @@ function leadedGlass() {
 }
 
 /** Dressed ashlar: long, tidy blocks with fine joints. */
+/** A step's top: oak with the carpet runner, held by a brass rod at the nose. */
+function tread(seed) {
+  const img = newTop()
+  for (let y = 0; y < TOP; y++) {
+    for (let x = 0; x < TOP; x++) {
+      const g = fbm(x * 0.25, y, 6, seed, 3) - 0.5
+      const onRunner = x > 30 && x < TOP - 30
+      const base = onRunner ? tint(PALETTE.carpet, 1 + (valueNoise(x, y, 2, seed) - 0.5) * 0.12) : tint(PALETTE.oak, 1.05 + g * 0.3)
+      blend(img, x, y, base)
+      if (onRunner && (x < 36 || x > TOP - 37)) blend(img, x, y, PALETTE.gilt, 0.6)
+    }
+  }
+  fillRect(img, 28, TOP - 12, TOP - 56, 3, PALETTE.brass)
+  return img
+}
+
+/** A step's face: a polished oak board with a darker lip under the nose, the runner carried down over it. */
+function riser(seed) {
+  const img = newFace()
+  for (let y = 0; y < FACE_H; y++) {
+    for (let x = 0; x < FACE_W; x++) {
+      const g = fbm(x, y * 0.3, 10, seed, 3) - 0.5
+      const onRunner = x > 30 && x < FACE_W - 30
+      const base = onRunner
+        ? tint(PALETTE.carpet, 0.86 + (valueNoise(x, y, 2, seed) - 0.5) * 0.12)
+        : tint(PALETTE.oak, (y < 5 ? 0.7 : 0.92) + g * 0.25)
+      blend(img, x, y, base)
+      if (onRunner && (x < 36 || x > FACE_W - 37)) blend(img, x, y, PALETTE.gilt, 0.6)
+    }
+  }
+  rim(img, 2, 0.7)
+  return img
+}
+
+/** The shaft of a stair going down: the cellar's dark ashlar. */
+function shaft(seed) {
+  const img = newFace()
+  bricks(img, seed, tint(PALETTE.ashlar, 0.62), tint(PALETTE.ashlarJoint, 0.6), { course: 24, short: 40, long: 64, crack: 0.08, grain: 0.14, bevel: 2 })
+  return img
+}
+
 function foundation(seed) {
   const img = newFace()
   bricks(img, seed, PALETTE.ashlar, PALETTE.ashlarJoint, { course: 24, short: 40, long: 64, crack: 0.05, grain: 0.1, bevel: 2 })
@@ -354,6 +395,7 @@ writeSheet('manor', {
   ),
   wallTops: topFeatures.map((feature, i) => wallTop(22200 + i * 23, { tone: tones[(i + 3) % tones.length], feature })),
   stairs: stairs(24400),
+  stairParts: { tread: tread(24410), riser: riser(24420), shaft: shaft(24430) },
   walls: faceFeatures.map((feature, i) =>
     panelFace(25500 + i * 29, { tone: 1 + (tones[(i + 5) % tones.length] - 1) * 0.5, feature }),
   ),

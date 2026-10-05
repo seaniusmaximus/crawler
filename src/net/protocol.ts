@@ -1,4 +1,4 @@
-import type { DiceRoll } from '../model/dice.ts'
+import type { DiceRoll, RollRequest } from '../model/dice.ts'
 import type { CharacterStats } from '../model/stats.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
@@ -30,7 +30,13 @@ export type NetMessage =
   | { type: 'move'; playerId: string; floorId: string; x: number; y: number }
   | { type: 'player'; player: Player }
   | { type: 'opening'; floorId: string; roomId: string; x: number; y: number }
+  /**
+   * Rolls for the log. From the relay these are its own 'table' rolls; a browser
+   * may only send D&D Beyond ones (the relay drops anything else).
+   */
   | { type: 'dice'; rolls: DiceRoll[] }
+  /** Ask the relay to roll; the result comes back to everyone as `dice`. */
+  | { type: 'roll'; clientId: string; request: RollRequest }
   /**
    * A live token path, relayed straight to everyone and never saved. `travel` is
    * null when the sender's path for `playerId` ends; `fromHost` is checked by the relay.

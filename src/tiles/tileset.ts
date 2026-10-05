@@ -12,9 +12,11 @@ export interface SheetRect {
  * Upright art. `wall` is a wall's side, which doorways and windows are also
  * cut from; `door` is the leaf, `window` the closed shutters and
  * `window-open` the bars (transparent between them). `foundation` is the
- * rough stone under a raised room.
+ * rough stone under a raised room. Stairs between floors are built from
+ * `tread` (a step's top, square, seen from above), `riser` (a step's face)
+ * and `shaft` (the inner wall of a stairwell going down).
  */
-export type FaceKind = 'wall' | 'door' | 'window' | 'window-open' | 'foundation'
+export type FaceKind = 'wall' | 'door' | 'window' | 'window-open' | 'foundation' | 'tread' | 'riser' | 'shaft'
 
 /**
  * One look for the map: a spritesheet plus which part of it is which. Every

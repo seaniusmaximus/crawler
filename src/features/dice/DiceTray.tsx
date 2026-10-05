@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react'
-import { DIE_FACES, MAX_DIE_COUNT, formatModifier, rollAccent, type DiceRoll } from '../../model/dice.ts'
+import {
+  DIE_FACES,
+  MAX_DIE_COUNT,
+  formatModifier,
+  readableFormula,
+  rollAccent,
+  rollBreakdown,
+  type DiceRoll,
+} from '../../model/dice.ts'
 import { characterNameOf } from '../../model/players.ts'
 import { useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -8,6 +16,7 @@ import { useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
 import { bridgeIcon } from '../../ui/brand.ts'
 import { EXTENSION_URL, startDiceBridge } from './bridge.ts'
+import { RollResult } from './RollResult.tsx'
 
 // The extension announces itself within ~1s of the tray mounting; give it some slack.
 const BRIDGE_GRACE_MS = 5000
@@ -21,6 +30,13 @@ export function DiceTray() {
   const bridgeSeen = useDiceStore((state) => state.bridgeSeen)
   const viewMode = useEditorStore((state) => state.viewMode)
   const guest = useSessionStore((state) => state.role === 'guest')
+  const physical = useDiceStore((state) => state.physical)
+  // A player's tray rolls are theirs: named for their token, so they show (and land) beside it.
+  const myPlayerId = useSessionStore((state) => state.myPlayerId)
+  const myToken = useDungeonStore((state) =>
+    guest && myPlayerId ? (state.dungeon.players ?? []).find((player) => player.id === myPlayerId) : undefined,
+  )
+  const who = myToken ? { character: characterNameOf(myToken), characterId: myToken.characterId ?? undefined } : undefined
   const [faces, setFaces] = useState<number>(20)
   const [graceOver, setGraceOver] = useState(false)
   const latest = rolls[0] ?? null
@@ -96,9 +112,14 @@ export function DiceTray() {
             />
           </div>
 
-          <button type="button" className="roll-btn" onClick={() => dice.roll(faces)}>
+          <button type="button" className="roll-btn" onClick={() => dice.roll(faces, who)}>
             ROLL {formula}
           </button>
+
+          <label className="dice-physical">
+            <input type="checkbox" checked={physical} onChange={(event) => dice.setPhysical(event.target.checked)} />
+            Throw dice on the table
+          </label>
 
           {rolls.length > 0 ? (
             <>
@@ -131,7 +152,7 @@ export function DiceTray() {
       >
         <Icon id="d20" size={26} strokeWidth={1.3} className="is-gold" />
         {viewMode === 'player' || guest ? <span>Roll</span> : null}
-        {!open && latest ? <span className={`dice-fab-total${accentClass(latest)}`}>{latest.total}</span> : null}
+        {!open && latest ? <RollResult roll={latest} className="dice-fab-total" compact /> : null}
       </button>
     </div>
   )
@@ -176,11 +197,16 @@ function RollRow({ roll }: { roll: DiceRoll }) {
       tokens.find((token) => roll.character && characterNameOf(token) === roll.character)
     return owner?.color ?? null
   })
-  const accent = rollAccent(roll)
+  const atTable = useSessionStore((state) => state.role !== 'solo')
+  // d20s shown one by one colour their own 20s and 1s, so the note needn't call them out.
+  const accent = rollBreakdown(roll).kind === 'each' ? null : rollAccent(roll)
+  // Table rolls are made by the relay; say where any other roll came from.
+  const origin = roll.source === 'ddb' ? 'via D&D Beyond' : roll.source === 'local' && atTable ? 'offline, not shared' : ''
   const note = [
     roll.character ? roll.title : '',
-    roll.formula,
+    readableFormula(roll),
     accent === 'crit' ? 'Natural 20' : accent === 'fumble' ? 'Natural 1' : '',
+    origin,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -192,12 +218,7 @@ function RollRow({ roll }: { roll: DiceRoll }) {
         <span className="roll-who">{roll.character || roll.title}</span>
         <span className="roll-note">{note}</span>
       </span>
-      <span className={`roll-total${accentClass(roll)}`}>{roll.total}</span>
+      <RollResult roll={roll} className="roll-total" />
     </li>
   )
-}
-
-function accentClass(roll: DiceRoll): string {
-  const accent = rollAccent(roll)
-  return accent ? ` is-${accent}` : ''
 }

@@ -258,6 +258,25 @@ function icyBars(seed) {
 }
 
 /** Rough stone with snow packed into every joint. */
+/** A step's top: one block, frosted, snow brushed off. */
+function tread(seed) {
+  return floorTile(seed, { min: 120, tone: 1.06, drift: 0.12 })
+}
+
+/** A step's face: an ice block. */
+function riser(seed) {
+  return iceFace(seed, { tone: 0.98, short: 40, long: 60 })
+}
+
+/** The shaft of a stair going down: ice deepening to blue. */
+function shaft(seed) {
+  const img = iceFace(seed, { tone: 0.7 })
+  for (let y = 0; y < FACE_H; y++) {
+    for (let x = 0; x < FACE_W; x++) blend(img, x, y, [40, 70, 120], 0.3 * (y / FACE_H))
+  }
+  return img
+}
+
 function foundation(seed) {
   const img = newFace()
   stoneField(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, PALETTE.stone, PALETTE.packed, seed, {
@@ -285,6 +304,7 @@ writeSheet('ice', {
     wallTop(42200 + i * 23, { min: 40 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
   ),
   stairs: stairs(44400),
+  stairParts: { tread: tread(44410), riser: riser(44420), shaft: shaft(44430) },
   walls: faceFeatures.map((feature, i) =>
     iceFace(45500 + i * 29, {
       tone: tones[(i + 5) % tones.length],

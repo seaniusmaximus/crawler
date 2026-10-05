@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react'
 import { FOCUS_INSET } from '../../app/layout.ts'
-import { floorTag, floorsTopDown, GROUND_ORDER } from '../../model/floors.ts'
+import { floorAtOrder, floorTag, floorsTopDown, GROUND_ORDER } from '../../model/floors.ts'
 import { playersInRoom } from '../../model/players.ts'
 import { rectHeight, rectWidth } from '../../model/rect.ts'
 import type { Floor, Player, Room } from '../../model/types.ts'
@@ -75,6 +75,22 @@ function useShareTowerHeight() {
   return ref
 }
 
+/**
+ * The collapsed list shows three floors and scrolls past that; keep the floor in
+ * view scrolled into sight when it changes (from the map, the stack or stairs).
+ */
+function useKeepActiveInView(list: RefObject<HTMLDivElement | null>, activeId: string | null) {
+  useEffect(() => {
+    const box = list.current
+    const row = box?.querySelector<HTMLElement>('.floor-pick.is-active')
+    if (!box || !row) return
+    if (row.offsetTop < box.scrollTop) box.scrollTop = row.offsetTop
+    else if (row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) {
+      box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight
+    }
+  }, [list, activeId])
+}
+
 function FloorTower({
   floors,
   activeId,
@@ -88,6 +104,10 @@ function FloorTower({
   const viewMode = useEditorStore((state) => state.viewMode)
   const setActiveFloor = useEditorStore((state) => state.setActiveFloor)
   const tower = useShareTowerHeight()
+  const list = useRef<HTMLDivElement>(null)
+  useKeepActiveInView(list, activeId)
+  const dm = viewMode !== 'player'
+  const [renaming, setRenaming] = useState<string | null>(null)
 
   return (
     <section ref={tower} className="panel floor-tower scroll-h" aria-label="Floors">
@@ -95,12 +115,20 @@ function FloorTower({
       {floors.length === 0 ? (
         <p className="panel-empty">No revealed rooms</p>
       ) : (
-        <div className="floor-tower-list">
+        <div ref={list} className="floor-tower-list">
           {floors.map((floor) => {
             const active = floor.id === activeId
             const busy = shownRoomsOf(floor, viewMode)
               .map((room) => ({ room, people: occupantsOf(floor, room, tokens, viewMode) }))
               .filter((entry) => entry.people.length > 0)
+            if (renaming === floor.id) {
+              return (
+                <div key={floor.id} className={`floor-pick is-renaming${active ? ' is-active' : ''}`}>
+                  <span className="floor-tag">{floorTag(floor.order)}</span>
+                  <FloorNameInput floor={floor} onDone={() => setRenaming(null)} />
+                </div>
+              )
+            }
             return (
               <button
                 key={floor.id}
@@ -111,7 +139,13 @@ function FloorTower({
                 onClick={() => setActiveFloor(floor.id)}
               >
                 <span className="floor-tag">{floorTag(floor.order)}</span>
-                <span className="floor-pick-name">{floor.name}</span>
+                <span
+                  className="floor-pick-name"
+                  title={dm ? 'Double-click to rename' : undefined}
+                  onDoubleClick={dm ? () => setRenaming(floor.id) : undefined}
+                >
+                  {floor.name}
+                </span>
                 <span className="floor-pick-rooms">
                   {busy.length === 0 ? (
                     <span className="floor-quiet">No one here</span>
@@ -139,6 +173,7 @@ function FloorTower({
         </div>
       )}
       <div className="floor-tower-tools">
+        {dm ? <FloorEdit floors={floors} activeId={activeId} layout="column" /> : null}
         <button
           type="button"
           className="icon-btn"
@@ -168,6 +203,8 @@ function FloorDrawer({
   const active = floors.find((floor) => floor.id === activeId)
   const rooms = active ? shownRoomsOf(active, viewMode) : []
   const hidden = active ? active.rooms.filter((room) => !room.visible).length : 0
+  const dm = viewMode !== 'player'
+  const [renaming, setRenaming] = useState<string | null>(null)
 
   return (
     <section className="panel floor-drawer scroll-v" aria-label="Floors and rooms">
@@ -176,15 +213,18 @@ function FloorDrawer({
           <Diamond />
           <span>Floors</span>
         </h2>
-        <button
-          type="button"
-          className="icon-btn is-boxed"
-          onClick={onCollapse}
-          aria-label="Collapse floors"
-          title="Collapse"
-        >
-          <Icon id="chevronDown" />
-        </button>
+        <span className="floor-drawer-tools">
+          {dm ? <FloorEdit floors={floors} activeId={activeId} layout="row" /> : null}
+          <button
+            type="button"
+            className="icon-btn is-boxed"
+            onClick={onCollapse}
+            aria-label="Collapse floors"
+            title="Collapse"
+          >
+            <Icon id="chevronDown" />
+          </button>
+        </span>
       </header>
 
       <div className="floor-drawer-stack">
@@ -199,25 +239,37 @@ function FloorDrawer({
             return (
               <div key={floor.id} className="floor-drawer-item">
                 {index > 0 ? <span className="floor-link" aria-hidden /> : null}
-                <button
-                  type="button"
-                  className={`floor-row${on ? ' is-active' : ''}`}
-                  aria-pressed={on}
-                  onClick={() => setActiveFloor(floor.id)}
-                >
-                  <span className="floor-tag">{floorTag(floor.order)}</span>
-                  <span className="floor-row-copy">
-                    <span>{floor.name}</span>
-                    <small>
-                      {count} {count === 1 ? 'room' : 'rooms'}
-                    </small>
-                  </span>
-                  <span className="avatar-row">
-                    {people.map((person) => (
-                      <Avatar key={person.id} player={person} size={18} dim={person.visible !== true} />
-                    ))}
-                  </span>
-                </button>
+                {renaming === floor.id ? (
+                  <div className={`floor-row is-renaming${on ? ' is-active' : ''}`}>
+                    <span className="floor-tag">{floorTag(floor.order)}</span>
+                    <FloorNameInput floor={floor} onDone={() => setRenaming(null)} />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className={`floor-row${on ? ' is-active' : ''}`}
+                    aria-pressed={on}
+                    onClick={() => setActiveFloor(floor.id)}
+                  >
+                    <span className="floor-tag">{floorTag(floor.order)}</span>
+                    <span className="floor-row-copy">
+                      <span
+                        title={dm ? 'Double-click to rename' : undefined}
+                        onDoubleClick={dm ? () => setRenaming(floor.id) : undefined}
+                      >
+                        {floor.name}
+                      </span>
+                      <small>
+                        {count} {count === 1 ? 'room' : 'rooms'}
+                      </small>
+                    </span>
+                    <span className="avatar-row">
+                      {people.map((person) => (
+                        <Avatar key={person.id} player={person} size={18} dim={person.visible !== true} />
+                      ))}
+                    </span>
+                  </button>
+                )}
               </div>
             )
           })}
@@ -374,5 +426,164 @@ function RoomRow({ floor, room, occupants }: { floor: Floor; room: Room; occupan
         </div>
       ) : null}
     </li>
+  )
+}
+
+/** Where a new floor goes, with the tag it will get. */
+function newFloorTags(floors: readonly Floor[]): { above: string; below: string } {
+  const orders = floors.map((floor) => floor.order)
+  return { above: floorTag(Math.max(...orders) + 1), below: floorTag(Math.min(...orders) - 1) }
+}
+
+/** What deleting a floor takes with it, in a line. */
+function deleteSummary(floor: Floor, floors: readonly Floor[], tokens: readonly Player[]): string {
+  const rooms = floor.rooms.length
+  const here = tokens.filter((token) => token.floorId === floor.id)
+  const monsters = here.filter((token) => token.kind === 'monster').length
+  const party = here.length - monsters
+  const parts: string[] = []
+  if (rooms > 0) parts.push(`${rooms} ${rooms === 1 ? 'room' : 'rooms'}`)
+  if (monsters > 0) parts.push(`${monsters} ${monsters === 1 ? 'monster' : 'monsters'}`)
+  const refuge = floorAtOrder(floors, floor.order - 1) ?? floorAtOrder(floors, floor.order + 1)
+  // "1 room goes", but "2 rooms go" and "1 room and 1 monster go".
+  const plural = parts.length > 1 || rooms > 1 || (rooms === 0 && monsters > 1)
+  const goes = parts.length > 0 ? `${parts.join(' and ')} ${plural ? 'go' : 'goes'} with it.` : "It's empty."
+  const moves = party > 0 && refuge ? ` The party moves to ${floorTag(refuge.order)}.` : ''
+  return `${goes}${moves}`
+}
+
+/**
+ * Add a floor on top or a basement underneath, or delete the floor in view.
+ * Each opens a small card beside the buttons; a click elsewhere closes it.
+ */
+function FloorEdit({
+  floors,
+  activeId,
+  layout,
+}: {
+  floors: Floor[]
+  activeId: string | null
+  layout: 'column' | 'row'
+}) {
+  const [open, setOpen] = useState<'add' | 'delete' | null>(null)
+  const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
+  const setActiveFloor = useEditorStore((state) => state.setActiveFloor)
+  const box = useRef<HTMLDivElement>(null)
+  const active = floors.find((floor) => floor.id === activeId)
+  const tags = newFloorTags(floors)
+  const lastFloor = floors.length <= 1
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: PointerEvent) => {
+      if (!box.current?.contains(event.target as Node)) setOpen(null)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(null)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
+
+  function add(where: 'above' | 'below'): void {
+    setActiveFloor(useDungeonStore.getState().addFloor(where))
+    setOpen(null)
+  }
+
+  function remove(): void {
+    if (!active) return
+    const refuge = floorAtOrder(floors, active.order - 1) ?? floorAtOrder(floors, active.order + 1)
+    useDungeonStore.getState().deleteFloor(active.id)
+    if (refuge) setActiveFloor(refuge.id)
+    setOpen(null)
+  }
+
+  return (
+    <div ref={box} className={`floor-edit is-${layout}`}>
+      <button
+        type="button"
+        className="icon-btn"
+        aria-expanded={open === 'add'}
+        aria-label="Add a floor"
+        title="Add a floor"
+        onClick={() => setOpen(open === 'add' ? null : 'add')}
+      >
+        <Icon id="plus" size={16} />
+      </button>
+      <button
+        type="button"
+        className="icon-btn is-danger"
+        aria-expanded={open === 'delete'}
+        aria-label={active ? `Delete ${floorTag(active.order)}, ${active.name}` : 'Delete floor'}
+        title={lastFloor ? 'A map keeps at least one floor' : 'Delete this floor'}
+        disabled={lastFloor || !active}
+        onClick={() => setOpen(open === 'delete' ? null : 'delete')}
+      >
+        <Icon id="trash" size={16} />
+      </button>
+      {open === 'add' ? (
+        <div className="floor-popover" role="dialog" aria-label="Add a floor">
+          <button type="button" className="floor-popover-option" onClick={() => add('above')}>
+            <span className="floor-tag">{tags.above}</span>
+            <span>New floor on top</span>
+          </button>
+          <button type="button" className="floor-popover-option" onClick={() => add('below')}>
+            <span className="floor-tag">{tags.below}</span>
+            <span>New basement below</span>
+          </button>
+        </div>
+      ) : null}
+      {open === 'delete' && active ? (
+        <div className="floor-popover" role="alertdialog" aria-label="Delete floor">
+          <p className="floor-popover-copy">
+            <strong>
+              Delete {floorTag(active.order)} · {active.name}?
+            </strong>
+            <span>{deleteSummary(active, floors, tokens)}</span>
+          </p>
+          <div className="floor-popover-actions">
+            <button type="button" className="text-btn" onClick={() => setOpen(null)}>
+              Cancel
+            </button>
+            <button type="button" className="outline-btn is-danger is-small" onClick={remove}>
+              Delete
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** A floor's name, being retyped: Enter or leaving keeps it, Escape drops it. */
+function FloorNameInput({ floor, onDone }: { floor: Floor; onDone: () => void }) {
+  const [draft, setDraft] = useState(floor.name)
+  // Escape closes the input, and the blur that follows must not save anyway.
+  const settled = useRef(false)
+  const finish = (save: boolean) => {
+    if (settled.current) return
+    settled.current = true
+    if (save) useDungeonStore.getState().renameFloor(floor.id, draft)
+    onDone()
+  }
+  return (
+    <input
+      className="name-input is-floor"
+      value={draft}
+      autoFocus
+      onFocus={(event) => event.currentTarget.select()}
+      aria-label={`Name of ${floorTag(floor.order)}`}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => finish(true)}
+      onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.key === 'Enter') finish(true)
+        if (event.key === 'Escape') finish(false)
+      }}
+    />
   )
 }

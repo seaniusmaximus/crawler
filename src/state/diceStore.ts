@@ -4,10 +4,11 @@ import {
   MAX_DIE_COUNT,
   MAX_ROLL_LOG,
   normalizeRoll,
-  rollLocal,
+  rollDice,
   sameRoll,
   type DiceRoll,
   type IncomingRoll,
+  type RollRequest,
 } from '../model/dice.ts'
 import { useDungeonStore } from './dungeonStore.ts'
 
@@ -21,14 +22,47 @@ interface DiceState {
   bridge: BridgeStatus
   // True once the extension has announced itself this page load; stays true if it later goes stale.
   bridgeSeen: boolean
+  /** Throw animated dice on the map for each roll (this browser's choice). */
+  physical: boolean
+  setPhysical: (on: boolean) => void
   setOpen: (open: boolean) => void
   setCount: (count: number) => void
   setModifier: (modifier: number) => void
-  roll: (faces: number) => void
+  /** Roll the tray's dice; `who` names the roller's character so the roll shows at their token. */
+  roll: (faces: number, who?: Pick<RollRequest, 'character' | 'characterId'>) => void
   ingest: (raw: IncomingRoll | IncomingRoll[]) => void
   replaceRolls: (rolls: DiceRoll[]) => void
   markBridge: (connected: boolean) => void
   clear: () => void
+}
+
+/**
+ * At a table, rolls are made by the relay so no browser chooses its own numbers;
+ * the session registers how to ask it. Returns false when there's no table to ask.
+ */
+let tableRoll: ((request: RollRequest) => boolean) | null = null
+
+export function setTableRoller(roller: (request: RollRequest) => boolean): void {
+  tableRoll = roller
+}
+
+/**
+ * Roll dice: by the table's relay when connected (the result arrives with
+ * everyone else's), otherwise right here. Both use the cryptographic source.
+ */
+export function requestRoll(request: RollRequest): void {
+  if (tableRoll?.(request)) return
+  useDiceStore.getState().ingest(rollDice(request, 'local'))
+}
+
+const PHYSICAL_KEY = 'crawler.physicalDice'
+
+function readPhysical(): boolean {
+  try {
+    return window.localStorage.getItem(PHYSICAL_KEY) !== 'off'
+  } catch {
+    return true
+  }
 }
 
 export function getDiceBridge(): Pick<DiceState, 'ingest' | 'markBridge'> {
@@ -42,6 +76,15 @@ export const useDiceStore = create<DiceState>((set) => ({
   modifier: 0,
   bridge: 'disconnected',
   bridgeSeen: false,
+  physical: readPhysical(),
+  setPhysical: (physical) => {
+    try {
+      window.localStorage.setItem(PHYSICAL_KEY, physical ? 'on' : 'off')
+    } catch {
+      // Storage blocked: the choice lasts until reload.
+    }
+    set({ physical })
+  },
   setOpen: (open) => set({ open }),
   setCount: (count) =>
     set({ count: Math.max(1, Math.min(MAX_DIE_COUNT, Math.round(count) || 1)) }),
@@ -49,11 +92,11 @@ export const useDiceStore = create<DiceState>((set) => ({
     set({
       modifier: Math.max(-30, Math.min(30, Math.round(Number(modifier) || 0))),
     }),
-  roll: (faces) =>
-    set((state) => ({
-      open: true,
-      rolls: prepend(state.rolls, rollLocal(state.count, faces, state.modifier)),
-    })),
+  roll: (faces, who) => {
+    const { count, modifier } = useDiceStore.getState()
+    set({ open: true })
+    requestRoll({ count, faces, modifier, ...who })
+  },
   ingest: (raw) =>
     set((state) => {
       const incoming = (Array.isArray(raw) ? raw : [raw])
@@ -70,7 +113,9 @@ export const useDiceStore = create<DiceState>((set) => ({
           if (isInitiativeRoll(roll)) useDungeonStore.getState().recordInitiativeRoll(roll)
         }
       }
-      return rolls === state.rolls ? state : { rolls, bridge: 'connected' }
+      if (rolls === state.rolls) return state
+      // Only a D&D Beyond roll proves the extension is talking to this page.
+      return incoming.some((roll) => roll.source === 'ddb') ? { rolls, bridge: 'connected' } : { rolls }
     }),
   replaceRolls: (rolls) => set({ rolls: rolls.slice(0, MAX_ROLL_LOG) }),
   markBridge: (connected) =>

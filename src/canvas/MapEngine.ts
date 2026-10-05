@@ -51,7 +51,6 @@ const TOOL_KEYS: Record<string, Tool> = {
   KeyS: 'stairs',
   KeyA: 'walls',
   KeyL: 'link',
-  KeyC: 'ramp',
 }
 
 type PointerMode = 'paint' | 'pan' | 'move' | 'resize' | 'feature' | 'link' | 'pick' | 'ramp' | 'token'
@@ -922,10 +921,15 @@ export class MapEngine {
     )
   }
 
+  /**
+   * Paths for every token being moved. `players` is what this view may show (in
+   * player view, no hidden tokens), so a hidden monster's path never draws there,
+   * whoever is moving it.
+   */
   private liveMovePaths(players: readonly Player[]): MovePath[] {
     const paths: MovePath[] = []
     const own = this.liveMovePath()
-    if (own) paths.push(own)
+    if (own && players.some((item) => item.id === own.playerId)) paths.push(own)
     for (const travel of this.remoteTravels(players)) {
       if (travel.endedAt === null && travel.cells.length >= 2) {
         paths.push({ playerId: travel.playerId, cells: travel.cells, feet: travel.feet })
@@ -950,7 +954,7 @@ export class MapEngine {
   private liveTokenPoses(travel: TokenTravel | null, players: readonly Player[]): Pose[] {
     const poses: Pose[] = []
     const own = this.liveTokenPose(travel)
-    if (own) poses.push(own)
+    if (own && players.some((item) => item.id === own.playerId)) poses.push(own)
     const now = Date.now()
     for (const item of this.remoteTravels(players)) {
       if (item.phase !== 'playing') continue

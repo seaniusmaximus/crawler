@@ -3,6 +3,10 @@ import { openingAt, stairsAt } from './tiles.ts'
 import { sharedWalls, showsWall } from './walls.ts'
 import type { Cell, CellRect, Opening, Room, StairsDir } from './types.ts'
 
+/**
+ * `stairs` lays stairs to other floors; `ramp` is the same Stairs button set to
+ * "Between rooms", joining rooms of different heights on this floor.
+ */
 export type Tool = 'select' | 'rooms' | 'doors' | 'windows' | 'stairs' | 'walls' | 'link' | 'ramp'
 
 /** Tools that stamp a feature onto tiles of an existing room. */
