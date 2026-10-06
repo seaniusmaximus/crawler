@@ -1,38 +1,47 @@
-/** Box the ring is laid out in; the menu anchor sits at its centre. */
-export const RING_SIZE = 260
-/** Radius of the dashed guide circle the controls sit on. */
-export const RING_RADIUS = 80
 /** Every control on the ring is a circle this wide. */
 export const RING_CONTROL = 68
+/** Clear space kept between neighbouring controls, and between the controls and a label in the middle. */
+export const RING_GAP = 20
+/** The label some rings hold in their middle (a door's state). */
+export const RING_CORE = 64
+/** Box for menus that open as a card rather than a ring (statuses, pulling a token). */
+export const CARD_FRAME = 260
 
-function spot(degrees: number): { x: number; y: number } {
+export type Spot = { x: number; y: number }
+
+export interface RingLayout {
+  /** Distance from the middle to each control's centre; the dashed guide is drawn at it. */
+  radius: number
+  /** Side of the square box the ring needs. */
+  size: number
+  /** Where each control sits, from the middle, in order. */
+  seats: Spot[]
+}
+
+function spot(degrees: number, radius: number): Spot {
   const radians = ((degrees - 90) * Math.PI) / 180
   return {
-    x: Math.round(Math.cos(radians) * RING_RADIUS),
-    y: Math.round(Math.sin(radians) * RING_RADIUS),
+    x: Math.round(Math.cos(radians) * radius),
+    y: Math.round(Math.sin(radians) * radius),
   }
 }
 
-/** `count` evenly spaced seats, clockwise from twelve o'clock, so a ring with fewer actions has no gaps. */
-export function ringSeats(count: number): Array<{ x: number; y: number }> {
-  return Array.from({ length: count }, (_, index) => spot((index * 360) / count))
+/**
+ * `count` evenly spaced seats, clockwise from twelve o'clock (or from `start`
+ * degrees), on a ring just wide enough to keep RING_GAP between neighbouring
+ * controls, and between the controls and a middle label when there is one.
+ * More options make a wider ring; fewer, a tighter one.
+ */
+export function ringLayout(count: number, options: { core?: boolean; start?: number } = {}): RingLayout {
+  const n = Math.max(1, count)
+  // Neighbours' centres are a chord apart: 2r·sin(π/n) = control + gap.
+  const neighbours = n > 1 ? (RING_CONTROL + RING_GAP) / (2 * Math.sin(Math.PI / n)) : 0
+  const middle = options.core ? RING_CONTROL / 2 + RING_GAP + RING_CORE / 2 : 0
+  const radius = Math.ceil(Math.max(neighbours, middle))
+  const start = options.start ?? 0
+  return {
+    radius,
+    size: 2 * radius + RING_CONTROL,
+    seats: Array.from({ length: n }, (_, index) => spot(start + (index * 360) / n, radius)),
+  }
 }
-
-/** Five evenly spaced seats, clockwise from twelve o'clock, as in the design's token ring. */
-export const RING_SPOTS = {
-  top: spot(0),
-  upperRight: spot(72),
-  lowerRight: spot(144),
-  lowerLeft: spot(216),
-  upperLeft: spot(288),
-} as const
-
-/** Six seats, 60° apart clockwise from twelve o'clock, for rings with one more action. */
-export const RING_SPOTS_SIX = {
-  top: spot(0),
-  upperRight: spot(60),
-  lowerRight: spot(120),
-  bottom: spot(180),
-  lowerLeft: spot(240),
-  upperLeft: spot(300),
-} as const

@@ -58,7 +58,13 @@ export interface ElevationRamp {
 export interface Room {
   id: string
   name: string
+  /** The room's bounds; for a merged room, the box around all of its parts. */
   rect: CellRect
+  /**
+   * Set once rooms are merged: the rectangles that together make its shape.
+   * Walls between them open up, so only the outline of the whole is wall.
+   */
+  parts?: CellRect[]
   /** Keyed by absolute `"x,y"`. */
   openings: Record<string, Opening>
   /**
@@ -71,6 +77,8 @@ export interface Room {
   visible: boolean
   /** Steps above the floor plane; one step is a wall's height. */
   elevation: number
+  /** This room's own tileset; missing means it follows the map's. */
+  tileset?: string
 }
 
 /**
@@ -103,7 +111,7 @@ export interface Dungeon {
    * Never saved or sent in snapshots: other people's paths live in the travel store.
    */
   travel: TokenTravel | null
-  /** Id of the tileset every room is drawn with; unknown or missing means the default. */
+  /** Id of the tileset rooms are drawn with unless they have their own; unknown or missing means the default. */
   tileset?: string
 }
 

@@ -1,5 +1,5 @@
 import { rampAt } from './ramps.ts'
-import { interiorRect, rectContains } from './rect.ts'
+import { roomContains, roomFloorBounds } from './rect.ts'
 import { FEET_PER_TILE } from './scale.ts'
 import { uniqueStatuses } from './status.ts'
 import type { StatusId } from './status.ts'
@@ -29,7 +29,7 @@ export function occupantRoom(rooms: readonly Room[], x: number, y: number): Room
   let best: Room | undefined
   let bestIndex = -1
   rooms.forEach((room, index) => {
-    if (!rectContains(room.rect, x, y)) return
+    if (!roomContains(room, x, y)) return
     if (
       !best ||
       room.elevation > best.elevation ||
@@ -198,7 +198,7 @@ export function findStandable(
   ramps: readonly ElevationRamp[] = [],
 ): Cell | null {
   for (const room of rooms) {
-    const area = interiorRect(room.rect)
+    const area = roomFloorBounds(room)
     for (let y = area.minY; y <= area.maxY; y++) {
       for (let x = area.minX; x <= area.maxX; x++) {
         if (occupied.has(cellKey(x, y))) continue
@@ -265,4 +265,38 @@ export function playersInRoom(players: readonly Player[], floor: Floor, roomId: 
 
 export function standOnFloor(floor: Floor, players: readonly Player[], exceptId?: string): Cell | null {
   return findStandable(floor.rooms, occupiedCells(players, floor.id, exceptId), floor.ramps ?? [])
+}
+
+/**
+ * The free spot inside `room` nearest `near` where a token of `size` fits
+ * whole, or null when the room has no such spot.
+ */
+export function spotInRoom(
+  room: Room,
+  rooms: readonly Room[],
+  players: readonly Player[],
+  floorId: string,
+  size: number,
+  near: Cell,
+  ramps: readonly ElevationRamp[] = [],
+  exceptId?: string,
+): Cell | null {
+  const area = roomFloorBounds(room)
+  let best: Cell | null = null
+  let bestDistance = Infinity
+  for (let y = area.minY; y <= area.maxY - size + 1; y++) {
+    for (let x = area.minX; x <= area.maxX - size + 1; x++) {
+      if (!roomContains(room, x, y)) continue
+      if (!canPlacePlayer(rooms, players, floorId, x, y, size, ramps, exceptId)) continue
+      // From the footprint's middle to the middle of the cell asked for.
+      const dx = x + size / 2 - (near.x + 0.5)
+      const dy = y + size / 2 - (near.y + 0.5)
+      const distance = dx * dx + dy * dy
+      if (distance < bestDistance) {
+        best = { x, y }
+        bestDistance = distance
+      }
+    }
+  }
+  return best
 }

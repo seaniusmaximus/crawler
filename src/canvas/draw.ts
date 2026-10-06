@@ -11,7 +11,7 @@ import {
 import { statusEffect } from '../model/status.ts'
 import type { StatusId } from '../model/status.ts'
 import { sameLink } from '../model/links.ts'
-import { rectContains } from '../model/rect.ts'
+import { roomCells, roomContains } from '../model/rect.ts'
 import { rampFlight, rampOccupancy } from '../model/ramps.ts'
 import type { RampDraft, RampSlice } from '../model/ramps.ts'
 import { cellKey, openingAt, openingIsOpen, spriteAt, stairsAt } from '../model/tiles.ts'
@@ -88,7 +88,16 @@ export interface DrawView {
   tokenPoses: readonly { playerId: string; x: number; y: number; tilt: number }[]
   turnPlayerId: string | null
   viewMode: ViewMode
+  /** The map's tiles. */
   tileCache: TileCache
+  /** The tiles one room draws with, when it has a tileset of its own. */
+  tilesFor?: (room: Room) => TileCache
+}
+
+/** The view as one room draws itself: with its own tiles when they differ from the map's. */
+function roomView(view: DrawView, room: Room | undefined): DrawView {
+  const tileCache = room && view.tilesFor ? view.tilesFor(room) : view.tileCache
+  return tileCache === view.tileCache ? view : { ...view, tileCache }
 }
 
 export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
@@ -181,6 +190,7 @@ function topRoomAtCell(rooms: readonly Room[]): Map<string, number> {
     const rect = room.rect
     for (let y = rect.minY; y <= rect.maxY; y++) {
       for (let x = rect.minX; x <= rect.maxX; x++) {
+        if (!roomContains(room, x, y)) continue
         const key = cellKey(x, y)
         const prev = top.get(key)
         if (prev === undefined) {
@@ -259,10 +269,12 @@ function drawSupports(
     elevation: number
     depth: number
     dim: boolean
+    view: DrawView
   }[] = []
   view.rooms.forEach((room, roomIndex) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
+    const own = roomView(view, room)
     for (let y = rect.minY; y <= rect.maxY; y++) {
       for (let x = rect.minX; x <= rect.maxX; x++) {
         if (top.get(cellKey(x, y)) !== roomIndex) continue
@@ -276,8 +288,9 @@ function drawSupports(
           elevation,
           depth: isoDepth(x, y, view.camera.yaw),
           dim: view.viewMode === 'dm' && !room.visible,
+          view: own,
           hideFace: (nx, ny) =>
-            rectContains(room.rect, nx, ny) || elevationAt(view.rooms, top, nx, ny) >= elevation,
+            roomContains(room, nx, ny) || elevationAt(view.rooms, top, nx, ny) >= elevation,
         })
       }
     }
@@ -285,7 +298,7 @@ function drawSupports(
   cells.sort((a, b) => a.depth - b.depth || a.elevation - b.elevation)
   for (const cell of cells) {
     if (cell.dim) ctx.globalAlpha = 0.42
-    drawSupportPrism(ctx, view, cell.x, cell.y, cell.bottom, cell.elevation, cell.hideFace)
+    drawSupportPrism(ctx, cell.view, cell.x, cell.y, cell.bottom, cell.elevation, cell.hideFace)
     ctx.globalAlpha = 1
   }
 }
@@ -338,6 +351,8 @@ interface QueuedTile {
   ramp?: RampSlice
   open: boolean
   dim: boolean
+  /** Carries the tiles of the room this tile belongs to. */
+  view: DrawView
 }
 
 function paintOrder(a: QueuedTile, b: QueuedTile): number {
@@ -359,6 +374,7 @@ function drawTiles(
     const rect = room.rect
     // Each room shuffles its art by its own id, so rooms of the same size never match.
     const seed = seedFor(room.id)
+    const own = roomView(view, room)
     const minX = Math.max(rect.minX, bounds.minX)
     const maxX = Math.min(rect.maxX, bounds.maxX)
     const minY = Math.max(rect.minY, bounds.minY)
@@ -372,7 +388,7 @@ function drawTiles(
         const planted = opening === 'wall' || opening === 'door' || opening === 'window'
         const sprite = shared.has(room.id, x, y) && !planted ? 'floor' : spriteAt(room, x, y)
         const variant = { x: x - rect.minX, y: y - rect.minY, seed }
-        const bitmap = view.tileCache.top(sprite, variant)
+        const bitmap = own.tileCache.top(sprite, variant)
         if (!bitmap) continue
         queue.push({
           x,
@@ -386,6 +402,7 @@ function drawTiles(
           stairs: stairsAt(room, x, y),
           open: openingIsOpen(room, x, y),
           dim: view.viewMode === 'dm' && !room.visible,
+          view: own,
         })
       }
     }
@@ -393,6 +410,8 @@ function drawTiles(
   const stairsBitmap = view.tileCache.top('stairs', { x: 0, y: 0, seed: 0 })
   if (stairsBitmap) {
     for (const slice of rampCells.values()) {
+      // Stairs between rooms take the look of the room they stand in.
+      const host = occupantRoom(view.rooms, slice.x, slice.y)
       queue.push({
         x: slice.x,
         y: slice.y,
@@ -405,26 +424,28 @@ function drawTiles(
         stairs: undefined,
         ramp: slice,
         open: false,
-        dim: view.viewMode === 'dm' && occupantRoom(view.rooms, slice.x, slice.y)?.visible === false,
+        dim: view.viewMode === 'dm' && host?.visible === false,
+        view: roomView(view, host),
       })
     }
   }
   queue.sort(paintOrder)
   ctx.imageSmoothingEnabled = true
   for (const tile of queue) {
+    const own = tile.view
     drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () => {
       if (tile.dim) ctx.globalAlpha = 0.42
       if (tile.ramp) {
         // Its stone reaches down to the ground, or to a lower neighbour's floor.
         const bottom = Math.min(tile.ramp.ramp.fromElev, supportBottom(view.rooms, top, tile.x, tile.y, tile.ramp.ramp.fromElev))
-        drawRampStairs(ctx, view, tile.ramp, bottom, tile.variant)
+        drawRampStairs(ctx, own, tile.ramp, bottom, tile.variant)
       } else if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
-        drawFloor(ctx, view, tile.x, tile.y, tile.bitmap, tile.elevation)
+        drawFloor(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation)
       } else if (tile.sprite === 'wall') {
-        drawWall(ctx, view, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
-      } else drawOpening(ctx, view, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant)
+        drawWall(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
+      } else drawOpening(ctx, own, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant)
       if (tile.stairs && tile.sprite === 'floor') {
-        drawStairs(ctx, view, tile.x, tile.y, tile.stairs, tile.elevation, tile.variant)
+        drawStairs(ctx, own, tile.x, tile.y, tile.stairs, tile.elevation, tile.variant)
       }
       ctx.globalAlpha = 1
     })
@@ -1991,6 +2012,10 @@ function outlineRoom(
   color: string,
   lineWidth: number,
 ): void {
+  if (room.parts) {
+    outlineShape(ctx, view, room, color, lineWidth)
+    return
+  }
   const floor = liftCorners(
     screenCorners(rectCorners(room.rect, view.camera)),
     view.camera,
@@ -2008,6 +2033,43 @@ function outlineRoom(
   ctx.lineTo(floor.w.x, floor.w.y)
   ctx.lineTo(top.w.x, top.w.y)
   ctx.closePath()
+  ctx.stroke()
+  ctx.restore()
+}
+
+/**
+ * A merged room has no single box to trace, so its outline follows every cell
+ * edge with outside beyond it, along the floor and again along the wall tops.
+ */
+function outlineShape(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  room: Room,
+  color: string,
+  lineWidth: number,
+): void {
+  const base = roomLift(room.elevation)
+  const edges: [number, number, number, number][] = []
+  for (const cell of roomCells(room)) {
+    const { x, y } = cell
+    if (!roomContains(room, x, y - 1)) edges.push([x, y, x + 1, y])
+    if (!roomContains(room, x, y + 1)) edges.push([x, y + 1, x + 1, y + 1])
+    if (!roomContains(room, x - 1, y)) edges.push([x, y, x, y + 1])
+    if (!roomContains(room, x + 1, y)) edges.push([x + 1, y, x + 1, y + 1])
+  }
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = lineWidth
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  for (const height of [base, base + WALL_HEIGHT]) {
+    for (const [x0, y0, x1, y1] of edges) {
+      const a = lift(cellToScreen(x0, y0, view.camera), view.camera, height)
+      const b = lift(cellToScreen(x1, y1, view.camera), view.camera, height)
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+    }
+  }
   ctx.stroke()
   ctx.restore()
 }

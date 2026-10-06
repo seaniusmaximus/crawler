@@ -4,16 +4,17 @@ import { floorAtOrder, floorName, packFloors } from '../model/floors.ts'
 import { linkedFloors, roomStairLandings, stairLandings, stripStairs } from '../model/stairs.ts'
 import type { StairLanding } from '../model/stairs.ts'
 import {
-  interiorRect,
   intersectRect,
-  rectContains,
   rectsOverlap,
+  roomContains,
+  roomFloorBounds,
+  roomTileKind,
   sameRect,
-  tileKindIn,
   topmostRoomAt,
   translateRect,
 } from '../model/rect.ts'
 import { linkedGroup, makeLink, roomsThrough, sameLink } from '../model/links.ts'
+import { mergeRooms, redirectLinks, roomsTouch, splitRoom } from '../model/merge.ts'
 import {
   anchorFromGrid,
   canPlacePlayer,
@@ -32,6 +33,7 @@ import {
   playerSize,
   playerStatuses,
   playerVisualCenter,
+  spotInRoom,
   standOnFloor,
 } from '../model/players.ts'
 import {
@@ -39,7 +41,7 @@ import {
   nextTurnPlayerId,
   normalizeCombat,
   normalizeInitiativeRoll,
-  playerForInitiativeRoll,
+  tokenForRoll,
   sortByInitiative,
 } from '../model/combat.ts'
 import type { DiceRoll } from '../model/dice.ts'
@@ -53,6 +55,7 @@ import type { ElevationRamp } from '../model/types.ts'
 import { connectedOpenings } from '../model/openings.ts'
 import type { OpeningSpot } from '../model/openings.ts'
 import { cellKey, openingAt, parseCellKey } from '../model/tiles.ts'
+import { tilesetById } from '../tiles/sets/index.ts'
 import type {
   Cell,
   CellRect,
@@ -130,6 +133,7 @@ function shiftRoom(room: Room, dx: number, dy: number): Room {
   return {
     ...room,
     rect: translateRect(room.rect, dx, dy),
+    ...(room.parts ? { parts: room.parts.map((part) => translateRect(part, dx, dy)) } : {}),
     openings: shiftOpenings(room.openings, dx, dy),
     openingOpen: shiftFlags(room.openingOpen ?? {}, dx, dy),
     stairs: shiftBlocks(room.stairs, dx, dy),
@@ -148,6 +152,11 @@ function mapRoom(floor: Floor, roomId: string, change: (room: Room) => Room): Fl
     ...floor,
     rooms: floor.rooms.map((room) => (room.id === roomId ? change(room) : room)),
   }
+}
+
+function withoutTileset(room: Room): Room {
+  const { tileset: _tileset, ...rest } = room
+  return rest
 }
 
 /** A new staircase takes over the space, so blocks never overlap. */
@@ -185,7 +194,7 @@ function mirrorOnto(
   const existing = floorAtOrder(floors, order)
   const floor = existing ?? createFloor(order)
   const target = topmostRoomAt(floor.rooms, region.minX, region.minY)
-  const landing = target ? intersectRect(region, interiorRect(target.rect)) : null
+  const landing = target ? intersectRect(region, roomFloorBounds(target)) : null
 
   let rooms: Room[]
   if (target && landing) {
@@ -200,6 +209,7 @@ function mirrorOnto(
         id: uid(),
         name: taken ? nextRoomName(floor.rooms) : source.name,
         rect: source.rect,
+        ...(source.parts ? { parts: source.parts } : {}),
         openings: {},
         openingOpen: {},
         stairs: [{ rect: region, dir: inverse }],
@@ -268,6 +278,13 @@ interface DungeonState {
   unlinkRooms: (floorId: string, link: Link) => void
   /** Join two rooms so they drag together, or split them if they already do. */
   toggleLink: (floorId: string, a: string, b: string) => void
+  /**
+   * Fold room `otherId` into `keepId`, making one room of both shapes. False
+   * when they neither touch nor overlap, since a room must be one piece.
+   */
+  mergeRooms: (floorId: string, keepId: string, otherId: string) => boolean
+  /** Undo merges: one plain room per rectangle the merged room was made of. */
+  splitRoom: (floorId: string, roomId: string) => void
   /** Visual elevation stairs between rooms; overlapping ramps are replaced. */
   addRamp: (floorId: string, ramp: Omit<ElevationRamp, 'id'>) => void
   /** Drop every ramp the rect touches. */
@@ -281,6 +298,11 @@ interface DungeonState {
   addPlayer: (floorId: string) => string | null
   addMonster: (floorId: string) => string | null
   movePlayer: (playerId: string, floorId: string, x: number, y: number) => boolean
+  /**
+   * Bring a token, from wherever it is, into a room: to the free spot nearest
+   * `near`. False when the room has no space for it.
+   */
+  pullPlayer: (playerId: string, floorId: string, roomId: string, near: Cell) => boolean
   renamePlayer: (playerId: string, name: string) => void
   renameCharacter: (playerId: string, characterName: string) => void
   setPlayerPortrait: (playerId: string, portrait: string | null) => void
@@ -313,7 +335,13 @@ interface DungeonState {
   advanceTurn: () => void
   clearInitiative: () => void
   setTravel: (travel: TokenTravel | null) => void
-  setTileset: (id: string) => void
+  /**
+   * Switch the map's tileset. With `keepRoomTilesets`, rooms that have their own
+   * keep it; otherwise every room takes the new one.
+   */
+  setTileset: (id: string, keepRoomTilesets?: boolean) => void
+  /** Give one room its own tileset; null (or the map's own) makes it follow the map again. */
+  setRoomTileset: (floorId: string, roomId: string, id: string | null) => void
   playTravel: () => void
   finishTravel: () => void
 }
@@ -427,7 +455,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
           players: (dungeon.players ?? []).map((player) => {
             if (player.floorId !== floorId) return player
             const cells = playerFootprint(player.x, player.y, playerSize(player))
-            if (!cells.some((cell) => moving.some((item) => rectContains(item.rect, cell.x, cell.y)))) {
+            if (!cells.some((cell) => moving.some((item) => roomContains(item, cell.x, cell.y)))) {
               return player
             }
             return { ...player, x: player.x + dx, y: player.y + dy }
@@ -441,7 +469,8 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
   resizeRoom: (floorId, roomId, rect) => {
     set({
       dungeon: mapFloor(get().dungeon, floorId, (floor) =>
-        mapRoom(floor, roomId, (room) => ({ ...room, rect })),
+        // A merged room has no single box to stretch; split it to resize the pieces.
+        mapRoom(floor, roomId, (room) => (room.parts ? room : { ...room, rect })),
       ),
     })
   },
@@ -459,7 +488,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             if (opening) {
               openings[key] = opening
               if (opening !== 'door' && opening !== 'window') delete openingOpen[key]
-            } else if (tileKindIn(room.rect, cell.x, cell.y) === 'floor') {
+            } else if (roomTileKind(room, cell.x, cell.y) === 'floor') {
               // Extra walls live as overrides on floor tiles; removing a door
               // there should put the painted wall back, not a hole.
               openings[key] = 'wall'
@@ -539,7 +568,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
           const openings = { ...room.openings }
           for (const cell of cells) {
             const key = cellKey(cell.x, cell.y)
-            const geometric = tileKindIn(room.rect, cell.x, cell.y)
+            const geometric = roomTileKind(room, cell.x, cell.y)
             if (add) {
               if (geometric === 'wall') delete openings[key]
               else openings[key] = 'wall'
@@ -576,6 +605,42 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             ? floor.links.filter((item) => !sameLink(item, link))
             : [...floor.links, link],
         }
+      }),
+    })
+  },
+
+  mergeRooms: (floorId, keepId, otherId) => {
+    if (keepId === otherId) return false
+    const floor = get().dungeon.floors.find((item) => item.id === floorId)
+    const keep = floor?.rooms.find((item) => item.id === keepId)
+    const other = floor?.rooms.find((item) => item.id === otherId)
+    if (!keep || !other || !roomsTouch(keep, other)) return false
+    const merged = mergeRooms(keep, other)
+    set({
+      dungeon: mapFloor(get().dungeon, floorId, (item) => ({
+        ...item,
+        rooms: item.rooms
+          .filter((room) => room.id !== otherId)
+          .map((room) => (room.id === keepId ? merged : room)),
+        links: redirectLinks(item.links, otherId, keepId),
+      })),
+    })
+    return true
+  },
+
+  splitRoom: (floorId, roomId) => {
+    set({
+      dungeon: mapFloor(get().dungeon, floorId, (floor) => {
+        const room = floor.rooms.find((item) => item.id === roomId)
+        if (!room?.parts) return floor
+        const taken = [...floor.rooms]
+        const pieces = room.parts.slice(1).map(() => {
+          const piece = { id: uid(), name: nextRoomName(taken) }
+          taken.push({ ...room, ...piece })
+          return piece
+        })
+        const split = splitRoom(room, pieces)
+        return { ...floor, rooms: floor.rooms.flatMap((item) => (item.id === roomId ? split : [item])) }
       }),
     })
   },
@@ -622,7 +687,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         for (let i = 0; i < players.length; i++) {
           const player = players[i]
           if (!player || player.floorId !== floorId) continue
-          if (!rectContains(room.rect, player.x, player.y)) continue
+          if (!roomContains(room, player.x, player.y)) continue
           const spot = standOnFloor(nextFloor, players, player.id)
           if (spot) players[i] = { ...player, x: spot.x, y: spot.y }
         }
@@ -799,6 +864,26 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         players: (dungeon.players ?? []).map((player) =>
           player.id === playerId ? { ...player, floorId, x, y } : player,
         ),
+      },
+    })
+    return true
+  },
+
+  pullPlayer: (playerId, floorId, roomId, near) => {
+    const dungeon = get().dungeon
+    const floor = dungeon.floors.find((item) => item.id === floorId)
+    const room = floor?.rooms.find((item) => item.id === roomId)
+    const token = (dungeon.players ?? []).find((player) => player.id === playerId)
+    if (!floor || !room || !token) return false
+    const players = dungeon.players ?? []
+    const spot = spotInRoom(room, floor.rooms, players, floorId, playerSize(token), near, floor.ramps ?? [], playerId)
+    if (!spot) return false
+    set({
+      dungeon: {
+        ...dungeon,
+        players: players.map((player) => (player.id === playerId ? { ...player, floorId, x: spot.x, y: spot.y } : player)),
+        // A walk this tab was planning for the token no longer starts where it stood.
+        travel: dungeon.travel?.playerId === playerId ? null : dungeon.travel,
       },
     })
     return true
@@ -1070,7 +1155,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
 
   recordInitiativeRoll: (roll) => {
     const dungeon = get().dungeon
-    const match = playerForInitiativeRoll(roll, dungeon.players ?? [])
+    const match = tokenForRoll(roll, dungeon.players ?? [])
     if (!match) return
     get().setInitiativeRoll(match.id, roll.total)
   },
@@ -1098,10 +1183,30 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     })
   },
 
-  setTileset: (id) => {
+  setTileset: (id, keepRoomTilesets = false) => {
     const dungeon = get().dungeon
     if (dungeon.tileset === id) return
-    set({ dungeon: { ...dungeon, tileset: id } })
+    // A room left on the map's new look no longer needs its own.
+    const follows = (room: Room) => !room.tileset || !keepRoomTilesets || tilesetById(room.tileset).id === id
+    const floors = dungeon.floors.map((floor) =>
+      floor.rooms.some((room) => room.tileset && follows(room))
+        ? { ...floor, rooms: floor.rooms.map((room) => (room.tileset && follows(room) ? withoutTileset(room) : room)) }
+        : floor,
+    )
+    set({ dungeon: { ...dungeon, tileset: id, floors } })
+  },
+
+  setRoomTileset: (floorId, roomId, id) => {
+    const dungeon = get().dungeon
+    const own = id && tilesetById(id).id !== tilesetById(dungeon.tileset).id ? id : null
+    set({
+      dungeon: mapFloor(dungeon, floorId, (floor) =>
+        mapRoom(floor, roomId, (room) => {
+          if ((room.tileset ?? null) === own) return room
+          return own ? { ...room, tileset: own } : withoutTileset(room)
+        }),
+      ),
+    })
   },
 
   setTravel: (travel) => {

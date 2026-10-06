@@ -766,7 +766,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 5px;
+  padding: 5px 15px;
   border-radius: 14px;
 }
 
@@ -3227,12 +3227,12 @@ a:hover {
   }
 }
 
+/* Sized to the ring's radius inline; centred in the menu's box. */
 .ring-guide {
   position: absolute;
-  left: 50px;
-  top: 50px;
-  width: 160px;
-  height: 160px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   border: 1px dashed rgba(232, 196, 104, 0.4);
   border-radius: 50%;
   pointer-events: none;
@@ -3501,6 +3501,81 @@ a:hover {
   background: var(--status, var(--gold));
 }
 
+/* Pull token: every token on the map, one per row, scrolling past about eight. */
+.radial-pull {
+  width: 280px;
+}
+
+.radial-pull-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 290px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+.radial-pull-item {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 10px 4px 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--wash);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.radial-pull-item:hover:not(:disabled) {
+  border-color: var(--gold-line);
+}
+
+.radial-pull-item.is-on {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 18%, transparent);
+}
+
+/* Tileset rows have no avatar, so they keep the text off the edge. */
+.radial-tilesets .radial-pull-item {
+  padding-left: 10px;
+}
+
+.radial-pull-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.radial-pull-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radial-pull-place {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.radial-pull-note {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.radial-pull-note.is-warn {
+  color: var(--low);
+}
+
 /* ---------- Dialogs ---------- */
 
 .dialog-backdrop {
@@ -3601,6 +3676,30 @@ a.dialog-button {
   border-color: var(--gold-hi);
   background: var(--gold-hi);
   color: var(--gold-ink);
+}
+
+/* ---------- Tileset prompt ---------- */
+
+/* The two choices side by side at equal width, Cancel a quiet full row beneath. */
+.tileset-dialog .dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 16px;
+}
+
+.tileset-dialog .dialog-button {
+  padding: 0 10px;
+}
+
+.tileset-dialog .dialog-button.is-cancel {
+  grid-column: 1 / -1;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.tileset-dialog .dialog-button.is-cancel:hover {
+  border-color: var(--line);
+  color: var(--text);
 }
 
 /* ---------- Seat prompt ---------- */

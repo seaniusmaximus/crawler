@@ -3,7 +3,7 @@ import type { DoorStyle, Tool } from '../../model/tools.ts'
 import type { StairsDir } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
-import { TILESETS, tilesetById } from '../../tiles/sets/index.ts'
+import { roomsWithOwnTileset, TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Icon } from '../../ui/Icon.tsx'
 
 interface ToolDef {
@@ -11,7 +11,7 @@ interface ToolDef {
   label: string
   shortcut: string
   hint: string
-  options?: 'doors' | 'stairs'
+  options?: 'doors' | 'stairs' | 'link'
   /** Starts a new group, drawn with a rule before it. */
   group?: boolean
 }
@@ -23,7 +23,7 @@ const TOOLS: readonly ToolDef[] = [
   { id: 'doors', label: 'Doors', shortcut: 'D', hint: 'Drag along a wall · Right-click a door to open or close it', options: 'doors' },
   { id: 'windows', label: 'Windows', shortcut: 'W', hint: 'Drag along a wall · Right-click a window to open or close it' },
   { id: 'stairs', label: 'Stairs', shortcut: 'S', hint: 'Drag inside a room to lead up or down a floor', options: 'stairs', group: true },
-  { id: 'link', label: 'Link', shortcut: 'L', hint: 'Click two rooms to link them' },
+  { id: 'link', label: 'Link', shortcut: 'L', hint: 'Click two rooms to link them so they move together', options: 'link' },
 ]
 
 const DOOR_STYLES: ReadonlyArray<{ id: DoorStyle; label: string }> = [
@@ -40,16 +40,27 @@ const STAIRS_DIRS: ReadonlyArray<{ id: StairsDir; label: string; title: string }
 /** The Stairs tool set to "Between rooms" works as its own tool, with its own hint. */
 const BETWEEN_HINT = 'Drag from one room into a higher or lower one to join them with stairs'
 
+/** The Link button set to "Merge" works as its own tool, with its own hint. */
+const MERGE_HINT = 'Click two touching rooms to merge them into one · Split it again from its room menu'
+
 export function ToolPanel() {
   const viewMode = useEditorStore((state) => state.viewMode)
   const tool = useEditorStore((state) => state.tool)
   const setTool = useEditorStore((state) => state.setTool)
+  const roomsLocked = useEditorStore((state) => state.roomsLocked)
 
   if (viewMode === 'player') return null
-  // "Between rooms" is a setting of the Stairs button.
-  const shown = tool === 'ramp' ? 'stairs' : tool
+  // "Between rooms" is a setting of the Stairs button; "Merge" one of the Link button.
+  const shown = tool === 'ramp' ? 'stairs' : tool === 'merge' ? 'link' : tool
   const active = TOOLS.find((item) => item.id === shown)
-  const hint = tool === 'ramp' ? BETWEEN_HINT : active?.hint
+  const hint =
+    tool === 'ramp'
+      ? BETWEEN_HINT
+      : tool === 'merge'
+        ? MERGE_HINT
+        : tool === 'select' && roomsLocked
+          ? 'Move tokens without drawing · rooms are locked in place'
+          : active?.hint
 
   return (
     <div className="tool-dock">
@@ -70,10 +81,12 @@ export function ToolPanel() {
               </button>
               {item.options === 'doors' ? <DoorOptions /> : null}
               {item.options === 'stairs' ? <StairsOptions /> : null}
+              {item.options === 'link' ? <LinkOptions /> : null}
             </div>
           </Fragment>
         ))}
         <span className="tool-rule" aria-hidden />
+        <MovementLock />
         <TilesetSelect />
       </div>
       {active ? (
@@ -85,18 +98,45 @@ export function ToolPanel() {
   )
 }
 
-/** The look every room on the map is drawn with; changing it restyles existing rooms too. */
+/** Movement lock: while on, dragging a room selects it (and pans) instead of moving it, so play can't shift the map. */
+function MovementLock() {
+  const locked = useEditorStore((state) => state.roomsLocked)
+  const setLocked = useEditorStore((state) => state.setRoomsLocked)
+  const label = locked ? 'Movement lock on: rooms stay put' : 'Movement lock off: rooms can be dragged'
+  return (
+    <button
+      type="button"
+      className={`tool${locked ? ' is-active' : ''}`}
+      onClick={() => setLocked(!locked)}
+      aria-pressed={locked}
+      aria-label="Movement lock"
+      title={`${label} — click to ${locked ? 'unlock' : 'lock'}`}
+    >
+      <Icon id={locked ? 'lock' : 'unlock'} size={19} />
+    </button>
+  )
+}
+
+/**
+ * The look rooms on the map are drawn with; changing it restyles existing rooms
+ * too. When some rooms have their own tileset, the DM is asked whether they keep it.
+ */
 function TilesetSelect() {
   const tileset = useDungeonStore((state) => tilesetById(state.dungeon.tileset))
-  const setTileset = useDungeonStore((state) => state.setTileset)
+
+  function choose(id: string): void {
+    const dungeon = useDungeonStore.getState()
+    if (roomsWithOwnTileset(dungeon.dungeon, id) > 0) useEditorStore.getState().promptTileset(id)
+    else dungeon.setTileset(id)
+  }
 
   return (
     <select
       className="tileset-select"
       value={tileset.id}
-      onChange={(event) => setTileset(event.target.value)}
+      onChange={(event) => choose(event.target.value)}
       aria-label="Tileset"
-      title="Tileset — the look of every room on the map"
+      title="Tileset — the look of the rooms on the map"
     >
       {TILESETS.map((set) => (
         <option key={set.id} value={set.id}>
@@ -164,6 +204,33 @@ function StairsOptions() {
           Between rooms
         </button>
       </li>
+    </ul>
+  )
+}
+
+function LinkOptions() {
+  const merge = useEditorStore((state) => state.linkMerge)
+  const setLinkMerge = useEditorStore((state) => state.setLinkMerge)
+  const options = [
+    { merge: false, label: 'Link', title: 'Keep the rooms separate but move them together' },
+    { merge: true, label: 'Merge', title: 'Combine the rooms into one room of any shape' },
+  ]
+
+  return (
+    <ul className="tool-options" aria-label="How rooms join">
+      {options.map((option) => (
+        <li key={option.label}>
+          <button
+            type="button"
+            className={`tool-option${option.merge === merge ? ' is-active' : ''}`}
+            onClick={() => setLinkMerge(option.merge)}
+            aria-pressed={option.merge === merge}
+            title={option.title}
+          >
+            {option.label}
+          </button>
+        </li>
+      ))}
     </ul>
   )
 }

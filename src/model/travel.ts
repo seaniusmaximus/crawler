@@ -1,4 +1,4 @@
-import { uniqueTrail, walkCells } from './movement.ts'
+import { uniqueTrail } from './movement.ts'
 import type { Cell } from './types.ts'
 
 export type TravelPhase = 'preview' | 'playing'
@@ -33,35 +33,57 @@ function smooth(t: number): number {
   return u * u * (3 - 2 * u)
 }
 
-function samplePath(
-  steps: readonly Cell[],
-  u: number,
-): { x: number; y: number; dx: number; dy: number } {
-  const first = steps[0]
-  const last = steps[steps.length - 1]
-  if (!first || !last) return { x: 0, y: 0, dx: 1, dy: 0 }
-  const segs = steps.length - 1
-  if (segs <= 0) return { x: first.x, y: first.y, dx: 1, dy: 0 }
-  const clamped = Math.min(1, Math.max(0, u))
-  const f = clamped * segs
-  const i = Math.min(segs - 1, Math.floor(f))
-  const t = f - i
-  const from = steps[i]
-  const to = steps[i + 1] ?? from
-  if (!from || !to) return { x: last.x, y: last.y, dx: 1, dy: 0 }
-  return {
-    x: from.x + (to.x - from.x) * t,
-    y: from.y + (to.y - from.y) * t,
-    dx: to.x - from.x,
-    dy: to.y - from.y,
-  }
+/** Grid steps a straight leg costs (Chebyshev), so long legs take proportionally longer. */
+function legSteps(from: Cell, to: Cell): number {
+  return Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y))
 }
 
-function lastStep(steps: readonly Cell[]): { x: number; y: number; dx: number; dy: number } {
-  const last = steps[steps.length - 1]
-  const prev = steps[steps.length - 2] ?? last
-  if (!last || !prev) return { x: 0, y: 0, dx: 1, dy: 0 }
-  return { x: last.x, y: last.y, dx: last.x - prev.x, dy: last.y - prev.y }
+function totalSteps(trail: readonly Cell[]): number {
+  let steps = 0
+  for (let i = 1; i < trail.length; i++) {
+    const from = trail[i - 1]
+    const to = trail[i]
+    if (from && to) steps += legSteps(from, to)
+  }
+  return steps
+}
+
+/**
+ * Point `u` of the way along the trail, sliding straight between waypoints so the
+ * token follows the line that was drawn. dx/dy is the leg's per-step direction.
+ */
+function samplePath(
+  trail: readonly Cell[],
+  u: number,
+): { x: number; y: number; dx: number; dy: number } {
+  const first = trail[0]
+  if (!first) return { x: 0, y: 0, dx: 1, dy: 0 }
+  const total = totalSteps(trail)
+  if (total <= 0) return { x: first.x, y: first.y, dx: 1, dy: 0 }
+  let remaining = Math.min(1, Math.max(0, u)) * total
+  for (let i = 1; i < trail.length; i++) {
+    const from = trail[i - 1]
+    const to = trail[i]
+    if (!from || !to) continue
+    const len = legSteps(from, to)
+    if (len === 0) continue
+    const isLast = i === trail.length - 1
+    if (remaining <= len || isLast) {
+      const t = Math.min(1, remaining / len)
+      return {
+        x: from.x + (to.x - from.x) * t,
+        y: from.y + (to.y - from.y) * t,
+        dx: (to.x - from.x) / len,
+        dy: (to.y - from.y) / len,
+      }
+    }
+    remaining -= len
+  }
+  return { x: first.x, y: first.y, dx: 1, dy: 0 }
+}
+
+function lastStep(trail: readonly Cell[]): { x: number; y: number; dx: number; dy: number } {
+  return samplePath(trail, 1)
 }
 
 /** Screen-right is +x − y in 2:1 iso; lean uses that heading. */
@@ -109,28 +131,14 @@ export function normalizeTravel(value: unknown): TokenTravel | null {
   }
 }
 
-export function expandSteps(cells: readonly Cell[]): Cell[] {
-  if (cells.length === 0) return []
-  const first = cells[0]
-  if (!first) return []
-  const out: Cell[] = [{ x: first.x, y: first.y }]
-  for (let i = 1; i < cells.length; i++) {
-    const next = cells[i]
-    const prev = out[out.length - 1]
-    if (!next || !prev) continue
-    out.push(...walkCells(prev, next))
-  }
-  return uniqueTrail(out)
-}
-
 export function travelPose(travel: TokenTravel, now: number): TravelPose {
-  const steps = expandSteps(travel.cells)
-  const end = lastStep(steps)
+  const trail = uniqueTrail(travel.cells)
+  const end = lastStep(trail)
   const dest = { x: end.x, y: end.y }
-  if (travel.phase !== 'playing' || travel.playAt == null || steps.length < 2) {
+  const segs = totalSteps(trail)
+  if (travel.phase !== 'playing' || travel.playAt == null || segs <= 0) {
     return { x: dest.x, y: dest.y, tilt: 0, done: false }
   }
-  const segs = steps.length - 1
   const slide = slideMs(segs)
   const elapsed = Math.max(0, now - travel.playAt)
   if (elapsed >= slide + SETTLE_MS) return { x: dest.x, y: dest.y, tilt: 0, done: true }
@@ -140,7 +148,7 @@ export function travelPose(travel: TokenTravel, now: number): TravelPose {
   if (elapsed < slide) {
     const u = elapsed / slide
     const along = u * u
-    const at = samplePath(steps, along)
+    const at = samplePath(trail, along)
     const lean = heading(at.dx, at.dy)
     const wind = Math.min(1, elapsed / 90)
     // Hold the lean-back, then start coming upright as the slide arrives.

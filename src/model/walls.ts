@@ -1,4 +1,4 @@
-import { rectContains, tileKindIn } from './rect.ts'
+import { roomContains, roomParts, roomTileKind } from './rect.ts'
 import { cellKey, openingAt, tileLooks } from './tiles.ts'
 import type { Cell, CellRect, Room } from './types.ts'
 
@@ -54,8 +54,9 @@ function build(rooms: readonly Room[]): SharedWalls {
     const rect = room.rect
     for (let y = rect.minY; y <= rect.maxY; y++) {
       for (let x = rect.minX; x <= rect.maxX; x++) {
+        if (!roomContains(room, x, y)) continue
         const key = cellKey(x, y)
-        if (tileKindIn(rect, x, y) === 'floor') {
+        if (roomTileKind(room, x, y) === 'floor') {
           floors.add(key)
           continue
         }
@@ -70,7 +71,7 @@ function build(rooms: readonly Room[]): SharedWalls {
     const rect = room.rect
     for (let y = rect.minY; y <= rect.maxY; y++) {
       for (let x = rect.minX; x <= rect.maxX; x++) {
-        if (tileKindIn(rect, x, y) !== 'wall') continue
+        if (!roomContains(room, x, y) || roomTileKind(room, x, y) !== 'wall') continue
         if (!defers(room, index, x, y, wallOwner, floors)) continue
         let cells = shared.get(room.id)
         if (!cells) {
@@ -99,7 +100,7 @@ function defers(
   if (wallOwner.get(cellKey(x, y)) !== index) return false
   // A room always keeps its own corners. They are where its two wall runs meet,
   // so giving one up notches the wall where rooms meet in an L.
-  if (isCorner(room.rect, x, y)) return false
+  if (roomParts(room).some((part) => isCorner(part, x, y))) return false
   if (!touchesOlderWall(index, x, y, wallOwner)) return false
 
   // Giving up a wall must not expose the inside. Diagonals count: without them
@@ -107,7 +108,7 @@ function defers(
   for (const step of RING) {
     const nx = x + step.x
     const ny = y + step.y
-    if (rectContains(room.rect, nx, ny)) continue
+    if (roomContains(room, nx, ny)) continue
     const key = cellKey(nx, ny)
     if (!wallOwner.has(key) || floors.has(key)) return false
   }

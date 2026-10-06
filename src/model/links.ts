@@ -1,4 +1,4 @@
-import { rectContains, tileKindIn } from './rect.ts'
+import { roomContains, roomTileKind } from './rect.ts'
 import { openingAt, parseCellKey, wallAxis } from './tiles.ts'
 import { sharedWalls, showsWall } from './walls.ts'
 import type { Cell, CellRect, Link, Opening, Room } from './types.ts'
@@ -42,11 +42,11 @@ export function roomsThrough(rooms: readonly Room[], room: Room, cell: Cell): Ro
     const x = cell.x + step.x
     const y = cell.y + step.y
     // Only the far side counts; the near side is the room's own inside.
-    if (rectContains(room.rect, x, y)) continue
+    if (roomContains(room, x, y)) continue
     for (const other of rooms) {
       if (other.id === room.id || found.includes(other)) continue
-      if (!rectContains(other.rect, x, y)) continue
-      const walkable = tileKindIn(other.rect, x, y) === 'floor' || shared.has(other.id, x, y)
+      if (!roomContains(other, x, y)) continue
+      const walkable = roomTileKind(other, x, y) === 'floor' || shared.has(other.id, x, y)
       if (walkable) found.push(other)
     }
   }
@@ -103,7 +103,7 @@ function doorways(rooms: readonly Room[], room: Room, partner: Room): Cell[] {
   const cells: Cell[] = []
   for (const key of Object.keys(room.openings)) {
     const cell = parseCellKey(key)
-    if (!rectContains(room.rect, cell.x, cell.y)) continue
+    if (!roomContains(room, cell.x, cell.y)) continue
     if (roomsThrough(rooms, room, cell).some((item) => item.id === partner.id)) cells.push(cell)
   }
   return cells
@@ -131,8 +131,8 @@ function badgeCell(rooms: readonly Room[], room: Room, partner: Room): Cell | nu
 
   const shared = sharedWalls(rooms)
   for (const cell of candidates) {
-    if (!rectContains(room.rect, cell.x, cell.y)) continue
-    if (tileKindIn(room.rect, cell.x, cell.y) !== 'wall') continue
+    if (!roomContains(room, cell.x, cell.y)) continue
+    if (roomTileKind(room, cell.x, cell.y) !== 'wall') continue
     if (shared.has(room.id, cell.x, cell.y)) continue
     if (openingAt(room, cell.x, cell.y)) continue
     return cell
@@ -147,12 +147,12 @@ function boundaryWalls(rooms: readonly Room[], room: Room, partner: Room): Cell[
   const rect = room.rect
   for (let y = rect.minY; y <= rect.maxY; y++) {
     for (let x = rect.minX; x <= rect.maxX; x++) {
-      if (!showsWall(rooms, room, x, y)) continue
+      if (!roomContains(room, x, y) || !showsWall(rooms, room, x, y)) continue
       for (const step of STEPS) {
         const nx = x + step.x
         const ny = y + step.y
-        if (rectContains(room.rect, nx, ny)) continue
-        if (rectContains(partner.rect, nx, ny)) {
+        if (roomContains(room, nx, ny)) continue
+        if (roomContains(partner, nx, ny)) {
           cells.push({ x, y })
           break
         }

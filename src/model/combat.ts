@@ -31,20 +31,35 @@ export function isInitiativeRoll(roll: Pick<DiceRoll, 'title' | 'kind'>): boolea
   return /\binitiative\b/.test(text)
 }
 
-export function playerForInitiativeRoll(
-  roll: Pick<DiceRoll, 'character' | 'characterId'>,
+/** Names compared loosely: case and runs of spaces don't matter. */
+function sameName(a: string, b: string): boolean {
+  const norm = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase()
+  return norm(a) !== '' && norm(a) === norm(b)
+}
+
+/**
+ * The token a roll belongs to: the one it names by id, else the one linked to
+ * its D&D Beyond character, else the one whose character (or player) has its
+ * name. Undefined when none fits.
+ */
+export function tokenForRoll(
+  roll: Pick<DiceRoll, 'character' | 'characterId' | 'tokenId'>,
   players: readonly Player[],
 ): Player | undefined {
+  const tokenId = String(roll.tokenId ?? '').trim()
+  if (tokenId) {
+    const match = players.find((player) => player.id === tokenId)
+    if (match) return match
+  }
   const characterId = String(roll.characterId ?? '').trim()
   if (characterId) {
     const match = players.find((player) => player.characterId === characterId)
     if (match) return match
   }
-  const name = String(roll.character ?? '').trim().toLowerCase()
-  if (!name) return undefined
+  const name = String(roll.character ?? '')
   return (
-    players.find((player) => player.characterName.toLowerCase() === name) ??
-    players.find((player) => player.name.toLowerCase() === name)
+    players.find((player) => sameName(player.characterName, name)) ??
+    players.find((player) => sameName(player.name, name))
   )
 }
 

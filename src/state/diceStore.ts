@@ -11,6 +11,7 @@ import {
   type RollRequest,
 } from '../model/dice.ts'
 import { useDungeonStore } from './dungeonStore.ts'
+import { untracked } from './history.ts'
 
 export type BridgeStatus = 'disconnected' | 'connected'
 
@@ -29,7 +30,7 @@ interface DiceState {
   setCount: (count: number) => void
   setModifier: (modifier: number) => void
   /** Roll the tray's dice; `who` names the roller's character so the roll shows at their token. */
-  roll: (faces: number, who?: Pick<RollRequest, 'character' | 'characterId'>) => void
+  roll: (faces: number, who?: Pick<RollRequest, 'character' | 'characterId' | 'tokenId'>) => void
   ingest: (raw: IncomingRoll | IncomingRoll[]) => void
   replaceRolls: (rolls: DiceRoll[]) => void
   markBridge: (connected: boolean) => void
@@ -69,7 +70,19 @@ export function getDiceBridge(): Pick<DiceState, 'ingest' | 'markBridge'> {
   return window.__crawlerDice ?? useDiceStore.getState()
 }
 
-export const useDiceStore = create<DiceState>((set) => ({
+const arrivals = new EventTarget()
+
+/**
+ * Hear each roll as it arrives (rolled here, by the table's relay, or from D&D
+ * Beyond), oldest first; not the log a table hands over on join. Returns an unsubscribe.
+ */
+export function onNewRolls(listener: (rolls: DiceRoll[]) => void): () => void {
+  const handle = (event: Event) => listener((event as CustomEvent<DiceRoll[]>).detail)
+  arrivals.addEventListener('rolls', handle)
+  return () => arrivals.removeEventListener('rolls', handle)
+}
+
+export const useDiceStore = create<DiceState>((set, get) => ({
   rolls: [],
   open: false,
   count: 1,
@@ -97,26 +110,38 @@ export const useDiceStore = create<DiceState>((set) => ({
     set({ open: true })
     requestRoll({ count, faces, modifier, ...who })
   },
-  ingest: (raw) =>
-    set((state) => {
-      const incoming = (Array.isArray(raw) ? raw : [raw])
-        .map(normalizeRoll)
-        .filter((roll): roll is DiceRoll => roll != null)
-      if (incoming.length === 0) return state
-      let rolls = state.rolls
-      for (const roll of incoming) {
-        if (rolls.some((existing) => sameRoll(existing, roll))) continue
+  ingest: (raw) => {
+    const incoming = (Array.isArray(raw) ? raw : [raw])
+      .map(normalizeRoll)
+      .filter((roll): roll is DiceRoll => roll != null)
+    let rolls = get().rolls
+    const added: DiceRoll[] = []
+    // A second copy of a roll can know whose it is when the first didn't: in one browser, every
+    // tab hears a D&D Beyond roll from the extension, but only the roller's tab knows their token.
+    const placed: DiceRoll[] = []
+    for (const roll of incoming) {
+      const index = rolls.findIndex((existing) => sameRoll(existing, roll))
+      if (index < 0) {
         rolls = prepend(rolls, roll)
+        added.push(roll)
+        continue
       }
-      if (rolls !== state.rolls) {
-        for (const roll of incoming) {
-          if (isInitiativeRoll(roll)) useDungeonStore.getState().recordInitiativeRoll(roll)
-        }
+      const known = rolls[index]
+      if (roll.tokenId && !known.tokenId) {
+        const updated = { ...known, tokenId: roll.tokenId }
+        rolls = rolls.map((item, at) => (at === index ? updated : item))
+        placed.push(updated)
       }
-      if (rolls === state.rolls) return state
-      // Only a D&D Beyond roll proves the extension is talking to this page.
-      return incoming.some((roll) => roll.source === 'ddb') ? { rolls, bridge: 'connected' } : { rolls }
-    }),
+    }
+    if (added.length === 0 && placed.length === 0) return
+    for (const roll of [...added, ...placed]) {
+      // A roll landing isn't an edit to take back.
+      if (isInitiativeRoll(roll)) untracked(() => useDungeonStore.getState().recordInitiativeRoll(roll))
+    }
+    // Only a D&D Beyond roll proves the extension is talking to this page.
+    set(incoming.some((roll) => roll.source === 'ddb') ? { rolls, bridge: 'connected' } : { rolls })
+    if (added.length > 0) arrivals.dispatchEvent(new CustomEvent('rolls', { detail: added }))
+  },
   replaceRolls: (rolls) => set({ rolls: rolls.slice(0, MAX_ROLL_LOG) }),
   markBridge: (connected) =>
     set(connected ? { bridge: 'connected', bridgeSeen: true } : { bridge: 'disconnected' }),

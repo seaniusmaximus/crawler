@@ -36,7 +36,9 @@ export function DiceTray() {
   const myToken = useDungeonStore((state) =>
     guest && myPlayerId ? (state.dungeon.players ?? []).find((player) => player.id === myPlayerId) : undefined,
   )
-  const who = myToken ? { character: characterNameOf(myToken), characterId: myToken.characterId ?? undefined } : undefined
+  const who = myToken
+    ? { character: characterNameOf(myToken), characterId: myToken.characterId ?? undefined, tokenId: myToken.id }
+    : undefined
   const [faces, setFaces] = useState<number>(20)
   const [graceOver, setGraceOver] = useState(false)
   const latest = rolls[0] ?? null

@@ -22,6 +22,7 @@ function rollD20For(token: Player, bonus: number, title: string, kind: string): 
     kind,
     character: characterNameOf(token),
     characterId: token.characterId ?? undefined,
+    tokenId: token.id,
   })
 }
 

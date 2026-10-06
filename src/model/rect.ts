@@ -1,4 +1,4 @@
-import type { CellRect, Edge, Room, TileKind } from './types.ts'
+import type { Cell, CellRect, Edge, Room, TileKind } from './types.ts'
 
 export function normalizeRect(x0: number, y0: number, x1: number, y1: number): CellRect {
   return {
@@ -87,7 +87,84 @@ export function tileKindIn(rect: CellRect, x: number, y: number): TileKind {
 export function topmostRoomAt(rooms: readonly Room[], x: number, y: number): Room | undefined {
   for (let i = rooms.length - 1; i >= 0; i--) {
     const room = rooms[i]
-    if (room && rectContains(room.rect, x, y)) return room
+    if (room && roomContains(room, x, y)) return room
   }
   return undefined
+}
+
+/** The smallest rect around all of `rects`. */
+export function boundingRect(rects: readonly CellRect[]): CellRect {
+  return {
+    minX: Math.min(...rects.map((rect) => rect.minX)),
+    minY: Math.min(...rects.map((rect) => rect.minY)),
+    maxX: Math.max(...rects.map((rect) => rect.maxX)),
+    maxY: Math.max(...rects.map((rect) => rect.maxY)),
+  }
+}
+
+/** The rectangles a room is made of: its own, or each one merged into it. */
+export function roomParts(room: Room): readonly CellRect[] {
+  return room.parts ?? [room.rect]
+}
+
+export function isMerged(room: Room): boolean {
+  return room.parts !== undefined
+}
+
+export function roomContains(room: Room, x: number, y: number): boolean {
+  if (!rectContains(room.rect, x, y)) return false
+  if (!room.parts) return true
+  return room.parts.some((part) => rectContains(part, x, y))
+}
+
+/** All eight neighbours: an outline wall is one with outside anywhere around it. */
+const RING: readonly [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+]
+
+/**
+ * The room's own geometry at a cell it covers. A merged room keeps only the
+ * outline of the whole shape as wall: the walls that used to divide its parts
+ * open up into floor, so the parts read as one room.
+ */
+export function roomTileKind(room: Room, x: number, y: number): TileKind {
+  if (!room.parts) return tileKindIn(room.rect, x, y)
+  let wall = false
+  for (const part of room.parts) {
+    if (!rectContains(part, x, y)) continue
+    if (tileKindIn(part, x, y) === 'floor') return 'floor'
+    wall = true
+  }
+  if (!wall) return 'floor'
+  for (const [dx, dy] of RING) {
+    if (!roomContains(room, x + dx, y + dy)) return 'wall'
+  }
+  return 'floor'
+}
+
+/**
+ * Where floor can be inside the room. A plain room leaves out its wall ring; a
+ * merged one is irregular, so callers check each cell of its bounds.
+ */
+export function roomFloorBounds(room: Room): CellRect {
+  return room.parts ? room.rect : interiorRect(room.rect)
+}
+
+/** Every cell of `room`, each once even where its parts overlap. */
+export function roomCells(room: Room): Cell[] {
+  const cells: Cell[] = []
+  const rect = room.rect
+  for (let y = rect.minY; y <= rect.maxY; y++) {
+    for (let x = rect.minX; x <= rect.maxX; x++) {
+      if (roomContains(room, x, y)) cells.push({ x, y })
+    }
+  }
+  return cells
 }

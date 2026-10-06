@@ -21,6 +21,8 @@ export interface DiceRoll {
   source: DiceSource
   character: string
   characterId?: string
+  /** The token the roll belongs to, when the browser that made or caught it knew (see `tokenForRoll`). */
+  tokenId?: string
   title: string
   formula: string
   total: number
@@ -35,6 +37,7 @@ export interface IncomingRoll {
   source?: string
   character?: string
   characterId?: string
+  tokenId?: string
   title?: string
   formula?: string
   total?: number
@@ -62,6 +65,7 @@ export interface RollRequest {
   kind?: string
   character?: string
   characterId?: string
+  tokenId?: string
 }
 
 /** The largest die and modifier the relay will roll, so a request can't ask for nonsense. */
@@ -97,6 +101,7 @@ export function rollDice(request: RollRequest, source: DiceSource): DiceRoll {
     source,
     character: text(request.character),
     characterId: text(request.characterId) || undefined,
+    tokenId: text(request.tokenId) || undefined,
     title: text(request.title) || (n === 1 ? `d${sides}` : `${n}d${sides}`),
     formula: `${n}d${sides}${formatModifier(mod)}`,
     total: sum + mod,
@@ -139,6 +144,7 @@ export function normalizeRoll(raw: IncomingRoll): DiceRoll | null {
     source: sourceOf(raw.source),
     character: String(raw.character ?? '').trim(),
     characterId: String(raw.characterId ?? '').trim() || undefined,
+    tokenId: String(raw.tokenId ?? '').trim() || undefined,
     title: String(raw.title ?? '').trim() || formula || 'Roll',
     formula: formula || buildFormula(dice, modifier),
     total: inferred,

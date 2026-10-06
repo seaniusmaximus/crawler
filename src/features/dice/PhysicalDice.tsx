@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react'
 import { playerTokenCenter } from '../../canvas/pick.ts'
-import { playerForInitiativeRoll } from '../../model/combat.ts'
+import { tokenForRoll } from '../../model/combat.ts'
 import type { DiceRoll } from '../../model/dice.ts'
 import { resolveFloor } from '../../model/floors.ts'
-import { useDiceStore } from '../../state/diceStore.ts'
+import { onNewRolls, useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { tokenShown } from '../party/tokenInfo.ts'
@@ -11,8 +11,6 @@ import { markLanded, markThrown, TRAY_SPOT } from './landing.ts'
 import type { DiceScene, ThrowDie } from './three/scene.ts'
 import type { DieKind } from './three/shapes.ts'
 
-/** Rolls older than this when they arrive are history (a table's backlog on join), not news. */
-const FRESH_MS = 10_000
 const NEUTRAL = '#e3bf6a'
 
 const count = (n: number, from = 1) => Array.from({ length: n }, (_, i) => String(i + from))
@@ -78,19 +76,15 @@ export function PhysicalDice() {
       return playerTokenCenter(token, floor.rooms, floor.ramps ?? [], camera)
     }
 
-    const seen = new Set(useDiceStore.getState().rolls.map((roll) => roll.id))
-    const unsubscribe = useDiceStore.subscribe((state) => {
-      const fresh = state.rolls.filter((roll) => !seen.has(roll.id))
-      for (const roll of fresh) seen.add(roll.id)
-      if (!state.physical || fresh.length === 0) return
+    const unsubscribe = onNewRolls((fresh) => {
+      if (!useDiceStore.getState().physical) return
       const tokens = useDungeonStore.getState().dungeon.players ?? []
       const floors = useDungeonStore.getState().dungeon.floors
       const viewMode = useEditorStore.getState().viewMode
       for (const roll of fresh) {
-        if (Date.now() - roll.at > FRESH_MS) continue
         const dice = diceFor(roll)
         if (dice.length === 0) continue
-        const token = playerForInitiativeRoll(roll, tokens)
+        const token = tokenForRoll(roll, tokens)
         // A roll for a token this viewer can't see (a hidden monster) stays off their screen.
         if (token && !tokenShown(token, floors, viewMode)) continue
         markThrown(roll.id)

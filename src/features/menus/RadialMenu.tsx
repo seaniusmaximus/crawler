@@ -3,10 +3,13 @@ import { FOCUS_INSET } from '../../app/layout.ts'
 import { resolveFloor } from '../../model/floors.ts'
 import { connectedOpenings } from '../../model/openings.ts'
 import {
+  characterNameOf,
+  isMonster,
   MAX_TOKEN_HOVER,
   MAX_TOKEN_SIZE,
   MIN_TOKEN_HOVER,
   MIN_TOKEN_SIZE,
+  occupantRoom,
   playerHover,
   playerSize,
   playerStatuses,
@@ -20,8 +23,12 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import type { OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
+import { Avatar } from '../../ui/Avatar.tsx'
+import { placeLabel } from '../party/tokenInfo.ts'
+import { tokenRevealed } from '../../model/visibility.ts'
+import { TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Ring, RingButton, RingCore, RingStepper } from './Ring.tsx'
-import { RING_SIZE, RING_SPOTS, RING_SPOTS_SIX, ringSeats } from './ringLayout.ts'
+import { CARD_FRAME, ringLayout, type RingLayout } from './ringLayout.ts'
 
 /** Right-click menus for tokens, rooms and doors, laid out as a ring around the click. */
 export function RadialMenu() {
@@ -45,19 +52,23 @@ export function RadialMenu() {
   return <RoomRing menu={menu} floorId={floor.id} room={room} />
 }
 
+/** The menu's box, centred on the click: as big as its ring needs, or a card's frame. */
 function RingFrame({
   menu,
+  ring,
   className,
   children,
 }: {
   menu: { x: number; y: number }
+  ring?: RingLayout
   className?: string
   children: ReactNode
 }) {
+  const size = ring?.size ?? CARD_FRAME
   return (
     <div
       className={`radial${className ? ` ${className}` : ''}`}
-      style={{ left: menu.x, top: menu.y, width: RING_SIZE, height: RING_SIZE }}
+      style={{ left: menu.x, top: menu.y, width: size, height: size }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
@@ -69,6 +80,8 @@ function RingFrame({
 function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; room: Room }) {
   const closeMenu = useEditorStore((state) => state.closeMenu)
   const [renaming, setRenaming] = useState(false)
+  const [pulling, setPulling] = useState(false)
+  const [pickingTileset, setPickingTileset] = useState(false)
   const [draftName, setDraftName] = useState(room.name)
   const inputRef = useRef<HTMLInputElement>(null)
   const elevation = room.elevation ?? 0
@@ -92,6 +105,11 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
     const editor = useEditorStore.getState()
     editor.setTool('rooms')
     editor.beginResize(room.id)
+  }
+
+  function split(): void {
+    useDungeonStore.getState().splitRoom(floorId, room.id)
+    closeMenu()
   }
 
   function lookHere(): void {
@@ -129,18 +147,36 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
     )
   }
 
+  if (pulling) {
+    return <PullPicker menu={menu} floorId={floorId} room={room} onBack={() => setPulling(false)} />
+  }
+
+  if (pickingTileset) {
+    return <TilesetPicker menu={menu} floorId={floorId} room={room} onBack={() => setPickingTileset(false)} />
+  }
+
+  // Eight seats, clockwise from twelve o'clock.
+  const ring = ringLayout(8)
+  const seat = ring.seats
   return (
-    <RingFrame menu={menu}>
-      <Ring>
+    <RingFrame menu={menu} ring={ring}>
+      <Ring radius={ring.radius}>
         <RingButton
-          spot={RING_SPOTS_SIX.top}
+          spot={seat[0]}
           icon="look"
           label="Look here"
           title={`Pull player vision to ${room.name}`}
           onClick={lookHere}
         />
         <RingButton
-          spot={RING_SPOTS_SIX.upperRight}
+          spot={seat[1]}
+          icon="pull"
+          label="Pull token"
+          title={`Bring a token into ${room.name}`}
+          onClick={() => setPulling(true)}
+        />
+        <RingButton
+          spot={seat[2]}
           icon="pencil"
           label="Rename"
           onClick={() => {
@@ -149,7 +185,7 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
           }}
         />
         <RingStepper
-          spot={RING_SPOTS_SIX.lowerRight}
+          spot={seat[3]}
           label="Room elevation"
           value={`${elevation}`}
           caption="ELEV"
@@ -158,16 +194,174 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
           onInc={() => nudge(1)}
           onDec={() => nudge(-1)}
         />
-        <RingButton spot={RING_SPOTS_SIX.bottom} icon="trash" label="Delete" danger onClick={remove} />
-        <RingButton spot={RING_SPOTS_SIX.lowerLeft} icon="resize" label="Resize" onClick={resize} />
+        <RingButton spot={seat[4]} icon="trash" label="Delete" danger onClick={remove} />
+        {room.parts ? (
+          <RingButton
+            spot={seat[5]}
+            icon="split"
+            label="Split"
+            title={`Split ${room.name} back into the rooms it was merged from`}
+            onClick={split}
+          />
+        ) : (
+          <RingButton spot={seat[5]} icon="resize" label="Resize" onClick={resize} />
+        )}
         <RingButton
-          spot={RING_SPOTS_SIX.upperLeft}
+          spot={seat[6]}
           icon={room.visible ? 'eyeOff' : 'eye'}
           label={room.visible ? 'Hide' : 'Reveal'}
           title={room.visible ? 'Hide from players' : 'Reveal to players'}
           onClick={() => useDungeonStore.getState().setRoomVisible(floorId, room.id, !room.visible)}
         />
+        <RingButton
+          spot={seat[7]}
+          icon="tileset"
+          label="Tileset"
+          active={Boolean(room.tileset)}
+          title={`Change the tileset of ${room.name} alone`}
+          onClick={() => setPickingTileset(true)}
+        />
       </Ring>
+    </RingFrame>
+  )
+}
+
+/**
+ * Every token on this map, party first, to bring into the room: it lands on the
+ * free spot nearest where the room was right-clicked, from any floor.
+ */
+function PullPicker({
+  menu,
+  floorId,
+  room,
+  onBack,
+}: {
+  menu: RoomMenu
+  floorId: string
+  room: Room
+  onBack: () => void
+}) {
+  const players = useDungeonStore((state) => state.dungeon.players ?? [])
+  const floors = useDungeonStore((state) => state.dungeon.floors)
+  const [full, setFull] = useState<string | null>(null)
+  const byName = (a: Player, b: Player) => characterNameOf(a).localeCompare(characterNameOf(b))
+  const listed = [
+    ...players.filter((player) => !isMonster(player)).sort(byName),
+    ...players.filter(isMonster).sort(byName),
+  ]
+  const here = (player: Player) => {
+    if (player.floorId !== floorId) return false
+    const floor = floors.find((item) => item.id === floorId)
+    return occupantRoom(floor?.rooms ?? [], player.x, player.y)?.id === room.id
+  }
+
+  function pull(player: Player): void {
+    const pulled = useDungeonStore.getState().pullPlayer(player.id, floorId, room.id, { x: menu.cellX, y: menu.cellY })
+    if (!pulled) {
+      setFull(characterNameOf(player))
+      return
+    }
+    useEditorStore.getState().closeMenu()
+  }
+
+  return (
+    <RingFrame menu={menu} className="is-status">
+      <div className="radial-status radial-pull">
+        <div className="radial-status-head">
+          <button type="button" className="radial-status-back" onClick={onBack}>
+            Back
+          </button>
+          <span>Pull to {room.name}</span>
+        </div>
+        {listed.length === 0 ? (
+          <p className="radial-pull-note">No tokens on this map yet.</p>
+        ) : (
+          <div className="radial-pull-list">
+            {listed.map((player) => {
+              const inRoom = here(player)
+              return (
+                <button
+                  key={player.id}
+                  type="button"
+                  className="radial-pull-item"
+                  disabled={inRoom}
+                  title={inRoom ? 'Already in this room' : `Move to ${room.name}`}
+                  onClick={() => pull(player)}
+                >
+                  <Avatar player={player} size={22} dim={!tokenRevealed(player)} />
+                  <span className="radial-pull-name">{characterNameOf(player)}</span>
+                  <span className="radial-pull-place">{inRoom ? 'Here' : placeLabel(player, floors)}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {full ? <p className="radial-pull-note is-warn">No free space in {room.name} for {full}.</p> : null}
+      </div>
+    </RingFrame>
+  )
+}
+
+/**
+ * The tilesets one room can be drawn in. "Map" makes it follow the map's tileset
+ * again; picking the map's own tileset does the same.
+ */
+function TilesetPicker({
+  menu,
+  floorId,
+  room,
+  onBack,
+}: {
+  menu: RoomMenu
+  floorId: string
+  room: Room
+  onBack: () => void
+}) {
+  const mapTileset = useDungeonStore((state) => tilesetById(state.dungeon.tileset))
+  const current = room.tileset ? tilesetById(room.tileset) : null
+
+  function choose(id: string | null): void {
+    useDungeonStore.getState().setRoomTileset(floorId, room.id, id)
+    useEditorStore.getState().closeMenu()
+  }
+
+  return (
+    <RingFrame menu={menu} className="is-status">
+      <div className="radial-status radial-pull">
+        <div className="radial-status-head">
+          <button type="button" className="radial-status-back" onClick={onBack}>
+            Back
+          </button>
+          <span>Tileset · {room.name}</span>
+        </div>
+        <div className="radial-pull-list radial-tilesets">
+          <button
+            type="button"
+            className={`radial-pull-item${current ? '' : ' is-on'}`}
+            aria-pressed={!current}
+            title={`Draw ${room.name} in the map's tileset`}
+            onClick={() => choose(null)}
+          >
+            <span className="radial-pull-name">Same as map</span>
+            <span className="radial-pull-place">{mapTileset.name}</span>
+          </button>
+          {TILESETS.map((set) => {
+            const on = current?.id === set.id
+            return (
+              <button
+                key={set.id}
+                type="button"
+                className={`radial-pull-item${on ? ' is-on' : ''}`}
+                aria-pressed={on}
+                onClick={() => choose(set.id)}
+              >
+                <span className="radial-pull-name">{set.name}</span>
+                <span className="radial-pull-place">{on ? 'This room' : set.id === mapTileset.id ? 'Map' : ''}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
     </RingFrame>
   )
 }
@@ -290,11 +484,11 @@ function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
       />
     ))
   }
-  const seats = ringSeats(controls.length)
+  const ring = ringLayout(controls.length)
 
   return (
-    <RingFrame menu={menu}>
-      <Ring>{controls.map((render, index) => render(seats[index]))}</Ring>
+    <RingFrame menu={menu} ring={ring}>
+      <Ring radius={ring.radius}>{controls.map((render, index) => render(ring.seats[index]))}</Ring>
     </RingFrame>
   )
 }
@@ -321,11 +515,13 @@ function OpeningRing({
     closeMenu()
   }
 
+  // Open on the left, Close on the right, the door's state between them.
+  const ring = ringLayout(2, { core: true, start: 270 })
   return (
-    <RingFrame menu={menu}>
-      <Ring>
-        <RingButton spot={RING_SPOTS.upperLeft} icon="doorOpen" label="Open" active={open} onClick={() => choose(true)} />
-        <RingButton spot={RING_SPOTS.upperRight} icon="doors" label="Close" active={!open} onClick={() => choose(false)} />
+    <RingFrame menu={menu} ring={ring}>
+      <Ring radius={ring.radius}>
+        <RingButton spot={ring.seats[0]} icon="doorOpen" label="Open" active={open} onClick={() => choose(true)} />
+        <RingButton spot={ring.seats[1]} icon="doors" label="Close" active={!open} onClick={() => choose(false)} />
         <RingCore className="is-label">
           <span>{label}</span>
           <small>{open ? 'Open' : 'Closed'}</small>

@@ -24,6 +24,8 @@ const PATHS: Record<string, ReactNode> = {
   ),
   stairs: <path d="M3 20h5v-5h5v-5h5V5h3" />,
   ramp: <path d="M3 20h18L21 6z" />,
+  merge: <path d="M4 4h9v7h7v9H4z" />,
+  split: <path d="M4 4h6v16H4zM14 4h6v16h-6z" />,
   link: (
     <>
       <path d="M10 14a4 4 0 005.66 0l3-3a4 4 0 00-5.66-5.66L12 6.3" />
@@ -90,7 +92,11 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
     </>
   ),
+  lock: <path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 017 0v3" />,
+  unlock: <path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 016.8-1.2" />,
+  pull: <path d="M3 12h11M10 8l4 4-4 4M18 4v16" />,
   doorOpen: <path d="M4 21h16M6 21V4l8-1v18M14 5h4v16M11 12v.5" />,
+  tileset: <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />,
   d4: <path d="M12 3L21 20H3z" />,
   d6: <rect x="4" y="4" width="16" height="16" rx="2" />,
   d8: <path d="M12 2L21 12 12 22 3 12zM3 12h18" />,

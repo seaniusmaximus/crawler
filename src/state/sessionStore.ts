@@ -19,6 +19,7 @@ import type { Dungeon } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
 import { setTableRoller, useDiceStore } from './diceStore.ts'
 import { useDungeonStore } from './dungeonStore.ts'
+import { untracked } from './history.ts'
 import { useEditorStore } from './editorStore.ts'
 import { useTravelStore } from './travelStore.ts'
 
@@ -829,7 +830,8 @@ function convertPortraits(): void {
 /** Only if the token still shows that same image: it may have changed while uploading. */
 function swapPortrait(playerId: string, src: string, url: string): void {
   const player = (useDungeonStore.getState().dungeon.players ?? []).find((item) => item.id === playerId)
-  if (player?.portrait === src) useDungeonStore.getState().setPlayerPortrait(playerId, url)
+  // The same picture, now hosted: not an edit to take back.
+  if (player?.portrait === src) untracked(() => useDungeonStore.getState().setPlayerPortrait(playerId, url))
 }
 
 function wireSync(): void {

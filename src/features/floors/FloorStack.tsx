@@ -1,4 +1,5 @@
 import { playerSize } from '../../model/players.ts'
+import { roomParts } from '../../model/rect.ts'
 import type { CellRect, Floor } from '../../model/types.ts'
 import { roomRevealed } from '../../model/visibility.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -81,13 +82,15 @@ export function FloorStack({
         return (
           <g key={floor.id} className={`floor-stack-tier${active ? ' is-active' : ''}`}>
             <polygon className="floor-stack-plate" points={quad(bounds, tier)} />
-            {roomsOf(floor).map((room) => (
-              <polygon
-                key={room.id}
-                className={`floor-stack-room${room.visible ? '' : ' is-hidden'}`}
-                points={quad(room.rect, tier)}
-              />
-            ))}
+            {roomsOf(floor).flatMap((room) =>
+              roomParts(room).map((part, index) => (
+                <polygon
+                  key={`${room.id}:${index}`}
+                  className={`floor-stack-room${room.visible ? '' : ' is-hidden'}`}
+                  points={quad(part, tier)}
+                />
+              )),
+            )}
             {tokens
               .filter((token) => token.floorId === floor.id && tokenShown(token, [floor], viewMode))
               .map((token) => {

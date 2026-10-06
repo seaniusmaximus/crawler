@@ -5,6 +5,7 @@ import { PhysicalDice } from '../features/dice/PhysicalDice.tsx'
 import { RollToasts } from '../features/dice/RollToasts.tsx'
 import { FloorDock } from '../features/floors/FloorPanel.tsx'
 import { RadialMenu } from '../features/menus/RadialMenu.tsx'
+import { Contained } from '../ui/Contained.tsx'
 import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
 import { TokenSheet } from '../features/party/TokenSheet.tsx'
 import { TurnBanner } from '../features/party/TurnBanner.tsx'
@@ -15,6 +16,7 @@ import { Brand, TableMenu } from '../features/session/SessionPanel.tsx'
 import { StairUsePrompt } from '../features/stairs/StairUsePrompt.tsx'
 import { StairsPrompt } from '../features/stairs/StairsPrompt.tsx'
 import { CameraControls } from '../features/tools/CameraControls.tsx'
+import { TilesetPrompt } from '../features/tools/TilesetPrompt.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
 import { ViewToggle } from '../features/view/ViewToggle.tsx'
 import { useEditorStore } from '../state/editorStore.ts'
@@ -81,10 +83,21 @@ export function EditorPage() {
         </div>
       </div>
 
-      <RadialMenu />
+      <SafeRadialMenu />
       <StairsPrompt />
       <StairUsePrompt />
+      <TilesetPrompt />
       <SeatPrompt />
     </div>
+  )
+}
+
+/** The right-click menu, contained: if it fails, it closes and the page stays up; the next menu opens fresh. */
+function SafeRadialMenu() {
+  const menu = useEditorStore((state) => state.menu)
+  return (
+    <Contained name="Right-click menu" resetKey={menu} onError={() => useEditorStore.getState().closeMenu()}>
+      <RadialMenu />
+    </Contained>
   )
 }

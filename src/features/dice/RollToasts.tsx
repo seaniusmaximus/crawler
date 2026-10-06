@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { playerTokenCenter, tokenStandee } from '../../canvas/pick.ts'
-import { playerForInitiativeRoll } from '../../model/combat.ts'
+import { tokenForRoll } from '../../model/combat.ts'
 import { readableFormula, rollAccent, rollBreakdown, type DiceRoll } from '../../model/dice.ts'
 import { resolveFloor } from '../../model/floors.ts'
 import { playerSize } from '../../model/players.ts'
-import { useDiceStore } from '../../state/diceStore.ts'
+import { onNewRolls, useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { tokenShown } from '../party/tokenInfo.ts'
@@ -12,8 +12,6 @@ import { TRAY_SPOT, whenLanded } from './landing.ts'
 import { RollResult } from './RollResult.tsx'
 
 const TOAST_MS = 4200
-/** Rolls older than this when they arrive are history (a table's backlog on join), not news. */
-const FRESH_MS = 10000
 /** Gap between the top of the standee and the lowest toast. */
 const LIFT = 10
 const STACK = 46
@@ -22,19 +20,18 @@ const TRAY_LIFT = 70
 
 interface Toast {
   roll: DiceRoll
-  /** The token it pops up over, or null for the tray spot. */
-  playerId: string | null
 }
 
 /**
- * Each new roll pops up with its result: over the token that made it, or by the
- * dice tray when no token rolled. When dice are thrown, it waits for them to land.
+ * Every new roll, whatever made it (the tray, a token, the relay, D&D Beyond),
+ * pops up with its result over the token it belongs to, or by the dice tray when
+ * it has none or that token is on another floor. When dice are thrown, it waits
+ * for them to land.
  */
 export function RollToasts() {
   const [toasts, setToasts] = useState<Toast[]>([])
 
   useEffect(() => {
-    const seen = new Set(useDiceStore.getState().rolls.map((roll) => roll.id))
     const timers = new Set<number>()
     const waits = new Set<() => void>()
 
@@ -47,21 +44,23 @@ export function RollToasts() {
       timers.add(timer)
     }
 
-    const unsubscribe = useDiceStore.subscribe((state) => {
-      const fresh = state.rolls.filter((roll) => !seen.has(roll.id))
-      for (const roll of fresh) seen.add(roll.id)
-      if (fresh.length === 0) return
-      const tokens = useDungeonStore.getState().dungeon.players ?? []
-      const now = Date.now()
-      // The log is newest first; queue oldest first so the latest lands on top.
-      for (const roll of [...fresh].reverse()) {
-        if (now - roll.at > FRESH_MS) continue
-        const toast = { roll, playerId: playerForInitiativeRoll(roll, tokens)?.id ?? null }
+    // New rolls only, oldest first, so the latest lands on top; never the log a table hands over on join.
+    const unsubscribe = onNewRolls((fresh) => {
+      for (const roll of fresh) {
+        const toast = { roll }
+        // With no dice thrown (a D&D Beyond roll, or 3D dice off) this runs at once, before
+        // whenLanded returns its cancel; only a toast still waiting keeps one.
+        let waiting: (() => void) | null = null
+        let shown = false
         const cancel = whenLanded(roll.id, () => {
-          waits.delete(cancel)
+          shown = true
+          if (waiting) waits.delete(waiting)
           show(toast)
         })
-        waits.add(cancel)
+        if (!shown) {
+          waiting = cancel
+          waits.add(cancel)
+        }
       }
     })
 
@@ -83,12 +82,23 @@ function ToastLayer({ toasts }: { toasts: Toast[] }) {
   const activeFloorId = useEditorStore((state) => state.activeFloorId)
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
   const floors = useDungeonStore((state) => state.dungeon.floors)
+  const rolls = useDiceStore((state) => state.rolls)
   const floor = resolveFloor(floors, activeFloorId)
 
+  // Over its token when that token is in view here; by the tray when it has none or stands on
+  // another floor; not at all for a token this viewer may not see (a hidden monster).
+  // The token is looked up as the toast is drawn, from the log's copy of the roll, so a toast
+  // moves to its token as soon as a later copy of the roll says whose it is.
+  const anchored = toasts.flatMap((toast) => {
+    const roll = rolls.find((item) => item.id === toast.roll.id) ?? toast.roll
+    const token = tokenForRoll(roll, tokens)
+    if (token && !tokenShown(token, floors, viewMode)) return []
+    return [{ ...toast, token: token && token.floorId === floor.id ? token : undefined }]
+  })
   // Toasts in the same place stack upward: the newest sits nearest.
   const stackIndex = new Map<string, number>()
-  const placed = [...toasts].reverse().map((toast) => {
-    const spot = toast.playerId ?? 'tray'
+  const placed = [...anchored].reverse().map((toast) => {
+    const spot = toast.token?.id ?? 'tray'
     const index = stackIndex.get(spot) ?? 0
     stackIndex.set(spot, index + 1)
     return { ...toast, index }
@@ -96,13 +106,11 @@ function ToastLayer({ toasts }: { toasts: Toast[] }) {
 
   return (
     <div className="roll-toasts" aria-live="polite">
-      {placed.map(({ roll, playerId, index }) => {
+      {placed.map(({ roll, token, index }) => {
         let left: number | string = TRAY_SPOT.left
         let top: number | string = `calc(100% - ${TRAY_SPOT.fromBottom + TRAY_LIFT + index * STACK}px)`
         let color: string | undefined
-        if (playerId) {
-          const token = tokens.find((item) => item.id === playerId)
-          if (!token || token.floorId !== floor.id || !tokenShown(token, floors, viewMode)) return null
+        if (token) {
           const pos = playerTokenCenter(token, floor.rooms, floor.ramps ?? [], camera)
           const standee = tokenStandee(camera, playerSize(token))
           left = pos.x
@@ -123,7 +131,10 @@ function ToastLayer({ toasts }: { toasts: Toast[] }) {
           >
             <RollResult roll={roll} className="roll-toast-total" />
             <span className="roll-toast-copy">
-              <span className="roll-toast-title">{roll.character ? `${roll.character} · ${roll.title}` : roll.title}</span>
+              {/* Over a token, the token says who rolled; by the tray, the name does. */}
+              <span className="roll-toast-title">
+                {roll.character && !token ? `${roll.character} · ${roll.title}` : roll.title}
+              </span>
               {note ? <span className="roll-toast-note">{note}</span> : null}
             </span>
           </div>

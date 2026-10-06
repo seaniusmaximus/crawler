@@ -1,4 +1,4 @@
-import { interiorRect, intersectRect, rectContains, tileKindIn } from './rect.ts'
+import { intersectRect, rectContains, roomContains, roomFloorBounds, roomTileKind } from './rect.ts'
 import type { Opening, Room, StairsBlock, TileSprite } from './types.ts'
 
 export function cellKey(x: number, y: number): string {
@@ -17,8 +17,9 @@ export function parseCellKey(key: string): { x: number; y: number } {
  */
 export function wallAxis(room: Room, x: number, y: number): 'h' | 'v' {
   const rect = room.rect
-  if (x === rect.minX || x === rect.maxX) return 'v'
-  if (y === rect.minY || y === rect.maxY) return 'h'
+  // A merged room's outline bends, so only its neighbours tell which way it runs.
+  if (!room.parts && (x === rect.minX || x === rect.maxX)) return 'v'
+  if (!room.parts && (y === rect.minY || y === rect.maxY)) return 'h'
   const vertical = solidIn(room, x, y - 1) || solidIn(room, x, y + 1)
   const horizontal = solidIn(room, x - 1, y) || solidIn(room, x + 1, y)
   if (vertical && !horizontal) return 'v'
@@ -26,7 +27,7 @@ export function wallAxis(room: Room, x: number, y: number): 'h' | 'v' {
 }
 
 function solidIn(room: Room, x: number, y: number): boolean {
-  if (!rectContains(room.rect, x, y)) return false
+  if (!roomContains(room, x, y)) return false
   return tileLooks(room, x, y) === 'wall'
 }
 
@@ -36,7 +37,7 @@ export function tileLooks(room: Room, x: number, y: number): 'floor' | 'wall' {
   if (opening === 'wall') return 'wall'
   if (opening === 'open') return 'floor'
   if (opening === 'door' || opening === 'window') return 'wall'
-  return tileKindIn(room.rect, x, y)
+  return roomTileKind(room, x, y)
 }
 
 export function openingAt(room: Room, x: number, y: number): Opening | undefined {
@@ -56,7 +57,7 @@ export function openingIsOpen(room: Room, x: number, y: number): boolean {
  * that no longer fits without discarding it, the way openings behave.
  */
 export function stairsBlocks(room: Room): StairsBlock[] {
-  const interior = interiorRect(room.rect)
+  const interior = roomFloorBounds(room)
   const blocks: StairsBlock[] = []
   for (const block of room.stairs) {
     const clipped = intersectRect(block.rect, interior)
@@ -74,6 +75,6 @@ export function spriteAt(room: Room, x: number, y: number): TileSprite {
   // Doors and windows win even on extra walls, which live on floor geometry.
   if (opening === 'door' || opening === 'window') return `${opening}-${wallAxis(room, x, y)}`
   if (opening === 'wall') return 'wall'
-  if (opening === 'open' || tileKindIn(room.rect, x, y) === 'floor') return 'floor'
+  if (opening === 'open' || roomTileKind(room, x, y) === 'floor') return 'floor'
   return 'wall'
 }

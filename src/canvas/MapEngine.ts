@@ -16,7 +16,7 @@ import {
 import { rampAt, rampFromDrag } from '../model/ramps.ts'
 import type { RampDraft } from '../model/ramps.ts'
 import { shownRooms, nextShownFloor } from '../model/visibility.ts'
-import type { Cell, CellRect, Edge, Link, Player, Room } from '../model/types.ts'
+import type { Cell, CellRect, Edge, Floor, Link, Player, Room } from '../model/types.ts'
 import { useDungeonStore } from '../state/dungeonStore.ts'
 import { useEditorStore } from '../state/editorStore.ts'
 import { canControlPlayer, useSessionStore } from '../state/sessionStore.ts'
@@ -29,6 +29,7 @@ import { hitLinkBadge, linkBadges } from './badges.ts'
 import type { LinkBadge } from './badges.ts'
 import { LEVEL_HEIGHT, cellToWorld, cameraFocused, centerOnWorld, panBy, screenToCell, zoomAt } from './camera.ts'
 import { drawMap } from './draw.ts'
+import { beginGesture, endGesture, redo, undo } from '../state/history.ts'
 import { edgeCursor, hitHandle } from './handles.ts'
 import {
   cellElevation,
@@ -112,6 +113,8 @@ export class MapEngine {
   private tiles = new TileCache(tilesetById(useDungeonStore.getState().dungeon.tileset))
   /** A tileset still loading; it replaces `tiles` once ready. */
   private pendingTiles: TileCache | null = null
+  /** Tilesets rooms use instead of the map's, by tileset id; a room draws with the map's until its is ready. */
+  private roomTiles = new Map<string, TileCache>()
   private readonly unsubs: Array<() => void> = []
   private resizeObserver: ResizeObserver | null = null
   private raf = 0
@@ -144,6 +147,7 @@ export class MapEngine {
 
   async start(): Promise<void> {
     this.bind()
+    this.syncRoomTilesets(useDungeonStore.getState().dungeon.floors)
     await this.tiles.init()
     if (this.destroyed) {
       this.tiles.destroy()
@@ -160,6 +164,8 @@ export class MapEngine {
     this.tiles.destroy()
     this.pendingTiles?.destroy()
     this.pendingTiles = null
+    for (const cache of this.roomTiles.values()) cache.destroy()
+    this.roomTiles.clear()
     for (const unsub of this.unsubs) unsub()
     this.unsubs.length = 0
   }
@@ -190,6 +196,7 @@ export class MapEngine {
       () => window.removeEventListener('keyup', this.onKeyUp),
       useDungeonStore.subscribe((state) => {
         this.syncTileset(state.dungeon.tileset)
+        this.syncRoomTilesets(state.dungeon.floors)
         this.markDirty()
       }),
       useTravelStore.subscribe(() => this.markDirty()),
@@ -223,6 +230,32 @@ export class MapEngine {
       this.tiles = next
       this.markDirty()
     })
+  }
+
+  /** Loads the tilesets rooms have of their own, on any floor, and lets go of ones no room uses. */
+  private syncRoomTilesets(floors: readonly Floor[]): void {
+    const wanted = new Set<string>()
+    for (const floor of floors) {
+      for (const room of floor.rooms) if (room.tileset) wanted.add(tilesetById(room.tileset).id)
+    }
+    for (const [id, cache] of this.roomTiles) {
+      if (wanted.has(id)) continue
+      cache.destroy()
+      this.roomTiles.delete(id)
+    }
+    for (const id of wanted) {
+      if (this.roomTiles.has(id)) continue
+      const cache = new TileCache(tilesetById(id))
+      this.roomTiles.set(id, cache)
+      void cache.init().then(() => this.markDirty())
+    }
+  }
+
+  /** The tiles a room draws with: its own tileset's once loaded, else the map's. */
+  private tilesFor = (room: Room): TileCache => {
+    if (!room.tileset) return this.tiles
+    const cache = this.roomTiles.get(tilesetById(room.tileset).id)
+    return cache?.isReady() ? cache : this.tiles
   }
 
   private loop = (): void => {
@@ -274,6 +307,7 @@ export class MapEngine {
       hoverLink: this.hoverLink,
       viewMode: editor.viewMode,
       tileCache: this.tiles,
+      tilesFor: this.tilesFor,
     })
   }
 
@@ -476,7 +510,7 @@ export class MapEngine {
         waypoints: cells.length >= 2 ? cells.slice(1, -1) : [],
       }
       editor.selectPlayer(token.id)
-    } else if (!pan && tool === 'link') {
+    } else if (!pan && (tool === 'link' || tool === 'merge')) {
       mode = 'pick'
       roomId = hit?.id ?? null
     } else if (!pan && tool === 'ramp') {
@@ -499,7 +533,8 @@ export class MapEngine {
       }
     } else if (!pan && tool === 'select') {
       if (hit) {
-        mode = 'move'
+        // Locked, a room only gets selected; the drag pans the view instead.
+        mode = editor.roomsLocked ? 'pan' : 'move'
         roomId = hit.id
         startRect = hit.rect
         editor.selectRoom(hit.id)
@@ -521,7 +556,7 @@ export class MapEngine {
       } else {
         if (resizing && hit?.id !== resizing.id) editor.endResize()
         if (hit) {
-          mode = 'move'
+          mode = editor.roomsLocked ? 'pan' : 'move'
           roomId = hit.id
           startRect = hit.rect
           editor.selectRoom(hit.id)
@@ -529,6 +564,8 @@ export class MapEngine {
       }
     }
 
+    // Whatever this press changes, through to letting go, undoes as one step.
+    beginGesture()
     this.session = {
       id: event.pointerId,
       mode,
@@ -690,6 +727,7 @@ export class MapEngine {
       this.openContextMenu(session, event)
     }
     if (event.button === 2) event.preventDefault()
+    endGesture()
 
     this.draft = null
     this.updateHover(session.lastX, session.lastY)
@@ -1009,6 +1047,14 @@ export class MapEngine {
       editor.selectRoom(picked)
       return
     }
+    if (editor.tool === 'merge') {
+      // The first room picked absorbs the second. Rooms apart can't become one,
+      // so that click starts over from the room just picked.
+      const merged = useDungeonStore.getState().mergeRooms(getActiveFloor().id, editor.linkRoomId, picked)
+      editor.setLinkRoom(merged ? null : picked)
+      editor.selectRoom(merged ? editor.linkRoomId : picked)
+      return
+    }
     useDungeonStore.getState().toggleLink(getActiveFloor().id, editor.linkRoomId, picked)
     editor.setLinkRoom(null)
     editor.selectRoom(picked)
@@ -1062,9 +1108,10 @@ export class MapEngine {
     }
     const room = this.roomAt(session.startX, session.startY)
     if (!room) return
+    const cell = this.cellAt(session.startX, session.startY, room)
     useEditorStore
       .getState()
-      .openMenu({ kind: 'room', roomId: room.id, x: event.clientX, y: event.clientY })
+      .openMenu({ kind: 'room', roomId: room.id, cellX: cell.x, cellY: cell.y, x: event.clientX, y: event.clientY })
   }
 
   private toggleOpeningAt(sx: number, sy: number): void {
@@ -1167,7 +1214,7 @@ export class MapEngine {
 
     this.hoverFeature = null
     this.hoverRamp = null
-    if (editor.tool === 'link') {
+    if (editor.tool === 'link' || editor.tool === 'merge') {
       this.applyCursor(room ? 'pointer' : null)
       return
     }
@@ -1240,6 +1287,7 @@ export class MapEngine {
       this.hoverRamp = null
       this.tokenDrag = null
       this.session = null
+      endGesture()
       const travel = useDungeonStore.getState().dungeon.travel
       if (travel) {
         useDungeonStore.getState().setTravel(null)
@@ -1253,6 +1301,26 @@ export class MapEngine {
       editor.closeStairUse()
       if (editor.viewMode !== 'player') editor.setTool('select')
       this.markDirty()
+    }
+    // Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes. Text boxes keep their own undo.
+    const key = event.key.toLowerCase()
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey &&
+      (key === 'z' || key === 'y') &&
+      !isTyping(event.target)
+    ) {
+      event.preventDefault()
+      if (this.session || useSessionStore.getState().role === 'guest') return
+      const done = key === 'y' || event.shiftKey ? redo() : undo()
+      if (done) {
+        const editor = useEditorStore.getState()
+        editor.closeMenu()
+        editor.endResize()
+        editor.setLinkRoom(null)
+        this.markDirty()
+      }
+      return
     }
     const tool = TOOL_KEYS[event.code]
     if (

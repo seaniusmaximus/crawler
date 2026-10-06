@@ -1,16 +1,26 @@
-import { interiorRect, intersectRect, rectContains, tileKindIn } from './rect.ts'
+import { interiorRect, intersectRect, rectHeight, rectWidth, roomContains, roomParts, roomTileKind } from './rect.ts'
 import { openingAt, stairsAt } from './tiles.ts'
 import { sharedWalls, showsWall } from './walls.ts'
 import type { Cell, CellRect, Opening, Room, StairsDir } from './types.ts'
 
 /**
  * `stairs` lays stairs to other floors; `ramp` is the same Stairs button set to
- * "Between rooms", joining rooms of different heights on this floor.
+ * "Between rooms", joining rooms of different heights on this floor. `merge` is the
+ * Link button set to "Merge", folding two rooms into one.
  */
-export type Tool = 'select' | 'rooms' | 'doors' | 'windows' | 'stairs' | 'walls' | 'link' | 'ramp'
+export type Tool =
+  | 'select'
+  | 'rooms'
+  | 'doors'
+  | 'windows'
+  | 'stairs'
+  | 'walls'
+  | 'link'
+  | 'merge'
+  | 'ramp'
 
 /** Tools that stamp a feature onto tiles of an existing room. */
-export type FeatureTool = Exclude<Tool, 'select' | 'rooms' | 'link' | 'ramp'>
+export type FeatureTool = Exclude<Tool, 'select' | 'rooms' | 'link' | 'merge' | 'ramp'>
 
 /** A plain door leaf, or an open archway with no leaf at all. */
 export type DoorStyle = 'door' | 'open'
@@ -24,7 +34,7 @@ export interface FeatureDraft {
 }
 
 export function isFeatureTool(tool: Tool): tool is FeatureTool {
-  return tool !== 'select' && tool !== 'rooms' && tool !== 'link' && tool !== 'ramp'
+  return tool !== 'select' && tool !== 'rooms' && tool !== 'link' && tool !== 'merge' && tool !== 'ramp'
 }
 
 export function featureAt(
@@ -63,7 +73,7 @@ export function wallCells(rooms: readonly Room[], room: Room, rect: CellRect): C
   const cells: Cell[] = []
   for (let y = Math.max(rect.minY, room.rect.minY); y <= Math.min(rect.maxY, room.rect.maxY); y++) {
     for (let x = Math.max(rect.minX, room.rect.minX); x <= Math.min(rect.maxX, room.rect.maxX); x++) {
-      if (!rectContains(room.rect, x, y)) continue
+      if (!roomContains(room, x, y)) continue
       const opening = openingAt(room, x, y)
       if (opening === 'wall') {
         cells.push({ x, y })
@@ -74,7 +84,7 @@ export function wallCells(rooms: readonly Room[], room: Room, rect: CellRect): C
         continue
       }
       if (shared.has(room.id, x, y)) continue
-      if (tileKindIn(room.rect, x, y) === 'wall') cells.push({ x, y })
+      if (roomTileKind(room, x, y) === 'wall') cells.push({ x, y })
     }
   }
   return cells
@@ -93,7 +103,7 @@ export function wallPaintCells(
   const cells: Cell[] = []
   for (let y = Math.max(rect.minY, room.rect.minY); y <= Math.min(rect.maxY, room.rect.maxY); y++) {
     for (let x = Math.max(rect.minX, room.rect.minX); x <= Math.min(rect.maxX, room.rect.maxX); x++) {
-      if (!rectContains(room.rect, x, y)) continue
+      if (!roomContains(room, x, y)) continue
       if (!erase && stairsAt(room, x, y)) continue
       const wall = showsWall(rooms, room, x, y)
       if (erase ? wall : !wall) cells.push({ x, y })
@@ -105,7 +115,17 @@ export function wallPaintCells(
 /**
  * A stairs drag becomes one staircase over the floor area it covers, rather
  * than a stack of single-tile stairs, so the art scales across the whole run.
+ * In a merged room it stays within whichever part the drag covers most.
  */
 export function stairsRegion(room: Room, rect: CellRect): CellRect | null {
-  return intersectRect(rect, interiorRect(room.rect))
+  let best: CellRect | null = null
+  for (const part of roomParts(room)) {
+    const region = intersectRect(rect, interiorRect(part))
+    if (region && (!best || area(region) > area(best))) best = region
+  }
+  return best
+}
+
+function area(rect: CellRect): number {
+  return rectWidth(rect) * rectHeight(rect)
 }

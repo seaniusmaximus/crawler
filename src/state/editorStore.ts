@@ -8,6 +8,9 @@ import type { Camera, StairsDir } from '../model/types.ts'
 export interface RoomMenu {
   kind: 'room'
   roomId: string
+  /** The cell right-clicked, where a pulled token lands (or as near as it can). */
+  cellX: number
+  cellY: number
   x: number
   y: number
 }
@@ -46,6 +49,8 @@ interface EditorState {
   tool: Tool
   doorStyle: DoorStyle
   stairsDir: StairsDir
+  /** Rooms can't be dragged around (this browser's choice), so play can't knock the map out of place. */
+  roomsLocked: boolean
   /** The Stairs tool is set to join rooms on this floor rather than lead to another floor. */
   stairsBetween: boolean
   activeFloorId: string | null
@@ -54,12 +59,16 @@ interface EditorState {
   selectedPlayerId: string | null
   hoverPlayerId: string | null
   resizeRoomId: string | null
-  /** First room picked with the link tool, waiting for its partner. */
+  /** The Link button is set to merge rooms into one rather than link them. */
+  linkMerge: boolean
+  /** First room picked with the link or merge tool, waiting for its partner. */
   linkRoomId: string | null
   menu: Menu | null
   focus: FocusRequest | null
   stairsPrompt: StairLanding[] | null
   stairUse: StairUsePrompt | null
+  /** A map tileset waiting on whether rooms with their own tileset keep it. */
+  tilesetPrompt: string | null
   viewMode: ViewMode
   /** Token whose character sheet or stat block is open beside its card. */
   sheetPlayerId: string | null
@@ -70,7 +79,10 @@ interface EditorState {
   setTool: (tool: Tool) => void
   setDoorStyle: (style: DoorStyle) => void
   setStairsDir: (dir: StairsDir) => void
+  setRoomsLocked: (locked: boolean) => void
   setStairsBetween: () => void
+  /** Set the Link button to link rooms, or to merge them into one. */
+  setLinkMerge: (merge: boolean) => void
   setActiveFloor: (floorId: string) => void
   selectRoom: (roomId: string | null) => void
   setHoverRoom: (roomId: string | null) => void
@@ -87,8 +99,20 @@ interface EditorState {
   closeStairsPrompt: () => void
   promptStairUse: (prompt: StairUsePrompt) => void
   closeStairUse: () => void
+  promptTileset: (id: string) => void
+  closeTilesetPrompt: () => void
   setViewMode: (mode: ViewMode) => void
   openSheet: (playerId: string | null) => void
+}
+
+const ROOMS_LOCKED_KEY = 'crawler.roomsLocked'
+
+function readRoomsLocked(): boolean {
+  try {
+    return window.localStorage.getItem(ROOMS_LOCKED_KEY) === 'on'
+  } catch {
+    return false
+  }
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -97,7 +121,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   tool: 'select',
   doorStyle: 'door',
   stairsDir: 'both',
+  roomsLocked: readRoomsLocked(),
   stairsBetween: false,
+  linkMerge: false,
   activeFloorId: null,
   selectedRoomId: null,
   hoverRoomId: null,
@@ -109,6 +135,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   focus: null,
   stairsPrompt: null,
   stairUse: null,
+  tilesetPrompt: null,
   viewMode: 'dm',
   sheetPlayerId: null,
   setCamera: (camera) => set({ camera }),
@@ -122,17 +149,32 @@ export const useEditorStore = create<EditorState>((set) => ({
       camera: zoomAt(state.camera, state.viewport.width / 2, state.viewport.height / 2, factor),
     })),
   // Resize handles belong to the rooms tool, so leaving it ends resize mode.
-  // Picking Stairs comes back to whichever kind was last chosen.
+  // Picking Stairs or Link comes back to whichever kind was last chosen.
   setTool: (tool) =>
     set((state) => ({
-      tool: tool === 'stairs' && state.stairsBetween ? 'ramp' : tool,
+      tool:
+        tool === 'stairs' && state.stairsBetween
+          ? 'ramp'
+          : tool === 'link' && state.linkMerge
+            ? 'merge'
+            : tool,
       menu: null,
       resizeRoomId: null,
       linkRoomId: null,
     })),
   setDoorStyle: (doorStyle) => set({ doorStyle, tool: 'doors' }),
+  setRoomsLocked: (roomsLocked) => {
+    try {
+      window.localStorage.setItem(ROOMS_LOCKED_KEY, roomsLocked ? 'on' : 'off')
+    } catch {
+      // Storage blocked: the lock lasts until reload.
+    }
+    set({ roomsLocked })
+  },
   setStairsDir: (stairsDir) => set({ stairsDir, stairsBetween: false, tool: 'stairs' }),
   setStairsBetween: () => set({ stairsBetween: true, tool: 'ramp' }),
+  setLinkMerge: (linkMerge) =>
+    set({ linkMerge, tool: linkMerge ? 'merge' : 'link', menu: null, resizeRoomId: null, linkRoomId: null }),
   // Selection, hover and resize all point at rooms on the floor being left.
   setActiveFloor: (floorId) =>
     set({
@@ -192,6 +234,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   closeStairsPrompt: () => set({ stairsPrompt: null }),
   promptStairUse: (stairUse) => set({ stairUse: stairUse.exits.length > 0 ? stairUse : null }),
   closeStairUse: () => set({ stairUse: null }),
+  promptTileset: (tilesetPrompt) => set({ tilesetPrompt }),
+  closeTilesetPrompt: () => set({ tilesetPrompt: null }),
   setViewMode: (viewMode) =>
     set({ viewMode, menu: null, resizeRoomId: null, linkRoomId: null, hoverRoomId: null }),
   openSheet: (sheetPlayerId) => set({ sheetPlayerId }),

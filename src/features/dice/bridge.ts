@@ -1,4 +1,6 @@
+import { tokenForRoll } from '../../model/combat.ts'
 import { getDiceBridge } from '../../state/diceStore.ts'
+import { useDungeonStore } from '../../state/dungeonStore.ts'
 import type { IncomingRoll } from '../../model/dice.ts'
 import type { DdbCharacter } from '../../net/protocol.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
@@ -36,7 +38,7 @@ export function startDiceBridge(): () => void {
       return
     }
     if (data.type !== ROLL) return
-    const rolls = (data.rolls ?? (data.roll ? [data.roll] : [])).filter(ownRoll)
+    const rolls = (data.rolls ?? (data.roll ? [data.roll] : [])).filter(ownRoll).map(withToken)
     if (rolls.length) bridge.ingest(rolls)
   }
 
@@ -57,6 +59,21 @@ export function startDiceBridge(): () => void {
 /** Ask the extension to resend the character from any open D&D Beyond sheet. */
 export function requestDdbCharacter(): void {
   window.postMessage({ type: REQUEST_CHARACTER }, '*')
+}
+
+/**
+ * Name the token a D&D Beyond roll belongs to here, where it's best known, so
+ * every browser at the table shows it over the same token: the token linked to
+ * that sheet or named like its character, else (for a player) the token they're playing.
+ */
+function withToken(roll: IncomingRoll): IncomingRoll {
+  if (roll.tokenId) return roll
+  const tokens = useDungeonStore.getState().dungeon.players ?? []
+  const session = useSessionStore.getState()
+  const match =
+    tokenForRoll({ character: String(roll.character ?? ''), characterId: roll.characterId }, tokens) ??
+    (session.role === 'guest' && session.myPlayerId ? tokens.find((token) => token.id === session.myPlayerId) : undefined)
+  return match ? { ...roll, tokenId: match.id } : roll
 }
 
 function ownRoll(roll: IncomingRoll): boolean {

@@ -1,22 +1,22 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from '../../ui/Icon.tsx'
-import { RING_CONTROL, RING_SIZE } from './ringLayout.ts'
+import { RING_CONTROL, type Spot } from './ringLayout.ts'
 
-type Spot = { x: number; y: number }
-
+/** A control centred on its seat, measured from the middle of the ring's box. */
 function place(spot: Spot): CSSProperties {
   return {
-    left: RING_SIZE / 2 + spot.x - RING_CONTROL / 2,
-    top: RING_SIZE / 2 + spot.y - RING_CONTROL / 2,
+    left: `calc(50% + ${spot.x - RING_CONTROL / 2}px)`,
+    top: `calc(50% + ${spot.y - RING_CONTROL / 2}px)`,
     width: RING_CONTROL,
     height: RING_CONTROL,
   }
 }
 
-export function Ring({ children }: { children: ReactNode }) {
+/** The dashed guide circle the controls sit on, at the ring's radius. */
+export function Ring({ radius, children }: { radius: number; children: ReactNode }) {
   return (
     <>
-      <span className="ring-guide" aria-hidden />
+      <span className="ring-guide" aria-hidden style={{ width: radius * 2, height: radius * 2 }} />
       {children}
     </>
   )

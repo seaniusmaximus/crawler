@@ -7,7 +7,7 @@ import {
   playerSize,
   playerStatuses,
 } from '../model/players.ts'
-import { rectContains } from '../model/rect.ts'
+import { roomContains } from '../model/rect.ts'
 import { rampOccupancy } from '../model/ramps.ts'
 import { openingSpot } from '../model/openings.ts'
 import type { OpeningSpot } from '../model/openings.ts'
@@ -44,7 +44,7 @@ export function hitRoom(
   let bestIndex = -1
   rooms.forEach((room, index) => {
     const cell = cellOnRoom(sx, sy, room, camera)
-    if (!rectContains(room.rect, cell.x, cell.y)) return
+    if (!roomContains(room, cell.x, cell.y)) return
     if (
       !best ||
       room.elevation > best.elevation ||
