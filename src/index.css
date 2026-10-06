@@ -343,6 +343,29 @@ a:hover {
   padding: 8px 12px 0;
 }
 
+/* Two actions sharing the row evenly instead of wrapping. */
+.panel-foot.is-pair {
+  flex-wrap: nowrap;
+}
+
+.panel-foot.is-pair > * {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.panel-foot.is-pair .btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.panel-foot.is-pair svg {
+  flex: none;
+}
+
 .kicker {
   display: inline-flex;
   align-items: center;
@@ -852,6 +875,79 @@ a:hover {
 .tool-option.is-active {
   border-color: var(--gold-line);
   color: var(--gold);
+}
+
+.tool-block:hover .object-picker,
+.tool-block:focus-within .object-picker {
+  flex-direction: column;
+  gap: 8px;
+  width: 316px;
+  padding: 16px 6px 2px;
+}
+
+.object-picker > * {
+  position: relative;
+}
+
+.object-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.object-picker-head .tileset-select {
+  flex: 1;
+}
+
+.object-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  max-height: min(340px, 50vh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.object-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: 4px 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.object-choice:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.object-choice.is-active {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+  color: var(--gold);
+}
+
+.object-choice span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-thumb {
+  width: 52px;
+  height: 52px;
 }
 
 .tileset-select {

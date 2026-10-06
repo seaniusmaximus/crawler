@@ -55,6 +55,30 @@ export interface ElevationRamp {
   toElev: number
 }
 
+/** Quarter-turns clockwise from an object's catalog pose. */
+export type ObjectTurn = 0 | 1 | 2 | 3
+
+/**
+ * Something done to an object at the table (open, search, pull). A placeholder
+ * for now: what an action does will be scripted later.
+ */
+export interface ObjectAction {
+  id: string
+  label: string
+}
+
+/** Set dressing standing in a room: a chair, a chest, a rug. */
+export interface RoomObject {
+  id: string
+  /** Catalog id of what it is; see src/objects/catalog.ts. */
+  kind: string
+  /** Absolute cell of the footprint's north corner, so it travels with its room like stairs do. */
+  x: number
+  y: number
+  turn: ObjectTurn
+  actions?: ObjectAction[]
+}
+
 export interface Room {
   id: string
   name: string
@@ -72,13 +96,21 @@ export interface Room {
    * later a spritesheet will swap closed/open art for the same key.
    */
   openingOpen: Record<string, boolean>
+  /** Doors and windows players cannot open or close until the DM unlocks them; missing means unlocked. */
+  openingLocked?: Record<string, boolean>
   stairs: StairsBlock[]
-  /** When false, player view hides this room. The DM always sees it. */
+  /**
+   * Explored: the party has seen this room, so player view draws it (greyed out
+   * whenever they can't see into it now). Unexplored rooms are hidden from
+   * players. The DM always sees every room.
+   */
   visible: boolean
   /** Steps above the floor plane; one step is a wall's height. */
   elevation: number
   /** This room's own tileset; missing means it follows the map's. */
   tileset?: string
+  /** Furniture and set dressing; missing means none. */
+  objects?: RoomObject[]
 }
 
 /**
@@ -128,7 +160,12 @@ export interface Player {
   floorId: string
   x: number
   y: number
-  /** When false, player view hides this token. The DM always sees it. */
+  /**
+   * A party token shows to players only when true. A monster shows whenever its
+   * room is in sight; true reveals it in an explored room even out of sight.
+   * The Invisible condition hides a monster from players regardless.
+   * The DM always sees every token.
+   */
   visible: boolean
   /** Footprint in tiles; 1 is a 5 ft Medium square. */
   size: number

@@ -14,6 +14,8 @@ import {
   type SnapshotMessage,
 } from '../net/protocol.ts'
 import { isMonster } from '../model/players.ts'
+import { connectedOpenings, withinReach } from '../model/openings.ts'
+import { openingIsLocked } from '../model/tiles.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
@@ -87,7 +89,8 @@ interface SessionState {
   setSeatPrompt: (open: boolean) => void
   reportMove: (playerId: string, floorId: string, x: number, y: number) => void
   reportPlayer: (playerId: string) => void
-  reportOpening: (floorId: string, roomId: string, x: number, y: number) => void
+  /** Open or close a door from player view; says why not when it is locked or out of reach. */
+  reportOpening: (floorId: string, roomId: string, x: number, y: number) => OpeningRefusal | null
   reportTravel: (travel: TokenTravel | null) => void
   reportFocus: (floorId: string, roomId: string) => void
 }
@@ -601,6 +604,8 @@ function handleHostMessage(message: NetMessage): void {
     return
   }
   if (message.type === 'opening') {
+    // Players only work doors they stand beside, and never a locked one.
+    if (openingRefusal(message.floorId, message.roomId, message.x, message.y, 'party')) return
     applyRemote(() => {
       useDungeonStore
         .getState()
@@ -868,6 +873,37 @@ function wireSync(): void {
   })
 }
 
+export type OpeningRefusal = 'locked' | 'far'
+
+/**
+ * Why a player may not open or close this door or window, or null when they may.
+ * `reach` names whose tokens must stand beside it: one token, any of the party,
+ * or null to skip that check (the DM previewing player view).
+ */
+export function openingRefusal(
+  floorId: string,
+  roomId: string,
+  x: number,
+  y: number,
+  reach: 'party' | string | null,
+): OpeningRefusal | null {
+  const dungeon = useDungeonStore.getState().dungeon
+  const floor = dungeon.floors.find((item) => item.id === floorId)
+  if (!floor) return 'far'
+  const spots = connectedOpenings(floor.rooms, roomId, x, y)
+  if (spots.length === 0) return 'far'
+  const locked = spots.some((spot) => {
+    const room = floor.rooms.find((item) => item.id === spot.roomId)
+    return room ? openingIsLocked(room, spot.x, spot.y) : false
+  })
+  if (locked) return 'locked'
+  if (reach === null) return null
+  const tokens = (dungeon.players ?? []).filter((player) =>
+    reach === 'party' ? !isMonster(player) : player.id === reach,
+  )
+  return withinReach(floor.rooms, tokens, floorId, spots) ? null : 'far'
+}
+
 export function canControlPlayer(playerId: string): boolean {
   const session = useSessionStore.getState()
   const token = useDungeonStore.getState().dungeon.players.find((player) => player.id === playerId)
@@ -1040,11 +1076,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   reportOpening: (floorId, roomId, x, y) => {
-    if (get().role !== 'guest') {
+    const guest = get().role === 'guest'
+    // The DM needs no token beside it; a player must stand beside it with their own.
+    const refusal = openingRefusal(floorId, roomId, x, y, guest ? (get().myPlayerId ?? '') : null)
+    if (refusal) return refusal
+    if (!guest) {
       useDungeonStore.getState().toggleConnectedOpenings(floorId, roomId, x, y)
-      return
+      return null
     }
     send({ type: 'opening', floorId, roomId, x, y })
+    return null
   },
 
   reportTravel: (travel) => {

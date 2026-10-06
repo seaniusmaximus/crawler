@@ -36,6 +36,11 @@ export function linkedTo(link: Link, roomId: string): string | null {
  */
 export function roomsThrough(rooms: readonly Room[], room: Room, cell: Cell): Room[] {
   if (!isPassage(openingAt(room, cell.x, cell.y))) return []
+  return roomsBeyond(rooms, room, cell)
+}
+
+/** The rooms on the far side of a wall tile in `room`, whatever is set in that tile. */
+export function roomsBeyond(rooms: readonly Room[], room: Room, cell: Cell): Room[] {
   const shared = sharedWalls(rooms)
   const found: Room[] = []
   for (const step of STEPS) {

@@ -6,7 +6,8 @@ import type { Cell, CellRect, Opening, Room, StairsDir } from './types.ts'
 /**
  * `stairs` lays stairs to other floors; `ramp` is the same Stairs button set to
  * "Between rooms", joining rooms of different heights on this floor. `merge` is the
- * Link button set to "Merge", folding two rooms into one.
+ * Link button set to "Merge", folding two rooms into one. `objects` dresses rooms
+ * with furniture from the catalog.
  */
 export type Tool =
   | 'select'
@@ -18,9 +19,10 @@ export type Tool =
   | 'link'
   | 'merge'
   | 'ramp'
+  | 'objects'
 
 /** Tools that stamp a feature onto tiles of an existing room. */
-export type FeatureTool = Exclude<Tool, 'select' | 'rooms' | 'link' | 'merge' | 'ramp'>
+export type FeatureTool = Exclude<Tool, 'select' | 'rooms' | 'link' | 'merge' | 'ramp' | 'objects'>
 
 /** A plain door leaf, or an open archway with no leaf at all. */
 export type DoorStyle = 'door' | 'open'
@@ -34,7 +36,9 @@ export interface FeatureDraft {
 }
 
 export function isFeatureTool(tool: Tool): tool is FeatureTool {
-  return tool !== 'select' && tool !== 'rooms' && tool !== 'link' && tool !== 'merge' && tool !== 'ramp'
+  return (
+    tool !== 'select' && tool !== 'rooms' && tool !== 'link' && tool !== 'merge' && tool !== 'ramp' && tool !== 'objects'
+  )
 }
 
 export function featureAt(

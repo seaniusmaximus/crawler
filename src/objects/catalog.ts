@@ -1,0 +1,462 @@
+/**
+ * Every object a room can be dressed with. Objects are built from a few solid
+ * shapes rather than sprites, so they stand up and turn with the camera like
+ * the walls do.
+ *
+ * Shapes sit in the object's own footprint: `x` runs 0..w and `y` runs 0..d in
+ * cells, with +y the object's front (a chair faces +y). `z` and `h` are in
+ * world pixels above the floor; a wall is 20 tall and a standee about 55.
+ *
+ * Tilesets list which objects suit them (see `objects` on a Tileset), but any
+ * object can go in any room: the lists only sort the picker.
+ */
+
+export type ObjectPart =
+  | { shape: 'box'; x: number; y: number; w: number; d: number; z: number; h: number; color: string; top?: string }
+  /** Round in plan; `r2` narrows the top to a cone, 0 for a point. */
+  | { shape: 'round'; x: number; y: number; r: number; r2?: number; z: number; h: number; color: string; top?: string }
+  /** Lies flat on the floor, under anything standing on it. */
+  | { shape: 'flat'; x: number; y: number; w: number; d: number; color: string; border?: string }
+
+export interface ObjectDef {
+  id: string
+  name: string
+  /** Footprint across, in cells, before turning. */
+  w: number
+  /** Footprint deep, in cells, before turning. */
+  d: number
+  parts: readonly ObjectPart[]
+}
+
+// ---------- Shape helpers ----------
+
+function box(x: number, y: number, w: number, d: number, z: number, h: number, color: string, top?: string): ObjectPart {
+  return { shape: 'box', x, y, w, d, z, h, color, top }
+}
+
+function round(x: number, y: number, r: number, z: number, h: number, color: string, top?: string, r2?: number): ObjectPart {
+  return { shape: 'round', x, y, r, r2, z, h, color, top }
+}
+
+function flat(x: number, y: number, w: number, d: number, color: string, border?: string): ObjectPart {
+  return { shape: 'flat', x, y, w, d, color, border }
+}
+
+/** Four square legs under the corners of a rectangle. */
+function legs(x0: number, y0: number, x1: number, y1: number, h: number, color: string, s = 0.08): ObjectPart[] {
+  return [
+    box(x0, y0, s, s, 0, h, color),
+    box(x1 - s, y0, s, s, 0, h, color),
+    box(x0, y1 - s, s, s, 0, h, color),
+    box(x1 - s, y1 - s, s, s, 0, h, color),
+  ]
+}
+
+/** A rug: a border band with the field laid inside it. */
+function rug(w: number, d: number, field: string, border: string, inset = 0.08): ObjectPart[] {
+  return [flat(inset, inset, w - inset * 2, d - inset * 2, field, border)]
+}
+
+// ---------- Palette ----------
+
+const OAK = '#7a5232'
+const OAK_TOP = '#93653f'
+const OAK_DARK = '#4f331d'
+const WALNUT = '#4a2c1a'
+const WALNUT_TOP = '#5d3a23'
+const IRON = '#3d3f46'
+const IRON_TOP = '#575a63'
+const STONE = '#8a8a90'
+const STONE_TOP = '#a3a3a8'
+const BRASS = '#b08a3e'
+const EMBER = '#ff8a2a'
+const FLAME = '#ffd36a'
+
+// ---------- Objects ----------
+
+const DEFS: ObjectDef[] = [
+  // Common furnishings, shared between looks.
+  {
+    id: 'chair',
+    name: 'Chair',
+    w: 1,
+    d: 1,
+    parts: [...legs(0.28, 0.3, 0.72, 0.74, 10, OAK_DARK), box(0.26, 0.28, 0.48, 0.48, 10, 3, OAK, OAK_TOP), box(0.26, 0.24, 0.48, 0.06, 10, 16, OAK, OAK_TOP)],
+  },
+  {
+    id: 'stool',
+    name: 'Stool',
+    w: 1,
+    d: 1,
+    parts: [...legs(0.36, 0.36, 0.64, 0.64, 9, OAK_DARK, 0.06), round(0.5, 0.5, 0.18, 9, 3, OAK, OAK_TOP)],
+  },
+  {
+    id: 'table',
+    name: 'Table',
+    w: 1,
+    d: 1,
+    parts: [...legs(0.18, 0.18, 0.82, 0.82, 15, OAK_DARK), box(0.12, 0.12, 0.76, 0.76, 15, 3, OAK, OAK_TOP)],
+  },
+  {
+    id: 'long-table',
+    name: 'Long table',
+    w: 2,
+    d: 1,
+    parts: [...legs(0.16, 0.2, 1.84, 0.8, 15, OAK_DARK), box(0.1, 0.14, 1.8, 0.72, 15, 3, OAK, OAK_TOP)],
+  },
+  {
+    id: 'chest',
+    name: 'Chest',
+    w: 1,
+    d: 1,
+    parts: [
+      box(0.16, 0.28, 0.68, 0.44, 0, 10, OAK, OAK_TOP),
+      box(0.16, 0.28, 0.68, 0.44, 10, 4, OAK_DARK, OAK),
+      box(0.45, 0.72, 0.1, 0.03, 6, 6, BRASS),
+    ],
+  },
+  {
+    id: 'barrel',
+    name: 'Barrel',
+    w: 1,
+    d: 1,
+    parts: [round(0.5, 0.5, 0.3, 0, 3, IRON), round(0.5, 0.5, 0.32, 3, 14, OAK), round(0.5, 0.5, 0.3, 17, 3, IRON, OAK_TOP)],
+  },
+  {
+    id: 'crate',
+    name: 'Crate',
+    w: 1,
+    d: 1,
+    parts: [box(0.18, 0.18, 0.64, 0.64, 0, 16, '#8c6a40', '#a17d4f')],
+  },
+  {
+    id: 'bookshelf',
+    name: 'Bookshelf',
+    w: 1,
+    d: 1,
+    parts: [
+      box(0.06, 0.12, 0.88, 0.3, 0, 40, OAK_DARK, OAK),
+      box(0.12, 0.42, 0.24, 0.04, 4, 10, '#7a2e2a'),
+      box(0.38, 0.42, 0.22, 0.04, 4, 9, '#2f4f6a'),
+      box(0.62, 0.42, 0.26, 0.04, 4, 11, '#5b6b34'),
+      box(0.12, 0.42, 0.3, 0.04, 18, 9, '#6a4a2a'),
+      box(0.46, 0.42, 0.42, 0.04, 18, 10, '#7a2e2a'),
+      box(0.12, 0.42, 0.5, 0.04, 30, 8, '#2f4f6a'),
+    ],
+  },
+  {
+    id: 'bed',
+    name: 'Bed',
+    w: 1,
+    d: 2,
+    parts: [
+      box(0.1, 0.06, 0.8, 0.14, 0, 18, OAK_DARK, OAK),
+      box(0.1, 0.2, 0.8, 1.7, 0, 8, OAK, OAK_TOP),
+      box(0.14, 0.24, 0.72, 1.62, 8, 3, '#d8d0bd', '#e8e1d0'),
+      box(0.2, 0.28, 0.6, 0.26, 11, 3, '#f1ece0'),
+      box(0.14, 0.72, 0.72, 1.14, 11, 2, '#6a2a2a', '#7c3434'),
+    ],
+  },
+  {
+    id: 'rug',
+    name: 'Rug',
+    w: 2,
+    d: 1,
+    parts: rug(2, 1, '#8b2f2f', '#c9a25a'),
+  },
+  {
+    id: 'statue',
+    name: 'Statue',
+    w: 1,
+    d: 1,
+    parts: [
+      box(0.14, 0.14, 0.72, 0.72, 0, 10, STONE, STONE_TOP),
+      round(0.5, 0.5, 0.16, 10, 26, STONE, STONE_TOP, 0.13),
+      round(0.5, 0.5, 0.11, 36, 10, STONE, STONE_TOP),
+    ],
+  },
+  {
+    id: 'pillar',
+    name: 'Pillar',
+    w: 1,
+    d: 1,
+    parts: [box(0.12, 0.12, 0.76, 0.76, 0, 5, STONE, STONE_TOP), round(0.5, 0.5, 0.28, 5, 44, STONE, STONE_TOP), box(0.12, 0.12, 0.76, 0.76, 49, 5, STONE, STONE_TOP)],
+  },
+  {
+    id: 'brazier',
+    name: 'Brazier',
+    w: 1,
+    d: 1,
+    parts: [round(0.5, 0.5, 0.08, 0, 12, IRON), round(0.5, 0.5, 0.18, 12, 6, IRON, '#2a1a12', 0.28), round(0.5, 0.5, 0.14, 18, 6, EMBER, FLAME, 0)],
+  },
+  {
+    id: 'mirror',
+    name: 'Mirror',
+    w: 1,
+    d: 1,
+    parts: [box(0.38, 0.4, 0.24, 0.14, 0, 3, WALNUT), box(0.16, 0.42, 0.68, 0.08, 3, 40, BRASS, '#d1ae5c'), box(0.22, 0.5, 0.56, 0.02, 7, 32, '#a9c4d4')],
+  },
+  {
+    id: 'weapon-rack',
+    name: 'Weapon rack',
+    w: 1,
+    d: 1,
+    parts: [
+      box(0.1, 0.4, 0.06, 0.12, 0, 30, OAK_DARK),
+      box(0.84, 0.4, 0.06, 0.12, 0, 30, OAK_DARK),
+      box(0.1, 0.4, 0.8, 0.12, 24, 4, OAK, OAK_TOP),
+      box(0.26, 0.52, 0.04, 0.04, 2, 30, '#b8bcc4'),
+      box(0.46, 0.52, 0.04, 0.04, 2, 34, '#b8bcc4'),
+      box(0.66, 0.52, 0.04, 0.04, 2, 28, '#b8bcc4'),
+    ],
+  },
+  {
+    id: 'bones',
+    name: 'Bones',
+    w: 1,
+    d: 1,
+    parts: [flat(0.2, 0.3, 0.5, 0.08, '#d9d2bd'), flat(0.35, 0.5, 0.08, 0.35, '#cfc7b0'), round(0.62, 0.66, 0.1, 0, 7, '#ddd6c2', '#ebe5d4')],
+  },
+
+  // Manor: finer wood, cloth and brass.
+  {
+    id: 'armchair',
+    name: 'Armchair',
+    w: 1,
+    d: 1,
+    parts: [
+      box(0.2, 0.22, 0.6, 0.58, 0, 10, WALNUT, WALNUT_TOP),
+      box(0.24, 0.3, 0.52, 0.46, 10, 3, '#6d2635', '#80303f'),
+      box(0.2, 0.16, 0.6, 0.12, 0, 28, '#6d2635', '#80303f'),
+      box(0.14, 0.24, 0.08, 0.54, 0, 17, WALNUT, WALNUT_TOP),
+      box(0.78, 0.24, 0.08, 0.54, 0, 17, WALNUT, WALNUT_TOP),
+    ],
+  },
+  {
+    id: 'dining-table',
+    name: 'Dining table',
+    w: 3,
+    d: 1,
+    parts: [
+      ...legs(0.16, 0.16, 2.84, 0.84, 15, WALNUT),
+      box(0.1, 0.1, 2.8, 0.8, 15, 3, WALNUT, WALNUT_TOP),
+      box(0.3, 0.38, 2.4, 0.24, 18, 1, '#e9e2cf'),
+      round(1.5, 0.5, 0.05, 19, 10, BRASS, FLAME),
+    ],
+  },
+  {
+    id: 'ornate-rug',
+    name: 'Ornate rug',
+    w: 3,
+    d: 2,
+    parts: [...rug(3, 2, '#2f3f6e', '#b8903f'), flat(0.6, 0.6, 1.8, 0.8, '#7c2a35', '#d6b46a')],
+  },
+  {
+    id: 'wardrobe',
+    name: 'Wardrobe',
+    w: 1,
+    d: 1,
+    parts: [box(0.08, 0.16, 0.84, 0.5, 0, 44, WALNUT, WALNUT_TOP), box(0.48, 0.66, 0.04, 0.02, 6, 34, '#2b1910'), box(0.4, 0.66, 0.04, 0.03, 20, 4, BRASS), box(0.56, 0.66, 0.04, 0.03, 20, 4, BRASS)],
+  },
+  {
+    id: 'canopy-bed',
+    name: 'Canopy bed',
+    w: 2,
+    d: 2,
+    parts: [
+      box(0.1, 0.1, 0.1, 0.1, 0, 46, WALNUT),
+      box(1.8, 0.1, 0.1, 0.1, 0, 46, WALNUT),
+      box(0.1, 1.8, 0.1, 0.1, 0, 46, WALNUT),
+      box(1.8, 1.8, 0.1, 0.1, 0, 46, WALNUT),
+      box(0.2, 0.1, 1.6, 0.14, 0, 22, WALNUT, WALNUT_TOP),
+      box(0.2, 0.24, 1.6, 1.56, 0, 9, WALNUT, WALNUT_TOP),
+      box(0.24, 0.28, 1.52, 1.48, 9, 3, '#e5ddc8', '#efe8d6'),
+      box(0.3, 0.32, 0.6, 0.24, 12, 3, '#f4efe4'),
+      box(1.1, 0.32, 0.6, 0.24, 12, 3, '#f4efe4'),
+      box(0.24, 0.9, 1.52, 0.86, 12, 2, '#5b2333', '#6d2a3d'),
+      box(0.1, 0.1, 1.8, 1.8, 46, 3, '#6d2a3d', '#7c3448'),
+    ],
+  },
+  {
+    id: 'bust',
+    name: 'Bust on plinth',
+    w: 1,
+    d: 1,
+    parts: [box(0.3, 0.3, 0.4, 0.4, 0, 24, '#d9d4c7', '#ece8de'), box(0.36, 0.4, 0.28, 0.2, 24, 6, '#cfc9ba'), round(0.5, 0.5, 0.1, 30, 10, '#d9d4c7', '#ece8de')],
+  },
+  {
+    id: 'candelabra',
+    name: 'Candelabra',
+    w: 1,
+    d: 1,
+    parts: [
+      round(0.5, 0.5, 0.12, 0, 2, BRASS),
+      round(0.5, 0.5, 0.03, 2, 30, BRASS),
+      box(0.3, 0.47, 0.4, 0.06, 30, 2, BRASS),
+      round(0.32, 0.5, 0.03, 32, 6, '#f2ecd8', FLAME),
+      round(0.5, 0.5, 0.03, 32, 8, '#f2ecd8', FLAME),
+      round(0.68, 0.5, 0.03, 32, 6, '#f2ecd8', FLAME),
+    ],
+  },
+  {
+    id: 'writing-desk',
+    name: 'Writing desk',
+    w: 2,
+    d: 1,
+    parts: [
+      box(0.1, 0.2, 0.5, 0.6, 0, 16, WALNUT, WALNUT_TOP),
+      box(1.4, 0.2, 0.5, 0.6, 0, 16, WALNUT, WALNUT_TOP),
+      box(0.1, 0.2, 1.8, 0.6, 16, 3, WALNUT, WALNUT_TOP),
+      box(0.4, 0.34, 0.36, 0.26, 19, 1, '#ece4cc'),
+      round(1.5, 0.4, 0.05, 19, 4, '#1c1c22'),
+    ],
+  },
+
+  // Cave: rock, growth and camp gear.
+  {
+    id: 'boulder',
+    name: 'Boulder',
+    w: 1,
+    d: 1,
+    parts: [round(0.5, 0.52, 0.38, 0, 8, '#6f6658', '#81786a', 0.34), round(0.48, 0.5, 0.32, 8, 8, '#6f6658', '#857c6d', 0.16)],
+  },
+  {
+    id: 'stalagmite',
+    name: 'Stalagmite',
+    w: 1,
+    d: 1,
+    parts: [round(0.5, 0.5, 0.3, 0, 14, '#7b7266', '#8c8376', 0.18), round(0.5, 0.5, 0.18, 14, 24, '#7b7266', '#8c8376', 0)],
+  },
+  {
+    id: 'mushrooms',
+    name: 'Mushrooms',
+    w: 1,
+    d: 1,
+    parts: [
+      round(0.36, 0.4, 0.04, 0, 10, '#d8cfb8'),
+      round(0.36, 0.4, 0.18, 10, 5, '#5e7fa8', '#7aa0cc', 0.04),
+      round(0.66, 0.62, 0.03, 0, 6, '#d8cfb8'),
+      round(0.66, 0.62, 0.12, 6, 4, '#7d5aa8', '#9b78c6', 0.03),
+    ],
+  },
+  {
+    id: 'campfire',
+    name: 'Campfire',
+    w: 1,
+    d: 1,
+    parts: [
+      flat(0.18, 0.18, 0.64, 0.64, '#2c2622', '#4a423b'),
+      box(0.24, 0.44, 0.52, 0.1, 0, 3, OAK_DARK),
+      box(0.44, 0.24, 0.1, 0.52, 3, 3, OAK_DARK),
+      round(0.5, 0.5, 0.14, 6, 10, EMBER, FLAME, 0),
+    ],
+  },
+  {
+    id: 'bedroll',
+    name: 'Bedroll',
+    w: 1,
+    d: 2,
+    parts: [flat(0.2, 0.15, 0.6, 1.7, '#6b5a3c', '#4c3f2a'), box(0.2, 0.15, 0.6, 0.25, 0, 4, '#8a774f')],
+  },
+
+  // Lava: forged iron and black glass.
+  {
+    id: 'anvil',
+    name: 'Anvil',
+    w: 1,
+    d: 1,
+    parts: [box(0.32, 0.32, 0.36, 0.36, 0, 10, '#4a3a2c', '#5c4936'), box(0.38, 0.4, 0.24, 0.2, 10, 5, IRON), box(0.2, 0.36, 0.6, 0.28, 15, 5, IRON, IRON_TOP)],
+  },
+  {
+    id: 'obsidian-altar',
+    name: 'Obsidian altar',
+    w: 2,
+    d: 1,
+    parts: [box(0.1, 0.15, 1.8, 0.7, 0, 6, '#1c1a20', '#2c2832'), box(0.25, 0.25, 1.5, 0.5, 6, 12, '#16141a', '#2a2530'), flat(0.6, 0.35, 0.8, 0.3, '#ff6a1a')],
+  },
+  {
+    id: 'cage',
+    name: 'Iron cage',
+    w: 1,
+    d: 1,
+    parts: [
+      box(0.14, 0.14, 0.72, 0.72, 0, 3, IRON, IRON_TOP),
+      box(0.14, 0.14, 0.05, 0.05, 3, 38, IRON),
+      box(0.81, 0.14, 0.05, 0.05, 3, 38, IRON),
+      box(0.47, 0.14, 0.05, 0.05, 3, 38, IRON),
+      box(0.14, 0.47, 0.05, 0.05, 3, 38, IRON),
+      box(0.81, 0.47, 0.05, 0.05, 3, 38, IRON),
+      box(0.14, 0.81, 0.05, 0.05, 3, 38, IRON),
+      box(0.47, 0.81, 0.05, 0.05, 3, 38, IRON),
+      box(0.81, 0.81, 0.05, 0.05, 3, 38, IRON),
+      box(0.14, 0.14, 0.72, 0.72, 41, 3, IRON, IRON_TOP),
+    ],
+  },
+  {
+    id: 'magma-rock',
+    name: 'Magma rock',
+    w: 1,
+    d: 1,
+    parts: [round(0.5, 0.5, 0.36, 0, 9, '#2a2226', '#3a2f33', 0.26), round(0.5, 0.5, 0.2, 9, 3, '#3a2f33', '#ff7a2a', 0.12)],
+  },
+
+  // Ice: frost and furs.
+  {
+    id: 'ice-block',
+    name: 'Ice block',
+    w: 1,
+    d: 1,
+    parts: [box(0.14, 0.14, 0.72, 0.72, 0, 22, '#8fc2dc', '#c4e4f2')],
+  },
+  {
+    id: 'ice-crystal',
+    name: 'Ice crystal',
+    w: 1,
+    d: 1,
+    parts: [round(0.42, 0.46, 0.2, 0, 34, '#9fd0ea', '#dff2fb', 0), round(0.66, 0.64, 0.12, 0, 20, '#8cc4e2', '#dff2fb', 0)],
+  },
+  {
+    id: 'snow-drift',
+    name: 'Snow drift',
+    w: 2,
+    d: 1,
+    parts: [round(0.55, 0.5, 0.42, 0, 6, '#dfe7ee', '#f2f6fa', 0.28), round(1.4, 0.55, 0.36, 0, 5, '#dfe7ee', '#f2f6fa', 0.22)],
+  },
+  {
+    id: 'fur-rug',
+    name: 'Fur rug',
+    w: 2,
+    d: 2,
+    parts: [flat(0.2, 0.25, 1.6, 1.5, '#d9cdb6', '#b8aa90'), flat(0.75, 0.05, 0.5, 0.25, '#d0c3aa')],
+  },
+  {
+    id: 'frozen-statue',
+    name: 'Frozen statue',
+    w: 1,
+    d: 1,
+    parts: [box(0.12, 0.12, 0.76, 0.76, 0, 8, '#a8c8d8', '#d0e6f0'), round(0.5, 0.5, 0.2, 8, 30, '#a8d2e6', '#dff1f9', 0.15), round(0.5, 0.5, 0.12, 38, 10, '#a8d2e6', '#dff1f9')],
+  },
+]
+
+const BY_ID = new Map(DEFS.map((def) => [def.id, def]))
+
+/** Every object, in catalog order. */
+export const OBJECTS: readonly ObjectDef[] = DEFS
+
+/** Stands in for an object whose kind is no longer in the catalog, so it can still be seen and removed. */
+const UNKNOWN: ObjectDef = {
+  id: 'unknown',
+  name: 'Unknown object',
+  w: 1,
+  d: 1,
+  parts: [box(0.2, 0.2, 0.6, 0.6, 0, 14, '#6a6d78', '#868995')],
+}
+
+export function objectDef(kind: string): ObjectDef {
+  return BY_ID.get(kind) ?? UNKNOWN
+}
+
+/** True when nothing stands up from it, so things can stand on it (a rug). */
+export function isFlatObject(def: ObjectDef): boolean {
+  return def.parts.every((part) => part.shape === 'flat')
+}

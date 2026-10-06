@@ -92,7 +92,7 @@ function ToastLayer({ toasts }: { toasts: Toast[] }) {
   const anchored = toasts.flatMap((toast) => {
     const roll = rolls.find((item) => item.id === toast.roll.id) ?? toast.roll
     const token = tokenForRoll(roll, tokens)
-    if (token && !tokenShown(token, floors, viewMode)) return []
+    if (token && !tokenShown(token, floors, tokens, viewMode)) return []
     return [{ ...toast, token: token && token.floorId === floor.id ? token : undefined }]
   })
   // Toasts in the same place stack upward: the newest sits nearest.

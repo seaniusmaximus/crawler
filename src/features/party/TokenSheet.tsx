@@ -12,7 +12,7 @@ import { Divider, Icon } from '../../ui/Icon.tsx'
 import { rollInitiativeFor } from './tokenRolls.ts'
 import { AbilityGrid, EditableValue, HpAdjust, HpBlock, HpEdit, Passives } from './PlayerStats.tsx'
 import { useStatEditing } from './useStatEditing.ts'
-import { hpTone, placeLabel, tokenPlace } from './tokenInfo.ts'
+import { foeSight, hpTone, placeLabel, revealTitle, tokenPlace, type FoeSight } from './tokenInfo.ts'
 
 const CONDITIONS_SHOWN = 5
 
@@ -159,12 +159,20 @@ function CharacterSheet({ player }: { player: Player }) {
   )
 }
 
+const SIGHT_LINE: Record<FoeSight, string> = {
+  invisible: 'Invisible to players',
+  seen: 'Players can see it',
+  hidden: 'Hidden from players',
+}
+
 function StatBlock({ player }: { player: Player }) {
   const floors = useDungeonStore((state) => state.dungeon.floors)
+  const tokens = useDungeonStore((state) => state.dungeon.players)
   const editable = useCanEdit(player)
   const stats = normalizeStats(player.stats)
   const { editing, setEditing, commit } = useStatEditing(player)
   const visible = player.visible === true
+  const sight = foeSight(player, floors, tokens ?? [])
   const room = tokenPlace(player, floors).room
   const ratio = hpRatio(stats.hp, stats.hpMax)
 
@@ -201,16 +209,18 @@ function StatBlock({ player }: { player: Player }) {
 
         <div className="reveal-bar">
           <span>
-            <Icon id={visible ? 'eye' : 'eyeOff'} size={15} />
-            {visible ? 'Visible to players' : 'Hidden from players'}
+            <Icon id={sight === 'seen' ? 'eye' : 'eyeOff'} size={15} />
+            {SIGHT_LINE[sight]}
             {room ? ` · ${room.name}` : ''}
           </span>
           <button
             type="button"
             className="chip-btn"
+            aria-pressed={visible}
+            title={revealTitle(characterNameOf(player), visible)}
             onClick={() => useDungeonStore.getState().setPlayerVisible(player.id, !visible)}
           >
-            {visible ? 'Hide' : 'Reveal'}
+            {visible ? 'Revealed' : 'Reveal'}
           </button>
         </div>
 
@@ -263,6 +273,29 @@ function StatBlock({ player }: { player: Player }) {
               className="is-inline"
               onEdit={() => setEditing('speed')}
               onCommit={(value) => commit('speed', value)}
+              onCancel={() => setEditing(null)}
+            />
+          </div>
+          <div>
+            <span className="block-label">Initiative</span>{' '}
+            <EditableValue
+              label="Initiative roll"
+              value={player.initiativeRoll}
+              display={
+                player.initiativeRoll != null
+                  ? `${player.initiativeRoll}`
+                  : stats.initiative != null
+                    ? formatSigned(stats.initiative)
+                    : '–'
+              }
+              editing={editing === 'initiativeRoll'}
+              editable={editable}
+              className="is-inline"
+              onEdit={() => setEditing('initiativeRoll')}
+              onCommit={(value) => {
+                useDungeonStore.getState().setInitiativeRoll(player.id, value === '' ? null : Number(value))
+                setEditing(null)
+              }}
               onCancel={() => setEditing(null)}
             />
           </div>

@@ -17,15 +17,15 @@ import {
 import { FEET_PER_TILE } from '../../model/scale.ts'
 import { STATUS_EFFECTS } from '../../model/status.ts'
 import type { StatusId } from '../../model/status.ts'
-import { openingAt, openingIsOpen } from '../../model/tiles.ts'
-import type { Player, Room } from '../../model/types.ts'
+import { openingAt, openingIsLocked, openingIsOpen } from '../../model/tiles.ts'
+import type { Player, Room, RoomObject } from '../../model/types.ts'
+import { objectDef } from '../../objects/catalog.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
-import type { OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
+import type { ObjectMenu, OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
-import { placeLabel } from '../party/tokenInfo.ts'
-import { tokenRevealed } from '../../model/visibility.ts'
+import { placeLabel, revealTitle, tokenShown } from '../party/tokenInfo.ts'
 import { TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Ring, RingButton, RingCore, RingStepper } from './Ring.tsx'
 import { CARD_FRAME, ringLayout, type RingLayout } from './ringLayout.ts'
@@ -48,6 +48,11 @@ export function RadialMenu() {
   if (!room) return null
   if (menu.kind === 'opening') {
     return <OpeningRing menu={menu} floorId={floor.id} room={room} rooms={floor.rooms} />
+  }
+  if (menu.kind === 'object') {
+    const object = room.objects?.find((item) => item.id === menu.objectId)
+    if (!object) return null
+    return <ObjectRing menu={menu} floorId={floor.id} room={room} object={object} />
   }
   return <RoomRing menu={menu} floorId={floor.id} room={room} />
 }
@@ -210,7 +215,7 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
           spot={seat[6]}
           icon={room.visible ? 'eyeOff' : 'eye'}
           label={room.visible ? 'Hide' : 'Reveal'}
-          title={room.visible ? 'Hide from players' : 'Reveal to players'}
+          title={room.visible ? 'Hide from players until they see into it again' : 'Mark explored: players see it on their map'}
           onClick={() => useDungeonStore.getState().setRoomVisible(floorId, room.id, !room.visible)}
         />
         <RingButton
@@ -288,7 +293,7 @@ function PullPicker({
                   title={inRoom ? 'Already in this room' : `Move to ${room.name}`}
                   onClick={() => pull(player)}
                 >
-                  <Avatar player={player} size={22} dim={!tokenRevealed(player)} />
+                  <Avatar player={player} size={22} dim={!tokenShown(player, floors, players, 'player')} />
                   <span className="radial-pull-name">{characterNameOf(player)}</span>
                   <span className="radial-pull-place">{inRoom ? 'Here' : placeLabel(player, floors)}</span>
                 </button>
@@ -366,13 +371,56 @@ function TilesetPicker({
   )
 }
 
+/** Turn an object either way, or take it away; its name between them. */
+function ObjectRing({
+  menu,
+  floorId,
+  room,
+  object,
+}: {
+  menu: ObjectMenu
+  floorId: string
+  room: Room
+  object: RoomObject
+}) {
+  const closeMenu = useEditorStore((state) => state.closeMenu)
+  const [stuck, setStuck] = useState(false)
+
+  function turn(steps: number): void {
+    setStuck(!useDungeonStore.getState().turnObject(floorId, room.id, object.id, steps))
+  }
+
+  function remove(): void {
+    useDungeonStore.getState().removeObject(floorId, room.id, object.id)
+    useEditorStore.getState().selectObject(null)
+    closeMenu()
+  }
+
+  const ring = ringLayout(3, { core: true, start: 300 })
+  return (
+    <RingFrame menu={menu} ring={ring}>
+      <Ring radius={ring.radius}>
+        <RingButton spot={ring.seats[0]} icon="rotateLeft" label="Turn left" onClick={() => turn(-1)} />
+        <RingButton spot={ring.seats[1]} icon="rotateRight" label="Turn right" onClick={() => turn(1)} />
+        <RingButton spot={ring.seats[2]} icon="trash" label="Remove" danger onClick={remove} />
+        <RingCore className="is-label">
+          <span>{objectDef(object.kind).name}</span>
+          <small>{stuck ? 'No room to turn' : room.name}</small>
+        </RingCore>
+      </Ring>
+    </RingFrame>
+  )
+}
+
 function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
   const [pickingStatus, setPickingStatus] = useState(false)
   const viewMode = useEditorStore((state) => state.viewMode)
   const size = playerSize(player)
   const hover = playerHover(player)
   const statuses = playerStatuses(player)
-  const visible = player.visible !== false
+  const monster = isMonster(player)
+  // A monster's switch reveals it out of sight; it shows on its own once its room is in sight.
+  const visible = monster ? player.visible === true : player.visible !== false
   const store = useDungeonStore.getState()
   // Players never open a foe's stat block.
   const canOpenSheet = player.kind !== 'monster' || viewMode !== 'player'
@@ -478,8 +526,14 @@ function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
         key="visible"
         spot={spot}
         icon={visible ? 'eyeOff' : 'eye'}
-        label={visible ? 'Hide' : 'Reveal'}
-        title={visible ? 'Hide from players' : 'Reveal to players'}
+        label={visible ? (monster ? 'Unreveal' : 'Hide') : 'Reveal'}
+        title={
+          monster
+            ? revealTitle(characterNameOf(player), visible)
+            : visible
+              ? 'Hide from players'
+              : 'Reveal to players'
+        }
         onClick={() => store.setPlayerVisible(player.id, !visible)}
       />
     ))
@@ -507,6 +561,7 @@ function OpeningRing({
   const closeMenu = useEditorStore((state) => state.closeMenu)
   const kind = openingAt(room, menu.cellX, menu.cellY)
   const open = openingIsOpen(room, menu.cellX, menu.cellY)
+  const locked = openingIsLocked(room, menu.cellX, menu.cellY)
   const label = kind === 'window' ? 'Window' : 'Door'
 
   function choose(next: boolean): void {
@@ -515,16 +570,33 @@ function OpeningRing({
     closeMenu()
   }
 
-  // Open on the left, Close on the right, the door's state between them.
-  const ring = ringLayout(2, { core: true, start: 270 })
+  function lock(next: boolean): void {
+    const spots = connectedOpenings(rooms, room.id, menu.cellX, menu.cellY)
+    useDungeonStore.getState().setOpeningLocked(floorId, spots, next)
+    closeMenu()
+  }
+
+  // Open upper left, Close upper right, Lock below; the door's state between them.
+  const ring = ringLayout(3, { core: true, start: 300 })
   return (
     <RingFrame menu={menu} ring={ring}>
       <Ring radius={ring.radius}>
         <RingButton spot={ring.seats[0]} icon="doorOpen" label="Open" active={open} onClick={() => choose(true)} />
         <RingButton spot={ring.seats[1]} icon="doors" label="Close" active={!open} onClick={() => choose(false)} />
+        <RingButton
+          spot={ring.seats[2]}
+          icon={locked ? 'unlock' : 'lock'}
+          label={locked ? 'Unlock' : 'Lock'}
+          title={locked ? 'Let players open and close it' : 'Stop players opening or closing it'}
+          active={locked}
+          onClick={() => lock(!locked)}
+        />
         <RingCore className="is-label">
           <span>{label}</span>
-          <small>{open ? 'Open' : 'Closed'}</small>
+          <small>
+            {open ? 'Open' : 'Closed'}
+            {locked ? ' · Locked' : ''}
+          </small>
         </RingCore>
       </Ring>
     </RingFrame>

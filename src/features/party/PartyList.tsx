@@ -11,7 +11,7 @@ import { getActiveFloor } from '../../state/selectors.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
 import { rollInitiativeFor } from './tokenRolls.ts'
-import { hpTone, tokenPlace, tokenShown, woundLabel } from './tokenInfo.ts'
+import { FOE_SIGHT_LABEL, foeSight, hpTone, revealTitle, tokenPlace, tokenShown, woundLabel } from './tokenInfo.ts'
 
 function toggleSheet(player: Player): void {
   const editor = useEditorStore.getState()
@@ -27,7 +27,7 @@ function useOrderedTokens(): Player[] {
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
   const floors = useDungeonStore((state) => state.dungeon.floors)
   const viewMode = useEditorStore((state) => state.viewMode)
-  return sortByInitiative(tokens).filter((token) => tokenShown(token, floors, viewMode))
+  return sortByInitiative(tokens).filter((token) => tokenShown(token, floors, tokens, viewMode))
 }
 
 export function PartyCard() {
@@ -157,11 +157,14 @@ export function FoesCard() {
   const viewMode = useEditorStore((state) => state.viewMode)
   const role = useSessionStore((state) => state.role)
   const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
-  const allFoes = monsterMembers(useDungeonStore((state) => state.dungeon.players ?? []))
+  const tokens = useDungeonStore((state) => state.dungeon.players)
+  const floors = useDungeonStore((state) => state.dungeon.floors)
+  const allFoes = monsterMembers(tokens ?? [])
   const foes = monsterMembers(useOrderedTokens())
   const dm = viewMode !== 'player'
   const canRun = role !== 'guest' && dm
-  const hidden = allFoes.filter((foe) => foe.visible !== true).length
+  const hidden = allFoes.filter((foe) => foeSight(foe, floors, tokens ?? []) !== 'seen').length
+  const unrolledFoes = allFoes.filter((foe) => foe.initiativeRoll == null)
 
   if (!dm && foes.length === 0) return null
 
@@ -179,14 +182,14 @@ export function FoesCard() {
         </h2>
         {dm && allFoes.length > 0 ? (
           <span className="panel-meta">
-            {allFoes.length - hidden} revealed · {hidden} hidden
+            {allFoes.length - hidden} seen · {hidden} hidden
           </span>
         ) : null}
       </header>
 
       <div className="token-list">
         {foes.length === 0 ? (
-          <p className="panel-empty">Add a monster — hidden from players until you reveal it</p>
+          <p className="panel-empty">Add a monster — it starts Invisible; clear that and players see it once they can see into its room</p>
         ) : dm ? (
           foes.map((foe) => <TokenRow key={foe.id} player={foe} turn={turnPlayerId === foe.id} />)
         ) : (
@@ -195,11 +198,24 @@ export function FoesCard() {
       </div>
 
       {canRun ? (
-        <div className="panel-foot">
+        <div className="panel-foot is-pair">
           <button type="button" className="dashed-btn" onClick={addMonster}>
             <Icon id="plus" size={15} />
-            Add monster
+            <span className="btn-label">Add monster</span>
           </button>
+          {unrolledFoes.length > 0 ? (
+            <button
+              type="button"
+              className="dashed-btn"
+              onClick={() => rollInitiativeFor(unrolledFoes)}
+              title="Roll initiative for every monster that has not rolled yet"
+            >
+              <Icon id="d20" size={15} />
+              <span className="btn-label">
+                {unrolledFoes.length < allFoes.length ? `Roll ${unrolledFoes.length} more` : 'Roll initiative'}
+              </span>
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>
@@ -211,12 +227,16 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
   const hovered = useEditorStore((state) => state.hoverPlayerId === player.id)
   const viewMode = useEditorStore((state) => state.viewMode)
   const floors = useDungeonStore((state) => state.dungeon.floors)
+  const tokens = useDungeonStore((state) => state.dungeon.players)
   const mine = useSessionStore((state) => state.myPlayerId === player.id)
   const stats = normalizeStats(player.stats)
   const name = characterNameOf(player)
   const monster = player.kind === 'monster'
   const visible = player.visible === true
   const dm = viewMode !== 'player'
+  // A monster reads as dim to the DM while players can't see it; a party member while the DM hides it.
+  const sight = monster ? foeSight(player, floors, tokens ?? []) : null
+  const faded = monster ? sight !== 'seen' : !visible
   const ratio = hpRatio(stats.hp, stats.hpMax)
   const statuses = playerStatuses(player)
   const firstStatus = STATUS_EFFECTS.find((effect) => effect.id === statuses[0])
@@ -238,8 +258,8 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
         <span className={`token-init${turn ? ' is-turn' : ''}${player.initiativeRoll == null ? ' is-empty' : ''}`}>
           {player.initiativeRoll ?? '—'}
         </span>
-        <Avatar player={player} turn={turn} dim={dm && !visible} />
-        <span className={`token-copy${dm && !visible ? ' is-dim' : ''}`}>
+        <Avatar player={player} turn={turn} dim={dm && faded} />
+        <span className={`token-copy${dm && faded ? ' is-dim' : ''}`}>
           <span className="token-line">
             <span className="token-name-wrap">
               <span className="token-name">
@@ -269,7 +289,7 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
               {stats.ac != null ? <span>AC {stats.ac}</span> : null}
               {stats.ac != null && room ? <span>·</span> : null}
               {room ? <span>{room.name}</span> : null}
-              {!visible ? <span className="hidden-chip">Hidden</span> : null}
+              {sight && sight !== 'seen' ? <span className="hidden-chip">{FOE_SIGHT_LABEL[sight]}</span> : null}
             </span>
           ) : null}
         </span>
@@ -279,8 +299,8 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
           type="button"
           className="icon-btn"
           aria-pressed={visible}
-          aria-label={visible ? `Hide ${name}` : `Reveal ${name}`}
-          title={visible ? `Hide ${name} from players` : `Reveal ${name} to players`}
+          aria-label={visible ? `Stop revealing ${name}` : `Reveal ${name}`}
+          title={revealTitle(name, visible)}
           onClick={() => useDungeonStore.getState().setPlayerVisible(player.id, !visible)}
         >
           <Icon id={visible ? 'eye' : 'eyeOff'} />

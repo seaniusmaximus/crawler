@@ -52,6 +52,13 @@ export function openingIsOpen(room: Room, x: number, y: number): boolean {
   return Boolean(room.openingOpen?.[cellKey(x, y)])
 }
 
+/** Only doors and windows lock; archways have nothing to bar. */
+export function openingIsLocked(room: Room, x: number, y: number): boolean {
+  const opening = openingAt(room, x, y)
+  if (opening !== 'door' && opening !== 'window') return false
+  return Boolean(room.openingLocked?.[cellKey(x, y)])
+}
+
 /**
  * Staircases clipped to the room's floor area. Shrinking a room hides the part
  * that no longer fits without discarding it, the way openings behave.

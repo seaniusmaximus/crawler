@@ -13,11 +13,11 @@ import {
   faceLight,
   grime,
   groutBand,
-  longCrack,
   mix,
   moss,
   newFace,
   newTop,
+  pairLeaves,
   patches,
   pebbles,
   planks,
@@ -40,7 +40,6 @@ const PALETTE = {
   log: [104, 74, 46],
   rope: [168, 142, 96],
   hide: [150, 116, 80],
-  water: [36, 52, 60],
   crystal: [120, 210, 220],
   crystalDeep: [60, 110, 160],
   shroom: [160, 230, 150],
@@ -48,19 +47,6 @@ const PALETTE = {
 }
 
 // ---------- Features ----------
-
-/** A shallow puddle: dark still water with a pale glint along its near edge. */
-function puddle(img, seed) {
-  const cx = TOP / 2
-  const cy = TOP / 2
-  each(img, (x, y) => {
-    const d = Math.hypot((x - cx) / 38, (y - cy) / 28) + (fbm(x, y, 16, seed, 2) - 0.5) * 0.5
-    if (d < 1) {
-      blend(img, x, y, tint(PALETTE.water, 0.9 + (y - cy) / 200), 0.85)
-      if (d > 0.86 && y < cy) blend(img, x, y, [170, 190, 196], 0.35)
-    } else if (d < 1.1) shade(img, x, y, 0.8)
-  })
-}
 
 /** A clump of pale, faintly glowing mushrooms. */
 function mushrooms(img, seed, color = PALETTE.shroom) {
@@ -100,18 +86,13 @@ function crystals(img, seed, cx, cy, spread, up = true) {
 
 // ---------- Tops ----------
 
-function floorTile(seed, { cell = 30, tone = 1, feature = null } = {}) {
+function floorTile(seed, { cell = 30, tone = 1 } = {}) {
   const img = newTop()
   slabField(img, seed, { cell, base: tint(PALETTE.rock, tone), seamColor: tint(PALETTE.rock, 0.62 * tone), seamWidth: 1.4, grain: 0.1, dome: 0.08 })
   // Packed dirt filling the low ground between the rocks.
   patches(img, seed + 5, 0.55, PALETTE.dirt, { scale: 34, max: 0.85, gain: 3 })
   grime(img, seed + 3, 0.15)
   pebbles(img, seed + 13, 4, PALETTE.rock, [1, 3])
-  if (feature === 'gravel') pebbles(img, seed + 14, 22, tint(PALETTE.rock, 1.1), [1, 3])
-  if (feature === 'puddle') puddle(img, seed + 15)
-  if (feature === 'mushrooms') mushrooms(img, seed + 16)
-  if (feature === 'crack') longCrack(img, seed + 12)
-  if (feature === 'moss') moss(img, seed + 11, 0.3)
   groutBand(img, PALETTE.seam)
   return img
 }
@@ -256,16 +237,16 @@ function doorLeaf(seed) {
 }
 
 /** Closed window: an animal hide stretched and stitched over a pole frame. */
-function hideShutters(seed) {
-  const img = newFace()
-  planks(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, seed, PALETTE.log, { plank: 12 })
+function hideShutters(seed, w = FACE_W) {
+  const img = newFace(w)
+  planks(img, { x: 0, y: 0, w, h: FACE_H }, seed, PALETTE.log, { plank: 12 })
   each(img, (x, y) => {
-    const inside = x > 7 && x < FACE_W - 7 && y > 6 && y < FACE_H - 6
+    const inside = x > 7 && x < w - 7 && y > 6 && y < FACE_H - 6
     if (!inside) return
     const n = fbm(x, y, 20, seed + 3, 3) - 0.5
     blend(img, x, y, tint(PALETTE.hide, 1 + n * 0.45))
   })
-  for (let x = 12; x < FACE_W - 8; x += 8) {
+  for (let x = 12; x < w - 8; x += 8) {
     fillRect(img, x, 5, 2, 4, PALETTE.rope)
     fillRect(img, x, FACE_H - 9, 2, 4, PALETTE.rope)
   }
@@ -316,13 +297,12 @@ function foundation(seed) {
 
 // ---------- Sheet ----------
 
-const floorFeatures = [null, null, null, null, null, null, null, null, null, null, null, 'gravel', 'puddle', 'mushrooms', 'crack', 'moss']
 const topFeatures = [null, null, null, null, null, null, null, null, null, 'moss', 'crystals', null]
 const faceFeatures = [null, null, null, null, null, null, null, null, null, null, 'crystals', 'roots', 'drip', 'mushrooms', 'moss', null]
 
 writeSheet('cave', {
-  floors: floorFeatures.map((feature, i) =>
-    floorTile(11100 + i * 17, { cell: 26 + (i % 4) * 5, tone: tones[i % tones.length], feature }),
+  floors: Array.from({ length: 16 }, (_, i) =>
+    floorTile(11100 + i * 17, { cell: 26 + (i % 4) * 5, tone: tones[i % tones.length] }),
   ),
   wallTops: topFeatures.map((feature, i) =>
     wallTop(12200 + i * 23, { cell: 36 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
@@ -334,4 +314,6 @@ writeSheet('cave', {
   shutters: hideShutters(16700),
   open: stakes(),
   foundations: [0, 1, 2, 3].map((i) => foundation(17700 + i * 11)),
+  doubleDoor: pairLeaves(doorLeaf(16600), doorLeaf(16650)),
+  doubleShutters: hideShutters(16700, FACE_W * 2),
 })

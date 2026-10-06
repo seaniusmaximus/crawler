@@ -32,6 +32,7 @@ export function mergeRooms(keep: Room, other: Room): Room {
 
   const openings: Record<string, Opening> = {}
   const openingOpen: Record<string, boolean> = {}
+  const openingLocked: Record<string, boolean> = {}
   // The kept room wins a cell both rooms changed.
   for (const source of [other, keep]) {
     for (const [key, opening] of Object.entries(source.openings)) {
@@ -44,11 +45,14 @@ export function mergeRooms(keep: Room, other: Room): Room {
       if (dissolved) {
         delete openings[key]
         delete openingOpen[key]
+        delete openingLocked[key]
         continue
       }
       openings[key] = opening
       if (source.openingOpen?.[key] !== undefined) openingOpen[key] = source.openingOpen[key]
       else delete openingOpen[key]
+      if (source.openingLocked?.[key]) openingLocked[key] = true
+      else delete openingLocked[key]
     }
   }
 
@@ -56,7 +60,9 @@ export function mergeRooms(keep: Room, other: Room): Room {
     ...shape,
     openings,
     openingOpen,
+    openingLocked,
     stairs: [...keep.stairs, ...other.stairs],
+    ...(keep.objects || other.objects ? { objects: [...(keep.objects ?? []), ...(other.objects ?? [])] } : {}),
   }
 }
 
@@ -72,12 +78,14 @@ export function splitRoom(room: Room, pieces: readonly { id: string; name: strin
       rectContains(part, x, y) && parts.findIndex((item) => rectContains(item, x, y)) === index
     const openings: Record<string, Opening> = {}
     const openingOpen: Record<string, boolean> = {}
+    const openingLocked: Record<string, boolean> = {}
     for (const [key, opening] of Object.entries(room.openings)) {
       const { x, y } = parseCellKey(key)
       if (!owns(x, y)) continue
       openings[key] = opening
       const open = room.openingOpen?.[key]
       if (open !== undefined) openingOpen[key] = open
+      if (room.openingLocked?.[key]) openingLocked[key] = true
     }
     const piece = index === 0 ? { id: room.id, name: room.name } : pieces[index - 1]
     const { parts: _parts, ...rest } = room
@@ -88,7 +96,9 @@ export function splitRoom(room: Room, pieces: readonly { id: string; name: strin
       rect: part,
       openings,
       openingOpen,
+      openingLocked,
       stairs: room.stairs.filter((block) => owns(block.rect.minX, block.rect.minY)),
+      ...(room.objects ? { objects: room.objects.filter((object) => owns(object.x, object.y)) } : {}),
     }
   })
 }

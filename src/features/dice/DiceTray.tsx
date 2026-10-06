@@ -8,6 +8,7 @@ import {
   rollBreakdown,
   type DiceRoll,
 } from '../../model/dice.ts'
+import { tokenForRoll } from '../../model/combat.ts'
 import { characterNameOf } from '../../model/players.ts'
 import { useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -15,6 +16,7 @@ import { useEditorStore } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
 import { bridgeIcon } from '../../ui/brand.ts'
+import { tokenShown } from '../party/tokenInfo.ts'
 import { EXTENSION_URL, startDiceBridge } from './bridge.ts'
 import { RollResult } from './RollResult.tsx'
 
@@ -23,7 +25,7 @@ const BRIDGE_GRACE_MS = 5000
 
 export function DiceTray() {
   const open = useDiceStore((state) => state.open)
-  const rolls = useDiceStore((state) => state.rolls)
+  const allRolls = useDiceStore((state) => state.rolls)
   const count = useDiceStore((state) => state.count)
   const modifier = useDiceStore((state) => state.modifier)
   const bridge = useDiceStore((state) => state.bridge)
@@ -41,6 +43,13 @@ export function DiceTray() {
     : undefined
   const [faces, setFaces] = useState<number>(20)
   const [graceOver, setGraceOver] = useState(false)
+  const tokens = useDungeonStore((state) => state.dungeon.players)
+  const floors = useDungeonStore((state) => state.dungeon.floors)
+  // Players never see a roll for a token they can't see, such as a hidden monster's initiative.
+  const rolls = allRolls.filter((roll) => {
+    const token = tokenForRoll(roll, tokens ?? [])
+    return !token || tokenShown(token, floors, tokens ?? [], viewMode)
+  })
   const latest = rolls[0] ?? null
 
   useEffect(() => startDiceBridge(), [])

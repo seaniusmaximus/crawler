@@ -11,12 +11,24 @@ export interface SheetRect {
 /**
  * Upright art. `wall` is a wall's side, which doorways and windows are also
  * cut from; `door` is the leaf, `window` the closed shutters and
- * `window-open` the bars (transparent between them). `foundation` is the
+ * `window-open` the bars (transparent between them). `door-double` and
+ * `window-double` span two cells: a pair of leaves meeting in the middle, used
+ * where two doors or windows stand side by side. `foundation` is the
  * rough stone under a raised room. Stairs between floors are built from
  * `tread` (a step's top, square, seen from above), `riser` (a step's face)
  * and `shaft` (the inner wall of a stairwell going down).
  */
-export type FaceKind = 'wall' | 'door' | 'window' | 'window-open' | 'foundation' | 'tread' | 'riser' | 'shaft'
+export type FaceKind =
+  | 'wall'
+  | 'door'
+  | 'door-double'
+  | 'window'
+  | 'window-double'
+  | 'window-open'
+  | 'foundation'
+  | 'tread'
+  | 'riser'
+  | 'shaft'
 
 /**
  * One look for the map: a spritesheet plus which part of it is which. Every
@@ -34,6 +46,11 @@ export interface Tileset {
   faces: Record<FaceKind, readonly SheetRect[]>
   /** Light falloff on the two faces the camera sees, 1 = unshaded. */
   shade: { left: number; right: number }
+  /**
+   * Catalog ids of the objects that suit this look, offered first when dressing
+   * its rooms. Any object can still go in any room.
+   */
+  objects: readonly string[]
 }
 
 /** A row of equal cells, starting `from` cells in from the sheet's left edge. */

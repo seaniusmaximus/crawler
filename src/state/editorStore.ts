@@ -1,9 +1,10 @@
 import { create } from 'zustand'
 import { rotateAt, zoomAt } from '../canvas/camera.ts'
+import { nextTurn } from '../model/objects.ts'
 import type { DoorStyle, Tool } from '../model/tools.ts'
 import type { StairLanding, StairUsePrompt } from '../model/stairs.ts'
 import type { ViewMode } from '../model/visibility.ts'
-import type { Camera, StairsDir } from '../model/types.ts'
+import type { Camera, ObjectTurn, StairsDir } from '../model/types.ts'
 
 export interface RoomMenu {
   kind: 'room'
@@ -24,6 +25,20 @@ export interface OpeningMenu {
   y: number
 }
 
+export interface ObjectMenu {
+  kind: 'object'
+  roomId: string
+  objectId: string
+  x: number
+  y: number
+}
+
+/** One object in one room on the active floor. */
+export interface ObjectRef {
+  roomId: string
+  objectId: string
+}
+
 export interface PlayerMenu {
   kind: 'player'
   playerId: string
@@ -31,7 +46,7 @@ export interface PlayerMenu {
   y: number
 }
 
-export type Menu = RoomMenu | OpeningMenu | PlayerMenu
+export type Menu = RoomMenu | OpeningMenu | ObjectMenu | PlayerMenu
 
 /** `leftInset` keeps the room centred in the area a docked panel is not covering. */
 export interface FocusRequest {
@@ -61,6 +76,14 @@ interface EditorState {
   resizeRoomId: string | null
   /** The Link button is set to merge rooms into one rather than link them. */
   linkMerge: boolean
+  /** Catalog id of the object the Objects tool places. */
+  objectKind: string
+  /** How the next placed object is turned. */
+  objectTurn: ObjectTurn
+  /** Which tileset's objects the picker lists ('all' for every object); null follows the map's tileset. */
+  objectGroup: string | null
+  /** A placed object clicked with the Objects tool; Delete removes it rather than its room. */
+  selectedObject: ObjectRef | null
   /** First room picked with the link or merge tool, waiting for its partner. */
   linkRoomId: string | null
   menu: Menu | null
@@ -83,6 +106,12 @@ interface EditorState {
   setStairsBetween: () => void
   /** Set the Link button to link rooms, or to merge them into one. */
   setLinkMerge: (merge: boolean) => void
+  /** Pick the object the Objects tool places, switching to that tool. */
+  setObjectKind: (kind: string) => void
+  /** Turn the object about to be placed by quarter turns. */
+  turnObjectDraft: (steps: number) => void
+  setObjectGroup: (group: string | null) => void
+  selectObject: (object: ObjectRef | null) => void
   setActiveFloor: (floorId: string) => void
   selectRoom: (roomId: string | null) => void
   setHoverRoom: (roomId: string | null) => void
@@ -124,6 +153,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   roomsLocked: readRoomsLocked(),
   stairsBetween: false,
   linkMerge: false,
+  objectKind: 'table',
+  objectTurn: 0,
+  objectGroup: null,
+  selectedObject: null,
   activeFloorId: null,
   selectedRoomId: null,
   hoverRoomId: null,
@@ -161,6 +194,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       menu: null,
       resizeRoomId: null,
       linkRoomId: null,
+      selectedObject: tool === 'objects' ? state.selectedObject : null,
     })),
   setDoorStyle: (doorStyle) => set({ doorStyle, tool: 'doors' }),
   setRoomsLocked: (roomsLocked) => {
@@ -176,6 +210,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   setLinkMerge: (linkMerge) =>
     set({ linkMerge, tool: linkMerge ? 'merge' : 'link', menu: null, resizeRoomId: null, linkRoomId: null }),
   // Selection, hover and resize all point at rooms on the floor being left.
+  setObjectKind: (objectKind) => set({ objectKind, tool: 'objects', menu: null, resizeRoomId: null, linkRoomId: null }),
+  turnObjectDraft: (steps) => set((state) => ({ objectTurn: nextTurn(state.objectTurn, steps) })),
+  setObjectGroup: (objectGroup) => set({ objectGroup }),
+  selectObject: (selectedObject) => set({ selectedObject }),
   setActiveFloor: (floorId) =>
     set({
       activeFloorId: floorId,
@@ -184,12 +222,14 @@ export const useEditorStore = create<EditorState>((set) => ({
       hoverPlayerId: null,
       resizeRoomId: null,
       linkRoomId: null,
+      selectedObject: null,
       menu: null,
     }),
   selectRoom: (roomId) =>
     set((state) => ({
       selectedRoomId: roomId,
       selectedPlayerId: roomId ? null : state.selectedPlayerId,
+      selectedObject: null,
       menu: null,
       resizeRoomId: state.resizeRoomId === roomId ? state.resizeRoomId : null,
     })),
@@ -198,6 +238,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((state) => ({
       selectedPlayerId: playerId,
       selectedRoomId: playerId ? null : state.selectedRoomId,
+      selectedObject: playerId ? null : state.selectedObject,
       resizeRoomId: playerId ? null : state.resizeRoomId,
       menu: playerId ? null : state.menu,
     })),
@@ -206,8 +247,14 @@ export const useEditorStore = create<EditorState>((set) => ({
   openMenu: (menu) =>
     set(
       menu.kind === 'player'
-        ? { selectedPlayerId: menu.playerId, selectedRoomId: null, resizeRoomId: null, menu }
-        : { selectedRoomId: menu.roomId, selectedPlayerId: null, menu },
+        ? { selectedPlayerId: menu.playerId, selectedRoomId: null, selectedObject: null, resizeRoomId: null, menu }
+        : {
+            selectedRoomId: menu.roomId,
+            selectedPlayerId: null,
+            // Delete then takes away what was right-clicked: this object, or else the room.
+            selectedObject: menu.kind === 'object' ? { roomId: menu.roomId, objectId: menu.objectId } : null,
+            menu,
+          },
     ),
   closeMenu: () => set({ menu: null }),
   beginResize: (roomId) => set({ resizeRoomId: roomId, selectedRoomId: roomId, menu: null }),

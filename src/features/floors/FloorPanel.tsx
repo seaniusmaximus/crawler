@@ -4,7 +4,7 @@ import { floorAtOrder, floorTag, floorsTopDown, GROUND_ORDER } from '../../model
 import { playersInRoom } from '../../model/players.ts'
 import { rectHeight, rectWidth } from '../../model/rect.ts'
 import type { Floor, Player, Room } from '../../model/types.ts'
-import { roomRevealed, shownFloors, type ViewMode } from '../../model/visibility.ts'
+import { roomExplored, shownFloors, type ViewMode } from '../../model/visibility.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
@@ -26,12 +26,12 @@ function useActiveFloorId(floors: readonly Floor[]): string | null {
 }
 
 function shownRoomsOf(floor: Floor, mode: ViewMode): Room[] {
-  return mode === 'player' ? floor.rooms.filter(roomRevealed) : floor.rooms
+  return mode === 'player' ? floor.rooms.filter(roomExplored) : floor.rooms
 }
 
 function occupantsOf(floor: Floor, room: Room, tokens: readonly Player[], mode: ViewMode): Player[] {
   return playersInRoom(tokens, floor, room.id).filter((token) =>
-    tokenShown(token, [floor], mode),
+    tokenShown(token, [floor], tokens, mode),
   )
 }
 
@@ -234,7 +234,7 @@ function FloorDrawer({
             const on = floor.id === activeId
             const count = shownRoomsOf(floor, viewMode).length
             const people = tokens.filter(
-              (token) => token.floorId === floor.id && tokenShown(token, floors, viewMode),
+              (token) => token.floorId === floor.id && tokenShown(token, floors, tokens, viewMode),
             )
             return (
               <div key={floor.id} className="floor-drawer-item">
@@ -265,7 +265,7 @@ function FloorDrawer({
                     </span>
                     <span className="avatar-row">
                       {people.map((person) => (
-                        <Avatar key={person.id} player={person} size={18} dim={person.visible !== true} />
+                        <Avatar key={person.id} player={person} size={18} dim={!tokenShown(person, floors, tokens, 'player')} />
                       ))}
                     </span>
                   </button>
@@ -283,14 +283,14 @@ function FloorDrawer({
             <span className="kicker">Rooms on {floorTag(active.order)}</span>
             {viewMode === 'player' ? null : (
               <span className="panel-meta">
-                {active.rooms.length - hidden} revealed · {hidden} hidden
+                {active.rooms.length - hidden} explored · {hidden} unexplored
               </span>
             )}
           </div>
           <ul className="room-list">
             {rooms.length === 0 ? (
               <li className="panel-empty">
-                {viewMode === 'player' ? 'Nothing revealed on this floor' : 'Drag on the grid to paint a room'}
+                {viewMode === 'player' ? 'Nothing explored on this floor' : 'Drag on the grid to paint a room'}
               </li>
             ) : (
               rooms.map((room) => (
@@ -405,8 +405,8 @@ function RoomRow({ floor, room, occupants }: { floor: Floor; room: Room; occupan
             type="button"
             className="icon-btn"
             aria-pressed={room.visible}
-            aria-label={room.visible ? `Hide ${room.name}` : `Reveal ${room.name}`}
-            title={room.visible ? 'Visible to players' : 'Hidden from players'}
+            aria-label={room.visible ? `Mark ${room.name} unexplored` : `Mark ${room.name} explored`}
+            title={room.visible ? 'Explored: players see it, greyed out when they cannot see in' : 'Unexplored: hidden from players until they see into it'}
             onClick={(event) => {
               event.stopPropagation()
               useDungeonStore.getState().setRoomVisible(floor.id, room.id, !room.visible)

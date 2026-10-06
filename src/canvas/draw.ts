@@ -14,16 +14,22 @@ import { sameLink } from '../model/links.ts'
 import { roomCells, roomContains } from '../model/rect.ts'
 import { rampFlight, rampOccupancy } from '../model/ramps.ts'
 import type { RampDraft, RampSlice } from '../model/ramps.ts'
-import { cellKey, openingAt, openingIsOpen, spriteAt, stairsAt } from '../model/tiles.ts'
+import { openingGroup } from '../model/openings.ts'
+import type { OpeningGroup } from '../model/openings.ts'
+import { cellKey, openingAt, openingIsLocked, openingIsOpen, parseCellKey, spriteAt, stairsAt } from '../model/tiles.ts'
 import { stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import { sharedWalls } from '../model/walls.ts'
 import type { SharedWalls } from '../model/walls.ts'
 import type { FeatureDraft, FeatureTool } from '../model/tools.ts'
 import type { Camera, Cell, CellRect, Edge, ElevationRamp, Link, Player, Room, StairsBlock, TileSprite } from '../model/types.ts'
+import { playerRooms, roomExplored, roomShade } from '../model/visibility.ts'
 import type { ViewMode } from '../model/visibility.ts'
 import type { TileCache } from '../tiles/TileCache.ts'
 import { seedFor, type FaceKind, type Variant } from '../tiles/tileset.ts'
 import type { LinkBadge } from './badges.ts'
+import { objectDef } from '../objects/catalog.ts'
+import type { ObjectDraft } from '../model/objects.ts'
+import { drawPiece, drawWholeObject, roomObjectPieces, type ObjectLight, type ObjectPiece } from './objects.ts'
 import {
   TILE_HEIGHT,
   WALL_HEIGHT,
@@ -88,15 +94,54 @@ export interface DrawView {
   tokenPoses: readonly { playerId: string; x: number; y: number; tilt: number }[]
   turnPlayerId: string | null
   viewMode: ViewMode
+  /** Explored rooms the party can see into now; the rest of the explored ones draw greyed out for players. */
+  sight: ReadonlySet<string>
+  /** Tokens players can't see now, drawn faded for the DM. */
+  unseen: ReadonlySet<string>
+  /** A word over a door for a moment, such as why it would not open. */
+  notice: { x: number; y: number; text: string } | null
+  /** The object the Objects tool would place, or one being moved, drawn as a ghost. */
+  objectDraft: ObjectDraft | null
+  /** Object footprints to outline: the one picked, and the one under the pointer with the Objects tool. */
+  objectFocus: readonly { rect: CellRect; elevation: number; selected: boolean }[]
   /** The map's tiles. */
   tileCache: TileCache
   /** The tiles one room draws with, when it has a tileset of its own. */
   tilesFor?: (room: Room) => TileCache
 }
 
-/** The view as one room draws itself: with its own tiles when they differ from the map's. */
-function roomView(view: DrawView, room: Room | undefined): DrawView {
-  const tileCache = room && view.tilesFor ? view.tilesFor(room) : view.tileCache
+/**
+ * How a room's tiles are toned: the DM sees rooms players haven't explored
+ * faded; players see explored rooms they can't see into now greyed out.
+ */
+type Shade = 'none' | 'dim' | 'fog'
+
+function shadeOf(view: DrawView, room: Room | undefined): Shade {
+  if (!room) return 'none'
+  if (view.viewMode === 'dm') return roomExplored(room) ? 'none' : 'dim'
+  return roomShade(room, view.sight) === 'fog' ? 'fog' : 'none'
+}
+
+/**
+ * Tone whatever `paint` draws by its room's shade. A greyed-out room already
+ * draws with greyed tiles (see `roomView`); it only fades if those weren't made.
+ * Plain alpha, never a canvas filter: this runs for every tile, every frame.
+ */
+function shaded(ctx: CanvasRenderingContext2D, shade: Shade, tiles: TileCache, paint: () => void): void {
+  const alpha = shade === 'dim' ? 0.42 : shade === 'fog' && !tiles.isFog ? 0.45 : 1
+  if (alpha === 1) {
+    paint()
+    return
+  }
+  ctx.globalAlpha = alpha
+  paint()
+  ctx.globalAlpha = 1
+}
+
+/** The view as one room draws itself: with its own tiles when they differ from the map's, greyed when out of sight. */
+function roomView(view: DrawView, room: Room | undefined, shade: Shade = 'none'): DrawView {
+  const own = room && view.tilesFor ? view.tilesFor(room) : view.tileCache
+  const tileCache = shade === 'fog' ? (own.fogged() ?? own) : own
   return tileCache === view.tileCache ? view : { ...view, tileCache }
 }
 
@@ -108,7 +153,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
   const bounds = visibleCellBounds(view)
   drawGrid(ctx, view, bounds)
 
-  const shown = view.viewMode === 'player' ? view.rooms.filter((room) => room.visible) : view.rooms
+  const shown = view.viewMode === 'player' ? playerRooms(view.rooms) : view.rooms
   const shared = sharedWalls(shown)
   const top = topRoomAtCell(shown)
   const ramps = visibleRamps(view)
@@ -116,12 +161,14 @@ export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
   if (view.viewMode === 'player') {
     for (const slice of [...rampCells.values()]) {
       const room = occupantRoom(view.rooms, slice.x, slice.y)
-      if (room && !room.visible) rampCells.delete(cellKey(slice.x, slice.y))
+      if (room && !roomExplored(room)) rampCells.delete(cellKey(slice.x, slice.y))
     }
   }
   const painted: DrawView = { ...view, rooms: shown }
   drawSupports(ctx, painted, top, rampCells)
   drawTiles(ctx, painted, bounds, shared, top, rampCells)
+  if (view.viewMode === 'dm') drawLocks(ctx, painted)
+  for (const focus of view.objectFocus) drawObjectFocus(ctx, view, focus)
 
   const selected =
     view.viewMode === 'player' ? undefined : painted.rooms.find((room) => room.id === view.selectedRoomId)
@@ -156,9 +203,11 @@ export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
   drawMovePath(ctx, view)
   drawTokens(ctx, view)
 
+  if (view.objectDraft) drawObjectDraft(ctx, view, view.objectDraft)
   if (view.feature) drawFeaturePreview(ctx, view, view.feature)
   if (view.rampDraft) drawRampPreview(ctx, view, view.rampDraft)
   if (view.draft) drawDraft(ctx, view, view.draft)
+  if (view.notice) drawDoorNotice(ctx, painted, view.notice)
 }
 
 function visibleCellBounds(view: DrawView): CellRect {
@@ -268,13 +317,14 @@ function drawSupports(
     bottom: number
     elevation: number
     depth: number
-    dim: boolean
+    shade: Shade
     view: DrawView
   }[] = []
   view.rooms.forEach((room, roomIndex) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
-    const own = roomView(view, room)
+    const shade = shadeOf(view, room)
+    const own = roomView(view, room, shade)
     for (let y = rect.minY; y <= rect.maxY; y++) {
       for (let x = rect.minX; x <= rect.maxX; x++) {
         if (top.get(cellKey(x, y)) !== roomIndex) continue
@@ -287,7 +337,7 @@ function drawSupports(
           bottom,
           elevation,
           depth: isoDepth(x, y, view.camera.yaw),
-          dim: view.viewMode === 'dm' && !room.visible,
+          shade,
           view: own,
           hideFace: (nx, ny) =>
             roomContains(room, nx, ny) || elevationAt(view.rooms, top, nx, ny) >= elevation,
@@ -297,9 +347,9 @@ function drawSupports(
   })
   cells.sort((a, b) => a.depth - b.depth || a.elevation - b.elevation)
   for (const cell of cells) {
-    if (cell.dim) ctx.globalAlpha = 0.42
-    drawSupportPrism(ctx, cell.view, cell.x, cell.y, cell.bottom, cell.elevation, cell.hideFace)
-    ctx.globalAlpha = 1
+    shaded(ctx, cell.shade, cell.view.tileCache, () =>
+      drawSupportPrism(ctx, cell.view, cell.x, cell.y, cell.bottom, cell.elevation, cell.hideFace),
+    )
   }
 }
 
@@ -350,13 +400,34 @@ interface QueuedTile {
   /** A cell of stairs between rooms. */
   ramp?: RampSlice
   open: boolean
-  dim: boolean
+  /** For a door or window, its place in the run it merges with. */
+  group?: OpeningGroup
+  shade: Shade
   /** Carries the tiles of the room this tile belongs to. */
   view: DrawView
 }
 
-function paintOrder(a: QueuedTile, b: QueuedTile): number {
-  return a.depth - b.depth || a.elevation - b.elevation || a.roomIndex - b.roomIndex
+/** A piece of an object, painted after its cell's floor: rugs (layer 1) before furniture (layer 2). */
+interface QueuedPiece {
+  depth: number
+  elevation: number
+  roomIndex: number
+  x: number
+  y: number
+  layer: 1 | 2
+  piece: ObjectPiece
+  shade: Shade
+  view: DrawView
+}
+
+type Queued = QueuedTile | QueuedPiece
+
+function layerOf(item: Queued): number {
+  return 'piece' in item ? item.layer : 0
+}
+
+function paintOrder(a: Queued, b: Queued): number {
+  return a.depth - b.depth || a.elevation - b.elevation || layerOf(a) - layerOf(b) || a.roomIndex - b.roomIndex
 }
 
 function drawTiles(
@@ -367,14 +438,16 @@ function drawTiles(
   top: Map<string, number>,
   rampCells: Map<string, RampSlice>,
 ): void {
-  const queue: QueuedTile[] = []
+  const queue: Queued[] = []
   const yaw = view.camera.yaw
   view.rooms.forEach((room, roomIndex) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
     // Each room shuffles its art by its own id, so rooms of the same size never match.
     const seed = seedFor(room.id)
-    const own = roomView(view, room)
+    const shade = shadeOf(view, room)
+    const own = roomView(view, room, shade)
+    const pieces = room.objects?.length ? roomObjectPieces(room, yaw) : null
     const minX = Math.max(rect.minX, bounds.minX)
     const maxX = Math.min(rect.maxX, bounds.maxX)
     const minY = Math.max(rect.minY, bounds.minY)
@@ -401,9 +474,25 @@ function drawTiles(
           bitmap,
           stairs: stairsAt(room, x, y),
           open: openingIsOpen(room, x, y),
-          dim: view.viewMode === 'dm' && !room.visible,
+          group: opening === 'door' || opening === 'window' ? openingGroup(room, x, y) : undefined,
+          shade,
           view: own,
         })
+        // Objects only show where their room's floor does; a wall painted over one hides it.
+        const here = sprite === 'floor' ? pieces?.get(cellKey(x, y)) : undefined
+        for (const piece of here ?? []) {
+          queue.push({
+            x,
+            y,
+            depth: isoDepth(x, y, yaw),
+            elevation,
+            roomIndex,
+            layer: piece.shape === 'flat' ? 1 : 2,
+            piece,
+            shade,
+            view: own,
+          })
+        }
       }
     }
   })
@@ -412,6 +501,7 @@ function drawTiles(
     for (const slice of rampCells.values()) {
       // Stairs between rooms take the look of the room they stand in.
       const host = occupantRoom(view.rooms, slice.x, slice.y)
+      const shade = shadeOf(view, host)
       queue.push({
         x: slice.x,
         y: slice.y,
@@ -424,8 +514,8 @@ function drawTiles(
         stairs: undefined,
         ramp: slice,
         open: false,
-        dim: view.viewMode === 'dm' && host?.visible === false,
-        view: roomView(view, host),
+        shade,
+        view: roomView(view, host, shade),
       })
     }
   }
@@ -433,24 +523,36 @@ function drawTiles(
   ctx.imageSmoothingEnabled = true
   for (const tile of queue) {
     const own = tile.view
-    drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () => {
-      if (tile.dim) ctx.globalAlpha = 0.42
-      if (tile.ramp) {
-        // Its stone reaches down to the ground, or to a lower neighbour's floor.
-        const bottom = Math.min(tile.ramp.ramp.fromElev, supportBottom(view.rooms, top, tile.x, tile.y, tile.ramp.ramp.fromElev))
-        drawRampStairs(ctx, own, tile.ramp, bottom, tile.variant)
-      } else if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
-        drawFloor(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation)
-      } else if (tile.sprite === 'wall') {
-        drawWall(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
-      } else drawOpening(ctx, own, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant)
-      if (tile.stairs && tile.sprite === 'floor') {
-        drawStairs(ctx, own, tile.x, tile.y, tile.stairs, tile.elevation, tile.variant)
-      }
-      ctx.globalAlpha = 1
-    })
+    if ('piece' in tile) {
+      const light = objectLight(own, tile.shade)
+      drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () =>
+        shaded(ctx, tile.shade, own.tileCache, () => drawPiece(ctx, view.camera, tile.piece, tile.elevation, light)),
+      )
+      continue
+    }
+    drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () =>
+      shaded(ctx, tile.shade, own.tileCache, () => {
+        if (tile.ramp) {
+          // Its stone reaches down to the ground, or to a lower neighbour's floor.
+          const bottom = Math.min(tile.ramp.ramp.fromElev, supportBottom(view.rooms, top, tile.x, tile.y, tile.ramp.ramp.fromElev))
+          drawRampStairs(ctx, own, tile.ramp, bottom, tile.variant)
+        } else if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
+          drawFloor(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation)
+        } else if (tile.sprite === 'wall') {
+          drawWall(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
+        } else drawOpening(ctx, own, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant, tile.group)
+        if (tile.stairs && tile.sprite === 'floor') {
+          drawStairs(ctx, own, tile.x, tile.y, tile.stairs, tile.elevation, tile.variant)
+        }
+      }),
+    )
   }
   ctx.imageSmoothingEnabled = false
+}
+
+function objectLight(view: DrawView, shade: Shade): ObjectLight {
+  const falloff = view.tileCache.tileset.shade
+  return { left: falloff.left, right: falloff.right, fog: shade === 'fog' }
 }
 
 /** Keep a lower tile from painting inside a higher room's solid volume. */
@@ -559,6 +661,10 @@ interface OpeningPiece {
   z0: number
   z1: number
   art: 'stone' | FaceKind
+  /** The stretch of wall its art is spread across, if wider than the piece (a double leaf). */
+  span?: [number, number]
+  /** A fixed slice of the art across the piece, for a leaf swung open. */
+  u?: [number, number]
 }
 
 /** Width of each stone jamb, as a share of the cell. */
@@ -571,44 +677,52 @@ const WINDOW_HEAD = 0.78
 const FRAME_DEPTH = 0.12
 /** How far a closed leaf sits back inside its frame. */
 const LEAF_INSET = 0.025
-/** How far an open door's leaf reaches into the room. */
-const SWING = 0.55
+/** How thick a leaf is once swung open. */
+const LEAF_THICKNESS = 0.08
+/** How far an open door's leaf reaches into the room, as a share of its width. */
+const SWING = 0.86
 
 /**
  * A doorway or window stands on the cell edge that faces the camera, flush with
  * the visible face of the walls beside it: jambs, a lintel (plus a sill for
  * windows) and the leaf, all in one thin plane. The rest of the cell is open
  * floor, with no wall top over it. `front` is that edge, 0 or 1 across the wall.
+ * Pieces span the whole opening, `size` cells along the wall; each cell then
+ * draws its own share, so a double door has jambs only at its two ends.
  */
-function openingPieces(opening: 'door' | 'window', open: boolean, front: 0 | 1): OpeningPiece[] {
+function openingPieces(opening: 'door' | 'window', open: boolean, front: 0 | 1, size: number): OpeningPiece[] {
   const c0 = front === 1 ? 1 - FRAME_DEPTH : 0
   const c1 = front === 1 ? 1 : FRAME_DEPTH
   const leaf = { c0: c0 + LEAF_INSET, c1: c1 - LEAF_INSET }
   const pieces: OpeningPiece[] = [
     { a0: 0, a1: JAMB, c0, c1, z0: 0, z1: 1, art: 'stone' },
-    { a0: 1 - JAMB, a1: 1, c0, c1, z0: 0, z1: 1, art: 'stone' },
+    { a0: size - JAMB, a1: size, c0, c1, z0: 0, z1: 1, art: 'stone' },
   ]
+  const span: [number, number] = [JAMB, size - JAMB]
   if (opening === 'door') {
-    pieces.push({ a0: JAMB, a1: 1 - JAMB, c0, c1, z0: DOOR_HEAD, z1: 1, art: 'stone' })
-    // Open, the leaf swings back into the room against its hinge jamb.
-    const swung = front === 1 ? { c0: c0 - SWING, c1: c0 } : { c0: c1, c1: c1 + SWING }
-    pieces.push(
-      open
-        ? { a0: JAMB, a1: JAMB + 0.08, ...swung, z0: 0, z1: DOOR_HEAD, art: 'door' }
-        : { a0: JAMB, a1: 1 - JAMB, ...leaf, z0: 0, z1: DOOR_HEAD, art: 'door' },
-    )
+    pieces.push({ a0: JAMB, a1: size - JAMB, c0, c1, z0: DOOR_HEAD, z1: 1, art: 'stone' })
+    const art = size === 1 ? 'door' : 'door-double'
+    if (!open) {
+      pieces.push({ a0: JAMB, a1: size - JAMB, ...leaf, z0: 0, z1: DOOR_HEAD, art, span })
+      return pieces
+    }
+    // Open, each leaf swings back into the room against its own jamb; a pair meets in the middle.
+    const width = (size - 2 * JAMB) / size
+    const swung = front === 1 ? { c0: c0 - width * SWING, c1: c0 } : { c0: c1, c1: c1 + width * SWING }
+    pieces.push({ a0: JAMB, a1: JAMB + LEAF_THICKNESS, ...swung, z0: 0, z1: DOOR_HEAD, art, u: size === 1 ? [0, 1] : [0, 0.5] })
+    if (size > 1) {
+      pieces.push({ a0: size - JAMB - LEAF_THICKNESS, a1: size - JAMB, ...swung, z0: 0, z1: DOOR_HEAD, art, u: [0.5, 1] })
+    }
     return pieces
   }
-  pieces.push({ a0: JAMB, a1: 1 - JAMB, c0, c1, z0: 0, z1: WINDOW_SILL, art: 'stone' })
-  pieces.push({ a0: JAMB, a1: 1 - JAMB, c0, c1, z0: WINDOW_HEAD, z1: 1, art: 'stone' })
-  pieces.push({
-    a0: JAMB,
-    a1: 1 - JAMB,
-    ...leaf,
-    z0: WINDOW_SILL,
-    z1: WINDOW_HEAD,
-    art: open ? 'window-open' : 'window',
-  })
+  pieces.push({ a0: JAMB, a1: size - JAMB, c0, c1, z0: 0, z1: WINDOW_SILL, art: 'stone' })
+  pieces.push({ a0: JAMB, a1: size - JAMB, c0, c1, z0: WINDOW_HEAD, z1: 1, art: 'stone' })
+  // Bars repeat in each cell; shutters spread across the whole window.
+  pieces.push(
+    open
+      ? { a0: JAMB, a1: size - JAMB, ...leaf, z0: WINDOW_SILL, z1: WINDOW_HEAD, art: 'window-open' }
+      : { a0: JAMB, a1: size - JAMB, ...leaf, z0: WINDOW_SILL, z1: WINDOW_HEAD, art: size === 1 ? 'window' : 'window-double', span },
+  )
   return pieces
 }
 
@@ -621,6 +735,7 @@ function drawOpening(
   elevation: number,
   open: boolean,
   variant: Variant,
+  group: OpeningGroup = { index: 0, size: 1 },
 ): void {
   const tiles = view.tileCache
   const floor = tiles.top('floor', variant)
@@ -634,7 +749,17 @@ function drawOpening(
     ? isoDepth(x + 0.5, y + 1, yaw) - isoDepth(x + 0.5, y, yaw)
     : isoDepth(x + 1, y + 0.5, yaw) - isoDepth(x, y + 0.5, yaw)
   const front: 0 | 1 = nearFar > 0 ? 1 : 0
-  const boxes = openingPieces(opening, open, front).map((piece) => {
+  // This cell's share of the whole opening, shifted to its own 0..1 along the wall.
+  const shift = group.index
+  const pieces = openingPieces(opening, open, front, group.size).flatMap((whole): OpeningPiece[] => {
+    const a0 = Math.max(whole.a0, shift)
+    const a1 = Math.min(whole.a1, shift + 1)
+    if (a1 - a0 < 1e-6) return []
+    // Stone follows the cell, as a wall face does; other art fills its piece unless it spans wider.
+    const [lo, hi] = whole.art === 'stone' ? [shift, shift + 1] : (whole.span ?? [a0, a1])
+    return [{ ...whole, a0: a0 - shift, a1: a1 - shift, span: [lo - shift, hi - shift] }]
+  })
+  const boxes = pieces.map((piece) => {
     const box = alongX
       ? { x0: x + piece.a0, x1: x + piece.a1, y0: y + piece.c0, y1: y + piece.c1 }
       : { x0: x + piece.c0, x1: x + piece.c1, y0: y + piece.a0, y1: y + piece.a1 }
@@ -643,6 +768,9 @@ function drawOpening(
       z0: piece.z0,
       z1: piece.z1,
       art: piece.art,
+      axis: alongX ? ('h' as const) : ('v' as const),
+      span: piece.span,
+      u: piece.u,
       depth: isoDepth((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, yaw),
     }
   })
@@ -657,7 +785,18 @@ function drawOpeningBox(
   view: DrawView,
   cx: number,
   cy: number,
-  box: { x0: number; x1: number; y0: number; y1: number; z0: number; z1: number; art: 'stone' | FaceKind },
+  box: {
+    x0: number
+    x1: number
+    y0: number
+    y1: number
+    z0: number
+    z1: number
+    art: 'stone' | FaceKind
+    axis: 'h' | 'v'
+    span?: [number, number]
+    u?: [number, number]
+  },
   elevation: number,
   variant: Variant,
 ): void {
@@ -692,18 +831,19 @@ function drawOpeningBox(
       loTop: top[from],
       hiTop: top[south],
     }
-    let window: ArtWindow | undefined
-    if (stone) {
-      // Sample the wall art at this piece's place along the cell edge, measured
-      // from the screen-left end as a whole wall face is, so the brick meets its neighbours.
-      const along = (corner: Corner) => (face.axis === 'h' ? cellAt[corner].x : cellAt[corner].y)
-      const loOnLeft = face.lo.x <= face.hi.x
-      const left = along(loOnLeft ? from : south)
-      const right = along(loOnLeft ? south : from)
-      const origin = left < right ? 0 : 1
-      window = { u0: Math.abs(left - origin), u1: Math.abs(right - origin), v0: 1 - box.z1, v1: 1 - box.z0 }
-    }
-    return { face, window, mid: face.lo.x + face.hi.x }
+    const v = stone ? { v0: 1 - box.z1, v1: 1 - box.z0 } : { v0: 0, v1: 1 }
+    if (box.u) return { face, window: { u0: box.u[0], u1: box.u[1], ...v }, mid: face.lo.x + face.hi.x }
+    // Sample the art at this piece's place along its span, measured from the
+    // screen-left end as a whole wall face is, so stone meets its neighbours
+    // and the halves of a double leaf meet in the middle. Ends, across the
+    // wall, sample across the cell.
+    const along = (corner: Corner) => (face.axis === 'h' ? cellAt[corner].x : cellAt[corner].y)
+    const loOnLeft = face.lo.x <= face.hi.x
+    const left = along(loOnLeft ? from : south)
+    const right = along(loOnLeft ? south : from)
+    const [lo, hi] = face.axis === box.axis && box.span ? box.span : [0, 1]
+    const at = (p: number) => (left < right ? p - lo : hi - p) / (hi - lo)
+    return { face, window: { u0: at(left), u1: at(right), ...v }, mid: face.lo.x + face.hi.x }
   })
   faces.sort((a, b) => a.mid - b.mid)
   const shade = tiles.tileset.shade
@@ -1321,7 +1461,7 @@ function drawOnePath(
   if (!first) return
   ctx.save()
   // A token hidden from players (shown faded to the DM) gets a faded path to match.
-  if (flyer && !flyer.visible) ctx.globalAlpha = 0.42
+  if (flyer && view.unseen.has(flyer.id)) ctx.globalAlpha = 0.42
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
   ctx.shadowColor = 'rgba(0, 0, 0, 0.72)'
@@ -1385,7 +1525,7 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
     const ring = selected ? ACCENT : hover ? HOVER : player.color
     const statuses = playerStatuses(player)
     const air = playerAirFeet(player)
-    if (!player.visible) ctx.globalAlpha = 0.42
+    if (view.unseen.has(player.id)) ctx.globalAlpha = 0.42
     else if (statuses.includes('invisible')) ctx.globalAlpha = 0.38
     if (air > 0) {
       const ground = playerGroundCenterAt(player, cell.x, cell.y, view.rooms, view.ramps, view.camera)
@@ -1393,7 +1533,7 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
       drawAirColumn(ctx, ground, pos, standee)
     }
     const turnWreath =
-      player.id === view.turnPlayerId && (view.viewMode !== 'player' || player.visible)
+      player.id === view.turnPlayerId && (view.viewMode !== 'player' || !view.unseen.has(player.id))
     if (turnWreath) {
       ctx.save()
       ctx.globalAlpha = 1
@@ -2153,6 +2293,86 @@ function drawFeaturePreview(
   drawChip(ctx, label, pos.x + 6, pos.y, color)
 }
 
+/** A padlock over each locked door and window. */
+const OBJECT_FITS = '#78d39b'
+const OBJECT_BLOCKED = '#e5484d'
+
+/** The object about to be placed or moved, half see-through, its footprint green where it fits and red where not. */
+function drawObjectDraft(ctx: CanvasRenderingContext2D, view: DrawView, draft: ObjectDraft): void {
+  const def = objectDef(draft.kind)
+  const shade = view.tileCache.tileset.shade
+  ctx.save()
+  ctx.globalAlpha = draft.fits ? 0.75 : 0.45
+  drawWholeObject(
+    ctx,
+    view.camera,
+    def,
+    draft.x,
+    draft.y,
+    draft.turn,
+    draft.elevation,
+    { left: shade.left, right: shade.right, fog: false },
+    draft.fits ? OBJECT_FITS : OBJECT_BLOCKED,
+  )
+  ctx.restore()
+}
+
+function drawObjectFocus(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  focus: DrawView['objectFocus'][number],
+): void {
+  const corners = liftCorners(rectCorners(focus.rect, view.camera), view.camera, roomLift(focus.elevation))
+  ctx.beginPath()
+  ctx.moveTo(corners.n.x, corners.n.y)
+  ctx.lineTo(corners.e.x, corners.e.y)
+  ctx.lineTo(corners.s.x, corners.s.y)
+  ctx.lineTo(corners.w.x, corners.w.y)
+  ctx.closePath()
+  ctx.strokeStyle = focus.selected ? SELECT : ACCENT
+  ctx.lineWidth = 2
+  ctx.stroke()
+}
+
+function drawLocks(ctx: CanvasRenderingContext2D, view: DrawView): void {
+  for (const room of view.rooms) {
+    for (const key of Object.keys(room.openingLocked ?? {})) {
+      const { x, y } = parseCellKey(key)
+      if (!roomContains(room, x, y) || !openingIsLocked(room, x, y)) continue
+      const at = lift(cellCenter(x, y, view.camera), view.camera, roomLift(room.elevation) + WALL_HEIGHT + 6)
+      drawPadlock(ctx, at.x, at.y, Math.max(6, 6 * view.camera.zoom))
+    }
+  }
+}
+
+function drawPadlock(ctx: CanvasRenderingContext2D, x: number, y: number, size: number): void {
+  const width = size * 1.5
+  const top = y - size / 2
+  ctx.save()
+  ctx.strokeStyle = ACCENT
+  ctx.lineWidth = Math.max(1.5, size * 0.25)
+  ctx.beginPath()
+  ctx.arc(x, top, width * 0.3, Math.PI, 0)
+  ctx.stroke()
+  ctx.fillStyle = ACCENT
+  ctx.fillRect(x - width / 2, top, width, size)
+  ctx.fillStyle = '#0b0c10'
+  ctx.fillRect(x - size * 0.1, top + size * 0.3, size * 0.2, size * 0.45)
+  ctx.restore()
+}
+
+function drawDoorNotice(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  notice: { x: number; y: number; text: string },
+): void {
+  const room = view.rooms.find((item) => roomContains(item, notice.x, notice.y))
+  const at = lift(cellCenter(notice.x, notice.y, view.camera), view.camera, roomLift(room?.elevation) + WALL_HEIGHT)
+  ctx.font = '600 12px system-ui, sans-serif'
+  const width = ctx.measureText(notice.text).width + 12
+  drawChip(ctx, notice.text, at.x - width / 2, at.y - 28, '#f6dcdb')
+}
+
 function drawChip(
   ctx: CanvasRenderingContext2D,
   label: string,
@@ -2213,8 +2433,10 @@ function drawRoomLabel(ctx: CanvasRenderingContext2D, view: DrawView, room: Room
   ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1)
   ctx.fillStyle = '#f6dcdb'
   ctx.fillText(room.name, x + pad, y + height / 2 + 0.5)
-  if (!room.visible) {
-    drawChip(ctx, 'Hidden', x, y + height + 4, '#8b8f9c')
+  if (!roomExplored(room)) {
+    drawChip(ctx, 'Unexplored', x, y + height + 4, '#8b8f9c')
+  } else if (!view.sight.has(room.id)) {
+    drawChip(ctx, 'Out of sight', x, y + height + 4, '#8b8f9c')
   }
 }
 

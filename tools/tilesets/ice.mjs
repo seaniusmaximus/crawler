@@ -19,6 +19,7 @@ import {
   mix,
   newFace,
   newTop,
+  pairLeaves,
   patches,
   planks,
   rim,
@@ -116,7 +117,7 @@ function icePatch(img, seed, cx = TOP / 2, cy = TOP / 2, rx = 42, ry = 32) {
   }
 }
 
-function floorTile(seed, { min = 42, tone = 1, drift = 0.35, feature = null } = {}) {
+function floorTile(seed, { min = 42, tone = 1, drift = 0.35 } = {}) {
   const img = newTop()
   const base = tint(PALETTE.stone, tone)
   stoneField(img, { x: 0, y: 0, w: TOP, h: TOP }, base, tint(base, 0.7), seed, {
@@ -129,20 +130,7 @@ function floorTile(seed, { min = 42, tone = 1, drift = 0.35, feature = null } = 
   })
   // Rime over the bare stone, snow gathered in drifts.
   each(img, (x, y) => blend(img, x, y, PALETTE.frost, 0.1 + fbm(x, y, 30, seed + 4, 2) * 0.14))
-  if (feature === 'ice') icePatch(img, seed + 15)
-  snow(img, seed + 5, feature === 'drift' ? 0.75 : drift)
-  if (feature === 'tracks') {
-    // A line of bootprints pressed into the snow.
-    for (let i = 0; i < 4; i++) {
-      const cx = 24 + i * 26
-      const cy = 56 + (i % 2 ? 14 : -4)
-      each(img, (x, y) => {
-        const d = Math.hypot((x - cx) / 5, (y - cy) / 8)
-        if (d < 1) blend(img, x, y, PALETTE.snowShade, 0.7)
-      })
-    }
-  }
-  if (feature === 'crack') longCrack(img, seed + 12, PALETTE.frost)
+  snow(img, seed + 5, drift)
   groutBand(img, PALETTE.grout)
   return img
 }
@@ -237,12 +225,12 @@ function doorLeaf(seed) {
   return img
 }
 
-function windowShutters(seed) {
-  const img = newFace()
-  planks(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, seed, PALETTE.wood)
-  fillRect(img, FACE_W / 2 - 2, 0, 4, FACE_H, tint(PALETTE.wood, 0.6))
-  ironBand(img, 0, FACE_H / 2 - 2, FACE_W, PALETTE.iron)
-  fillRect(img, 0, FACE_H / 2 - 4, FACE_W, 2, PALETTE.snow)
+function windowShutters(seed, w = FACE_W) {
+  const img = newFace(w)
+  planks(img, { x: 0, y: 0, w, h: FACE_H }, seed, PALETTE.wood)
+  fillRect(img, w / 2 - 2, 0, 4, FACE_H, tint(PALETTE.wood, 0.6))
+  ironBand(img, 0, FACE_H / 2 - 2, w, PALETTE.iron)
+  fillRect(img, 0, FACE_H / 2 - 4, w, 2, PALETTE.snow)
   frostEdges(img, seed + 9, 10)
   rim(img, 3, 0.6)
   return img
@@ -292,13 +280,12 @@ function foundation(seed) {
 
 // ---------- Sheet ----------
 
-const floorFeatures = [null, null, null, null, null, null, null, null, null, null, null, null, 'ice', 'drift', 'tracks', 'crack']
 const topFeatures = [null, null, null, null, null, null, null, null, null, 'bare', 'ice', null]
 const faceFeatures = [null, null, null, null, null, null, null, null, null, null, 'icicles', 'frozen', 'frost', 'crack', 'icicles', null]
 
 writeSheet('ice', {
-  floors: floorFeatures.map((feature, i) =>
-    floorTile(41100 + i * 17, { min: 36 + (i % 4) * 5, tone: tones[i % tones.length], drift: 0.25 + (i % 3) * 0.12, feature }),
+  floors: Array.from({ length: 16 }, (_, i) =>
+    floorTile(41100 + i * 17, { min: 36 + (i % 4) * 5, tone: tones[i % tones.length], drift: 0.25 + (i % 3) * 0.12 }),
   ),
   wallTops: topFeatures.map((feature, i) =>
     wallTop(42200 + i * 23, { min: 40 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
@@ -317,4 +304,6 @@ writeSheet('ice', {
   shutters: windowShutters(46700),
   open: icyBars(46800),
   foundations: [0, 1, 2, 3].map((i) => foundation(47700 + i * 11)),
+  doubleDoor: pairLeaves(doorLeaf(46600), doorLeaf(46650)),
+  doubleShutters: windowShutters(46700, FACE_W * 2),
 })

@@ -18,7 +18,7 @@ import {
   moss,
   newFace,
   newTop,
-  pebbles,
+  pairLeaves,
   planks,
   rim,
   ring,
@@ -44,22 +44,9 @@ const PALETTE = {
   rubble: [70, 68, 72],
 }
 
-/** An iron drain grate set into the floor. */
-function drain(img) {
-  const size = 34
-  const x0 = (img.w - size) / 2
-  const y0 = (img.h - size) / 2
-  fillRect(img, x0 - 3, y0 - 3, size + 6, size + 6, tint(PALETTE.floorGrout, 1.2))
-  fillRect(img, x0, y0, size, size, PALETTE.dark)
-  for (let i = 0; i <= size; i += 7) {
-    fillRect(img, x0 + i - 1, y0, 3, size, PALETTE.iron)
-    fillRect(img, x0 + i - 1, y0, 1, size, tint(PALETTE.iron, 1.7))
-  }
-}
-
 // ---------- Tops ----------
 
-function floorTile(seed, { min = 42, tone = 1, feature = null } = {}) {
+function floorTile(seed, { min = 42, tone = 1 } = {}) {
   const img = newTop()
   const base = tint(PALETTE.floor, tone)
   // Muted stones with soft inner seams, so the texture never competes with the grid.
@@ -73,10 +60,6 @@ function floorTile(seed, { min = 42, tone = 1, feature = null } = {}) {
     corner: 2,
   })
   grime(img, seed + 3, 0.12)
-  if (feature === 'moss') moss(img, seed + 11, 0.3)
-  if (feature === 'crack') longCrack(img, seed + 12)
-  if (feature === 'pebbles') pebbles(img, seed + 13, 7, PALETTE.floor)
-  if (feature === 'drain') drain(img)
   groutBand(img, PALETTE.floorGrout)
   return img
 }
@@ -166,11 +149,11 @@ function doorLeaf(seed) {
 }
 
 /** Closed window: a pair of plank shutters with a strap across. */
-function windowShutters(seed) {
-  const img = newFace()
-  planks(img, { x: 0, y: 0, w: FACE_W, h: FACE_H }, seed, PALETTE.wood)
-  fillRect(img, FACE_W / 2 - 2, 0, 4, FACE_H, PALETTE.woodDark)
-  ironBand(img, 0, FACE_H / 2 - 2, FACE_W, PALETTE.iron)
+function windowShutters(seed, w = FACE_W) {
+  const img = newFace(w)
+  planks(img, { x: 0, y: 0, w, h: FACE_H }, seed, PALETTE.wood)
+  fillRect(img, w / 2 - 2, 0, 4, FACE_H, PALETTE.woodDark)
+  ironBand(img, 0, FACE_H / 2 - 2, w, PALETTE.iron)
   rim(img, 3, 0.6)
   return img
 }
@@ -207,14 +190,12 @@ function foundation(seed) {
 
 // ---------- Sheet ----------
 
-// Mostly plain stone laid out differently, with a few features mixed in so they stay occasional.
-const floorFeatures = [null, null, null, null, null, null, null, null, null, null, null, null, 'moss', 'crack', 'pebbles', 'drain']
 const topFeatures = [null, null, null, null, null, null, null, null, null, null, 'moss', 'crack']
 const faceFeatures = [null, null, null, null, null, null, null, null, null, null, null, 'missing', 'moss', 'crack', 'shackle', null]
 
 writeSheet('dungeon', {
-  floors: floorFeatures.map((feature, i) =>
-    floorTile(1100 + i * 17, { min: 36 + (i % 4) * 5, tone: tones[i % tones.length], feature }),
+  floors: Array.from({ length: 16 }, (_, i) =>
+    floorTile(1100 + i * 17, { min: 36 + (i % 4) * 5, tone: tones[i % tones.length] }),
   ),
   wallTops: topFeatures.map((feature, i) =>
     wallTop(2200 + i * 23, { min: 40 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
@@ -233,4 +214,6 @@ writeSheet('dungeon', {
   shutters: windowShutters(6700),
   open: windowBars(),
   foundations: [0, 1, 2, 3].map((i) => foundation(7700 + i * 11)),
+  doubleDoor: pairLeaves(doorLeaf(6600), doorLeaf(6650)),
+  doubleShutters: windowShutters(6700, FACE_W * 2),
 })

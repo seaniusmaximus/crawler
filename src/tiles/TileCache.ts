@@ -15,13 +15,18 @@ const FALLBACK_TOP: Record<TileSprite, string> = {
 const FALLBACK_FACE: Record<FaceKind, string> = {
   wall: '#4e525c',
   door: '#7a4e24',
+  'door-double': '#7a4e24',
   window: '#547a96',
+  'window-double': '#547a96',
   'window-open': '#2e3036',
   foundation: '#2f3138',
   tread: '#a39782',
   riser: '#6e6658',
   shaft: '#24252b',
 }
+
+/** How bright remembered rooms are, after their colour is drained. */
+const FOG_BRIGHTNESS = 0.45
 
 type Slot = `top:${TileSprite}` | `face:${FaceKind}`
 
@@ -33,11 +38,24 @@ export class TileCache {
   private readonly images = new Map<Slot, ImageBitmap[]>()
   private ready = false
   private closed = false
+  private fog: TileCache | null = null
 
   readonly tileset: Tileset
+  /** True for the greyed-out copy rooms players remember but can't see into draw with. */
+  readonly isFog: boolean
 
-  constructor(tileset: Tileset) {
+  constructor(tileset: Tileset, isFog = false) {
     this.tileset = tileset
+    this.isFog = isFog
+  }
+
+  /**
+   * The same tiles drained of colour and darkened, made once when the sheet
+   * loads so greyed-out rooms cost no more to draw than any other. Null if
+   * they could not be made.
+   */
+  fogged(): TileCache | null {
+    return this.fog?.ready ? this.fog : null
   }
 
   isReady(): boolean {
@@ -65,6 +83,13 @@ export class TileCache {
       this.clear()
       await this.flat()
     }
+    try {
+      await this.makeFog()
+    } catch (error) {
+      console.warn(`Tileset "${this.tileset.id}" has no greyed-out tiles; remembered rooms will fade instead.`, error)
+      this.fog?.destroy()
+      this.fog = null
+    }
     if (this.closed) {
       this.destroy()
       return
@@ -76,6 +101,15 @@ export class TileCache {
     this.closed = true
     this.ready = false
     this.clear()
+    this.fog?.destroy()
+    this.fog = null
+  }
+
+  private async makeFog(): Promise<void> {
+    const fog = new TileCache(this.tileset, true)
+    this.fog = fog
+    for (const [slot, list] of this.images) fog.images.set(slot, await Promise.all(list.map(greyed)))
+    fog.ready = true
   }
 
   private clear(): void {
@@ -119,4 +153,22 @@ export class TileCache {
       this.images.set(`face:${kind}`, [await swatch(color)])
     }
   }
+}
+
+/** A copy of a tile in greys, darkened. */
+async function greyed(bitmap: ImageBitmap): Promise<ImageBitmap> {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('Could not create a canvas for greyed tiles')
+  ctx.drawImage(bitmap, 0, 0)
+  const image = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+  const data = image.data
+  for (let i = 0; i < data.length; i += 4) {
+    const grey = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) * FOG_BRIGHTNESS
+    data[i] = grey
+    data[i + 1] = grey
+    data[i + 2] = grey
+  }
+  ctx.putImageData(image, 0, 0)
+  return createImageBitmap(canvas)
 }

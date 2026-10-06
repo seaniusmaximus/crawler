@@ -9,13 +9,14 @@ import { tokenShown } from './tokenInfo.ts'
 export function TurnBanner() {
   const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
   const floors = useDungeonStore((state) => state.dungeon.floors)
+  const tokens = useDungeonStore((state) => state.dungeon.players)
   const player = useDungeonStore((state) =>
     turnPlayerId ? (state.dungeon.players ?? []).find((item) => item.id === turnPlayerId) : undefined,
   )
   const viewMode = useEditorStore((state) => state.viewMode)
   const mine = useSessionStore((state) => state.myPlayerId != null && state.myPlayerId === turnPlayerId)
 
-  if (!player || !tokenShown(player, floors, viewMode)) return null
+  if (!player || !tokenShown(player, floors, tokens ?? [], viewMode)) return null
 
   return (
     <div className={`panel turn-banner scroll-h${mine ? ' is-mine' : ''}`} role="status">

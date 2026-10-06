@@ -8,20 +8,22 @@ import { travelPose } from '../model/travel.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import {
   canPlacePlayer,
-  occupantRoom,
   playerCenter,
   playerHover,
   playerSize,
 } from '../model/players.ts'
 import { rampAt, rampFromDrag } from '../model/ramps.ts'
 import type { RampDraft } from '../model/ramps.ts'
-import { shownRooms, nextShownFloor } from '../model/visibility.ts'
+import { floorSight, nextShownFloor, realOpening, shownRooms, tokenSeen, unseenTokens } from '../model/visibility.ts'
 import type { Cell, CellRect, Edge, Floor, Link, Player, Room } from '../model/types.ts'
 import { useDungeonStore } from '../state/dungeonStore.ts'
 import { useEditorStore } from '../state/editorStore.ts'
 import { canControlPlayer, useSessionStore } from '../state/sessionStore.ts'
 import { remoteTravelAnimating, useTravelStore, type RemoteTravel } from '../state/travelStore.ts'
-import type { FocusRequest } from '../state/editorStore.ts'
+import type { FocusRequest, ObjectRef } from '../state/editorStore.ts'
+import { canPlaceObject, objectAt, objectFootprint, turnedSize } from '../model/objects.ts'
+import type { ObjectDraft } from '../model/objects.ts'
+import { objectDef } from '../objects/catalog.ts'
 import { getActiveFloor } from '../state/selectors.ts'
 import { TileCache } from '../tiles/TileCache.ts'
 import { tilesetById } from '../tiles/sets/index.ts'
@@ -43,6 +45,9 @@ import {
 
 const DRAG_THRESHOLD = 4
 const FOCUS_MS = 240
+/** How long a door says why it would not open. */
+const NOTICE_MS = 1600
+const NONE_UNSEEN: ReadonlySet<string> = new Set()
 
 const TOOL_KEYS: Record<string, Tool> = {
   KeyH: 'select',
@@ -52,9 +57,18 @@ const TOOL_KEYS: Record<string, Tool> = {
   KeyS: 'stairs',
   KeyA: 'walls',
   KeyL: 'link',
+  KeyO: 'objects',
 }
 
-type PointerMode = 'paint' | 'pan' | 'move' | 'resize' | 'feature' | 'link' | 'pick' | 'ramp' | 'token'
+type PointerMode = 'paint' | 'pan' | 'move' | 'resize' | 'feature' | 'link' | 'pick' | 'ramp' | 'token' | 'object'
+
+/** A placed object being dragged, and where in its footprint it was grabbed. */
+interface ObjectDrag {
+  roomId: string
+  objectId: string
+  dx: number
+  dy: number
+}
 
 interface TokenDrag {
   id: string
@@ -130,9 +144,16 @@ export class MapEngine {
   private hoverRamp: RampDraft | null = null
   private dragRamp: RampDraft | null = null
   private tokenDrag: TokenDrag | null = null
+  private objectDrag: ObjectDrag | null = null
+  /** With the Objects tool: the open floor cell under the pointer, where the next object would go. */
+  private objectSpot: { roomId: string; x: number; y: number } | null = null
+  /** With the Objects tool: the placed object under the pointer. */
+  private hoverObject: ObjectRef | null = null
   private travelFinishing = false
   private portraits = new Map<string, HTMLImageElement>()
   private hoverLink: Link | null = null
+  private notice: { floorId: string; x: number; y: number; text: string } | null = null
+  private noticeTimer = 0
   private session: PointerSession | null = null
   private tween: CameraTween | null = null
   private lastFocusNonce = 0
@@ -160,6 +181,7 @@ export class MapEngine {
   destroy(): void {
     this.destroyed = true
     cancelAnimationFrame(this.raf)
+    window.clearTimeout(this.noticeTimer)
     this.resizeObserver?.disconnect()
     this.tiles.destroy()
     this.pendingTiles?.destroy()
@@ -306,9 +328,60 @@ export class MapEngine {
       badges: this.badges(),
       hoverLink: this.hoverLink,
       viewMode: editor.viewMode,
+      sight: floorSight(floor, dungeon.players ?? []),
+      // Player view only draws tokens players can see, so nothing there is faded.
+      unseen: editor.viewMode === 'player' ? NONE_UNSEEN : unseenTokens(floor, dungeon.players ?? []),
+      notice: this.notice?.floorId === floor.id ? this.notice : null,
+      objectDraft: editor.tool === 'objects' && editor.viewMode !== 'player' ? this.objectDraft() : null,
+      objectFocus: editor.viewMode === 'player' ? [] : this.objectFocus(floor.rooms),
       tileCache: this.tiles,
       tilesFor: this.tilesFor,
     })
+  }
+
+  /** The object the Objects tool would place where the pointer is, centred on it. */
+  private objectDraft(): ObjectDraft | null {
+    const spot = this.objectSpot
+    if (!spot || this.session) return null
+    const floor = getActiveFloor()
+    const room = floor.rooms.find((item) => item.id === spot.roomId)
+    if (!room) return null
+    const editor = useEditorStore.getState()
+    const size = turnedSize(objectDef(editor.objectKind), editor.objectTurn)
+    const x = spot.x - Math.floor((size.w - 1) / 2)
+    const y = spot.y - Math.floor((size.d - 1) / 2)
+    return {
+      roomId: room.id,
+      objectId: null,
+      kind: editor.objectKind,
+      x,
+      y,
+      turn: editor.objectTurn,
+      elevation: room.elevation ?? 0,
+      fits: canPlaceObject(floor.rooms, room, editor.objectKind, x, y, editor.objectTurn),
+    }
+  }
+
+  private objectFocus(rooms: readonly Room[]): { rect: CellRect; elevation: number; selected: boolean }[] {
+    const editor = useEditorStore.getState()
+    const focus: { rect: CellRect; elevation: number; selected: boolean }[] = []
+    const add = (ref: ObjectRef | null, selected: boolean) => {
+      const room = ref ? rooms.find((item) => item.id === ref.roomId) : undefined
+      const object = room?.objects?.find((item) => item.id === ref?.objectId)
+      if (room && object) focus.push({ rect: objectFootprint(object), elevation: room.elevation ?? 0, selected })
+    }
+    if (editor.tool === 'objects') add(this.hoverObject, false)
+    add(editor.selectedObject, true)
+    return focus
+  }
+
+  /** The placed object under a screen point, on rooms this view shows. */
+  private objectUnder(sx: number, sy: number): (ObjectRef & { x: number; y: number }) | null {
+    const room = this.roomAt(sx, sy)
+    if (!room) return null
+    const cell = this.cellAt(sx, sy, room)
+    const object = objectAt(room, cell.x, cell.y)
+    return object ? { roomId: room.id, objectId: object.id, x: object.x, y: object.y } : null
   }
 
   private badges(): LinkBadge[] {
@@ -524,6 +597,17 @@ export class MapEngine {
           hit,
         )
       }
+    } else if (!pan && tool === 'objects') {
+      // Grab a placed object to move it; click open floor to place one; elsewhere the drag pans.
+      mode = hit ? 'object' : 'pan'
+      roomId = hit?.id ?? null
+      const object = this.objectUnder(point.x, point.y)
+      if (object) {
+        this.objectDrag = { roomId: object.roomId, objectId: object.objectId, dx: cell.x - object.x, dy: cell.y - object.y }
+        editor.selectObject({ roomId: object.roomId, objectId: object.objectId })
+      } else {
+        editor.selectObject(null)
+      }
     } else if (!pan && isFeatureTool(tool)) {
       // Feature tools only bite inside a room; elsewhere the drag pans instead.
       mode = hit ? 'feature' : 'pan'
@@ -627,6 +711,19 @@ export class MapEngine {
       this.markDirty()
     }
 
+    if (session.mode === 'object' && session.moved) {
+      const drag = this.objectDrag
+      if (drag) {
+        const room = this.lookupRoom(drag.roomId)
+        const cell = this.cellAt(point.x, point.y, room)
+        // It follows the pointer wherever it fits, and waits where it doesn't.
+        useDungeonStore.getState().moveObject(getActiveFloor().id, drag.roomId, drag.objectId, cell.x - drag.dx, cell.y - drag.dy)
+      } else {
+        const store = useEditorStore.getState()
+        store.setCamera(panBy(store.camera, point.x - session.lastX, point.y - session.lastY))
+      }
+    }
+
     if (session.mode === 'ramp' && session.roomId) {
       const startRoom = this.lookupRoom(session.roomId)
       const hit = this.roomAt(point.x, point.y)
@@ -713,6 +810,7 @@ export class MapEngine {
     if (session.mode === 'feature') this.commitFeature()
     if (session.mode === 'ramp') this.commitRamp()
     if (session.mode === 'token') this.commitToken(session.moved)
+    if (session.mode === 'object') this.finishObject(session)
     if (session.mode === 'link' && session.link && !session.moved) {
       useDungeonStore.getState().unlinkRooms(getActiveFloor().id, session.link)
       useEditorStore.getState().setLinkRoom(null)
@@ -736,6 +834,8 @@ export class MapEngine {
 
   private onPointerLeave = (): void => {
     if (this.session) return
+    this.objectSpot = null
+    this.hoverObject = null
     this.hoverCell = null
     this.hoverFeature = null
     this.hoverRamp = null
@@ -1014,13 +1114,11 @@ export class MapEngine {
 
   private visiblePlayers(players: readonly Player[], floorId: string): Player[] {
     const mode = useEditorStore.getState().viewMode
-    const rooms = getActiveFloor().rooms
+    const floor = getActiveFloor()
     return players.filter((player) => {
       if (player.floorId !== floorId) return false
       if (mode !== 'player') return true
-      if (!player.visible) return false
-      const room = occupantRoom(rooms, player.x, player.y)
-      return !room || room.visible
+      return tokenSeen(player, floor, players)
     })
   }
 
@@ -1065,6 +1163,20 @@ export class MapEngine {
     return getActiveFloor().rooms.find((item) => item.id === roomId) ?? null
   }
 
+  /** A click on open floor places the chosen object there; a drag already moved it or panned. */
+  private finishObject(session: PointerSession): void {
+    const dragged = this.objectDrag
+    this.objectDrag = null
+    if (dragged || session.moved || !session.roomId) return
+    this.objectSpot = { roomId: session.roomId, x: session.startCellX, y: session.startCellY }
+    const draft = this.objectDraft()
+    if (!draft?.fits) return
+    const id = useDungeonStore
+      .getState()
+      .addObject(getActiveFloor().id, draft.roomId, draft.kind, draft.x, draft.y, draft.turn)
+    if (id) useEditorStore.getState().selectObject({ roomId: draft.roomId, objectId: id })
+  }
+
   private finishPaint(session: PointerSession): void {
     const cell = this.cellAt(session.lastX, session.lastY)
     const rect = normalizeRect(session.startCellX, session.startCellY, cell.x, cell.y)
@@ -1089,6 +1201,11 @@ export class MapEngine {
       return
     }
     if (editor.viewMode === 'player') return
+    const object = this.objectUnder(session.startX, session.startY)
+    if (object) {
+      editor.openMenu({ kind: 'object', roomId: object.roomId, objectId: object.objectId, x: event.clientX, y: event.clientY })
+      return
+    }
     const opening = hitOpening(
       this.viewRooms(),
       session.startX,
@@ -1116,16 +1233,37 @@ export class MapEngine {
 
   private toggleOpeningAt(sx: number, sy: number): void {
     if (useEditorStore.getState().viewMode !== 'player') return
-    const opening = hitOpening(this.viewRooms(), sx, sy, useEditorStore.getState().camera)
-    if (!opening) return
-    useSessionStore
-      .getState()
-      .reportOpening(getActiveFloor().id, opening.roomId, opening.x, opening.y)
+    const rooms = this.viewRooms()
+    const hit = hitOpening(rooms, sx, sy, useEditorStore.getState().camera)
+    if (!hit) return
+    // A door player view borrowed from an unexplored room is worked on the real one.
+    const opening = realOpening(rooms, hit)
+    const floorId = getActiveFloor().id
+    const refusal = useSessionStore.getState().reportOpening(floorId, opening.roomId, opening.x, opening.y)
+    if (refusal) this.showNotice(floorId, hit.x, hit.y, refusal === 'locked' ? 'Locked' : 'Too far away')
+  }
+
+  /** A word over a door for a moment, such as why it would not open. */
+  private showNotice(floorId: string, x: number, y: number, text: string): void {
+    window.clearTimeout(this.noticeTimer)
+    this.notice = { floorId, x, y, text }
+    this.markDirty()
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice = null
+      this.markDirty()
+    }, NOTICE_MS)
   }
 
   private updateHover(sx: number, sy: number): void {
     // A drag owns its preview; a stray pointer must not rewrite what it commits.
-    if (this.session?.mode === 'feature' || this.session?.mode === 'ramp' || this.session?.mode === 'token') return
+    if (
+      this.session?.mode === 'feature' ||
+      this.session?.mode === 'ramp' ||
+      this.session?.mode === 'token' ||
+      this.session?.mode === 'object'
+    ) {
+      return
+    }
     const editor = useEditorStore.getState()
     const rooms = getActiveFloor().rooms
     const room = this.roomAt(sx, sy)
@@ -1189,6 +1327,19 @@ export class MapEngine {
 
     const nextId = room?.id ?? null
     if (nextId !== editor.hoverRoomId) editor.setHoverRoom(nextId)
+
+    if (editor.tool === 'objects') {
+      this.hoverFeature = null
+      this.hoverRamp = null
+      const object = this.objectUnder(sx, sy)
+      this.hoverObject = object ? { roomId: object.roomId, objectId: object.objectId } : null
+      this.objectSpot = room && !object ? { roomId: room.id, x: cell.x, y: cell.y } : null
+      this.applyCursor(object ? 'grab' : null)
+      this.markDirty()
+      return
+    }
+    this.objectSpot = null
+    this.hoverObject = null
 
     // With a feature tool the cursor cell previews the single-tile version of a run.
     if (isFeatureTool(editor.tool)) {
@@ -1286,6 +1437,7 @@ export class MapEngine {
       this.dragRamp = null
       this.hoverRamp = null
       this.tokenDrag = null
+      this.objectDrag = null
       this.session = null
       endGesture()
       const travel = useDungeonStore.getState().dungeon.travel
@@ -1297,6 +1449,7 @@ export class MapEngine {
       editor.closeMenu()
       editor.endResize()
       editor.setLinkRoom(null)
+      editor.selectObject(null)
       editor.closeStairsPrompt()
       editor.closeStairUse()
       if (editor.viewMode !== 'player') editor.setTool('select')
@@ -1371,6 +1524,18 @@ export class MapEngine {
         event.preventDefault()
       }
     }
+    if (event.code === 'KeyT' && !isTyping(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const editor = useEditorStore.getState()
+      if (editor.viewMode !== 'player' && editor.tool === 'objects') {
+        // Turns the object in hand or under the pointer, or else the one about to be placed.
+        const steps = event.shiftKey ? -1 : 1
+        const target = this.objectDrag ?? this.hoverObject
+        if (target) useDungeonStore.getState().turnObject(getActiveFloor().id, target.roomId, target.objectId, steps)
+        else editor.turnObjectDraft(steps)
+        this.markDirty()
+        event.preventDefault()
+      }
+    }
     if (event.code === 'PageUp' || event.code === 'PageDown') {
       const floors = useDungeonStore.getState().dungeon.floors
       const step = event.code === 'PageUp' ? 1 : -1
@@ -1393,6 +1558,15 @@ export class MapEngine {
         useDungeonStore.getState().deletePlayer(editor.selectedPlayerId)
         editor.selectPlayer(null)
         editor.setHoverPlayer(null)
+        event.preventDefault()
+        return
+      }
+      const picked = editor.selectedObject
+      if (picked) editor.selectObject(null)
+      // An object undone away since it was picked leaves the room selected instead.
+      if (picked && this.lookupRoom(picked.roomId)?.objects?.some((object) => object.id === picked.objectId)) {
+        useDungeonStore.getState().removeObject(getActiveFloor().id, picked.roomId, picked.objectId)
+        this.hoverObject = null
         event.preventDefault()
         return
       }

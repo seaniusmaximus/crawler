@@ -25,6 +25,8 @@ const PATHS: Record<string, ReactNode> = {
   stairs: <path d="M3 20h5v-5h5v-5h5V5h3" />,
   ramp: <path d="M3 20h18L21 6z" />,
   merge: <path d="M4 4h9v7h7v9H4z" />,
+  /** A chest: dressing rooms with objects. */
+  objects: <path d="M4 11h16v8a1 1 0 01-1 1H5a1 1 0 01-1-1zM4 11V9a4 4 0 014-4h8a4 4 0 014 4v2M11 13h2v3h-2z" />,
   split: <path d="M4 4h6v16H4zM14 4h6v16h-6z" />,
   link: (
     <>

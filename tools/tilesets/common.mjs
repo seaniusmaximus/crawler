@@ -304,6 +304,23 @@ export function ring(img, cx, cy, rx, ry, color, step = 0.12) {
   for (let a = 0; a < Math.PI * 2; a += step) blend(img, cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, color)
 }
 
+/**
+ * The two leaves of a double door side by side: `left` as painted, `right`
+ * mirrored so its handle also sits at the meeting stiles.
+ */
+export function pairLeaves(left, right) {
+  const img = createImage(left.w + right.w, left.h)
+  blit(img, left, 0, 0)
+  for (let y = 0; y < right.h; y++) {
+    for (let x = 0; x < right.w; x++) {
+      const s = (y * right.w + (right.w - 1 - x)) * 4
+      const t = (y * img.w + left.w + x) * 4
+      for (let c = 0; c < 4; c++) img.data[t + c] = right.data[s + c]
+    }
+  }
+  return img
+}
+
 /** A filled disc with a soft falloff, e.g. a glow or a knob. */
 export function disc(img, cx, cy, r, color, alpha = 1, soft = 1) {
   for (let y = Math.floor(cy - r - soft); y <= cy + r + soft; y++) {
@@ -344,7 +361,8 @@ export function steps(paintTread, treads = 5) {
 // ---------- Sheet ----------
 
 export const newTop = () => createImage(TOP, TOP)
-export const newFace = () => createImage(FACE_W, FACE_H)
+/** An upright face; `w` widens it for art that spans more than one cell. */
+export const newFace = (w = FACE_W) => createImage(w, FACE_H)
 
 /**
  * Lays out and writes `src/tiles/sets/<id>.png`:
@@ -354,8 +372,9 @@ export const newFace = () => createImage(FACE_W, FACE_H)
  *             stairwell going down (both faces, FACE_H tall, top-aligned)
  *   rows 4-5  16 wall faces (FACE_H tall)
  *   row  6    door, shutters, bars, 4 foundations
+ *   row  7    a double door, then double-width shutters (two cells each)
  */
-export function writeSheet(id, { floors, wallTops, stairs, stairParts, walls, door, shutters, open, foundations }) {
+export function writeSheet(id, { floors, wallTops, stairs, stairParts, walls, door, shutters, open, foundations, doubleDoor, doubleShutters }) {
   const expect = { floors: [floors, 16], wallTops: [wallTops, 12], walls: [walls, 16], foundations: [foundations, 4] }
   for (const [name, [list, count]] of Object.entries(expect)) {
     if (list.length !== count) throw new Error(`${id}: ${name} needs ${count} cells, got ${list.length}`)
@@ -363,6 +382,9 @@ export function writeSheet(id, { floors, wallTops, stairs, stairParts, walls, do
   const { tread, riser, shaft } = stairParts ?? {}
   for (const [name, img, w, h] of [['tread', tread, TOP, TOP], ['riser', riser, FACE_W, FACE_H], ['shaft', shaft, FACE_W, FACE_H]]) {
     if (!img || img.w !== w || img.h !== h) throw new Error(`${id}: stairParts.${name} must be ${w}x${h}`)
+  }
+  for (const [name, img] of [['doubleDoor', doubleDoor], ['doubleShutters', doubleShutters]]) {
+    if (!img || img.w !== FACE_W * 2 || img.h !== FACE_H) throw new Error(`${id}: ${name} must be ${FACE_W * 2}x${FACE_H}`)
   }
   const rows = [
     { y: 0, cells: floors.slice(0, COLS) },
@@ -372,9 +394,10 @@ export function writeSheet(id, { floors, wallTops, stairs, stairParts, walls, do
     { y: TOP * 4, cells: walls.slice(0, COLS) },
     { y: TOP * 4 + FACE_H, cells: walls.slice(COLS) },
     { y: TOP * 4 + FACE_H * 2, cells: [door, shutters, open, ...foundations] },
+    { y: TOP * 4 + FACE_H * 3, cells: [doubleDoor, null, doubleShutters] },
   ]
-  const sheet = createImage(TOP * COLS, TOP * 4 + FACE_H * 3)
-  for (const row of rows) row.cells.forEach((cell, i) => blit(sheet, cell, i * TOP, row.y))
+  const sheet = createImage(TOP * COLS, TOP * 4 + FACE_H * 4)
+  for (const row of rows) row.cells.forEach((cell, i) => cell && blit(sheet, cell, i * TOP, row.y))
   const out = join(dirname(fileURLToPath(import.meta.url)), `../../src/tiles/sets/${id}.png`)
   writeFileSync(out, encodePng(sheet))
   console.log(`wrote ${out} (${sheet.w}x${sheet.h})`)

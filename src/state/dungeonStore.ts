@@ -52,19 +52,23 @@ import type { CharacterStats, StatKey } from '../model/stats.ts'
 import type { StatusId } from '../model/status.ts'
 import { shiftRamp } from '../model/ramps.ts'
 import type { ElevationRamp } from '../model/types.ts'
-import { connectedOpenings } from '../model/openings.ts'
+import { connectedOpenings, findOpening } from '../model/openings.ts'
 import type { OpeningSpot } from '../model/openings.ts'
-import { cellKey, openingAt, parseCellKey } from '../model/tiles.ts'
+import { cellKey, openingAt, openingIsOpen, parseCellKey } from '../model/tiles.ts'
+import { exploreDungeon, exploreFloor } from '../model/visibility.ts'
 import { tilesetById } from '../tiles/sets/index.ts'
+import { canPlaceObject, nextTurn } from '../model/objects.ts'
 import type {
   Cell,
   CellRect,
   Dungeon,
   Floor,
   Link,
+  ObjectTurn,
   Opening,
   Player,
   Room,
+  RoomObject,
   StairsBlock,
   StairsDir,
 } from '../model/types.ts'
@@ -136,8 +140,23 @@ function shiftRoom(room: Room, dx: number, dy: number): Room {
     ...(room.parts ? { parts: room.parts.map((part) => translateRect(part, dx, dy)) } : {}),
     openings: shiftOpenings(room.openings, dx, dy),
     openingOpen: shiftFlags(room.openingOpen ?? {}, dx, dy),
+    ...(room.openingLocked ? { openingLocked: shiftFlags(room.openingLocked, dx, dy) } : {}),
     stairs: shiftBlocks(room.stairs, dx, dy),
+    ...(room.objects
+      ? { objects: room.objects.map((object) => ({ ...object, x: object.x + dx, y: object.y + dy })) }
+      : {}),
   }
+}
+
+/** Changes one object of a room; a room without it is left alone. */
+function mapObject(room: Room, objectId: string, change: (object: RoomObject) => RoomObject | null): Room {
+  if (!room.objects?.some((object) => object.id === objectId)) return room
+  const objects: RoomObject[] = []
+  for (const object of room.objects) {
+    const next = object.id === objectId ? change(object) : object
+    if (next) objects.push(next)
+  }
+  return { ...room, objects }
 }
 
 function mapFloor(dungeon: Dungeon, floorId: string, change: (floor: Floor) => Floor): Dungeon {
@@ -294,6 +313,8 @@ interface DungeonState {
   nudgeRoomElevation: (floorId: string, roomId: string, delta: number) => void
   setRoomVisible: (floorId: string, roomId: string, visible: boolean) => void
   setOpeningOpen: (floorId: string, spots: readonly OpeningSpot[], open: boolean) => void
+  /** Locked doors and windows stay as they are for players until the DM unlocks them. */
+  setOpeningLocked: (floorId: string, spots: readonly OpeningSpot[], locked: boolean) => void
   toggleConnectedOpenings: (floorId: string, roomId: string, x: number, y: number) => void
   addPlayer: (floorId: string) => string | null
   addMonster: (floorId: string) => string | null
@@ -342,6 +363,13 @@ interface DungeonState {
   setTileset: (id: string, keepRoomTilesets?: boolean) => void
   /** Give one room its own tileset; null (or the map's own) makes it follow the map again. */
   setRoomTileset: (floorId: string, roomId: string, id: string | null) => void
+  /** Stands a catalog object in a room if it fits there; returns its id, or null when it doesn't fit. */
+  addObject: (floorId: string, roomId: string, kind: string, x: number, y: number, turn: ObjectTurn) => string | null
+  /** Moves an object to another spot in its room if it fits there; false when it doesn't. */
+  moveObject: (floorId: string, roomId: string, objectId: string, x: number, y: number) => boolean
+  /** Turns an object a quarter turn in place, if it still fits turned. */
+  turnObject: (floorId: string, roomId: string, objectId: string, steps: number) => boolean
+  removeObject: (floorId: string, roomId: string, objectId: string) => void
   playTravel: () => void
   finishTravel: () => void
 }
@@ -387,7 +415,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     })
     const turnPlayerId = dungeon.combat?.turnPlayerId ?? null
     set({
-      dungeon: {
+      dungeon: exploreDungeon({
         ...dungeon,
         floors: packFloors(rest),
         players,
@@ -398,7 +426,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
               : turnPlayerId,
         },
         travel: dungeon.travel?.floorId === floorId ? null : dungeon.travel,
-      },
+      }),
     })
   },
 
@@ -483,24 +511,31 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         const next = mapRoom(floor, roomId, (room) => {
           const openings = { ...room.openings }
           const openingOpen = { ...(room.openingOpen ?? {}) }
+          const openingLocked = { ...(room.openingLocked ?? {}) }
           for (const cell of cells) {
             const key = cellKey(cell.x, cell.y)
             if (opening) {
               openings[key] = opening
-              if (opening !== 'door' && opening !== 'window') delete openingOpen[key]
+              if (opening !== 'door' && opening !== 'window') {
+                delete openingOpen[key]
+                delete openingLocked[key]
+              }
             } else if (roomTileKind(room, cell.x, cell.y) === 'floor') {
               // Extra walls live as overrides on floor tiles; removing a door
               // there should put the painted wall back, not a hole.
               openings[key] = 'wall'
               delete openingOpen[key]
+              delete openingLocked[key]
             } else {
               delete openings[key]
               delete openingOpen[key]
+              delete openingLocked[key]
             }
           }
-          return { ...room, openings, openingOpen }
+          return { ...room, openings, openingOpen, openingLocked }
         })
-        return { ...next, links: linksThrough(next, roomId, cells) }
+        // A new archway beside the party shows them what is through it.
+        return exploreFloor({ ...next, links: linksThrough(next, roomId, cells) }, get().dungeon.players ?? [])
       }),
     })
   },
@@ -734,19 +769,47 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
       list.push(spot)
       byRoom.set(spot.roomId, list)
     }
+    const dungeon = mapFloor(get().dungeon, floorId, (floor) => ({
+      ...floor,
+      rooms: floor.rooms.map((room) => {
+        const hits = byRoom.get(room.id)
+        if (!hits) return room
+        const openingOpen = { ...(room.openingOpen ?? {}) }
+        for (const hit of hits) {
+          const kind = openingAt(room, hit.x, hit.y)
+          if (kind !== 'door' && kind !== 'window') continue
+          openingOpen[cellKey(hit.x, hit.y)] = open
+        }
+        return { ...room, openingOpen }
+      }),
+    }))
+    // Whatever the party can now see through it, they have explored.
+    set({ dungeon: exploreDungeon(dungeon) })
+  },
+
+  setOpeningLocked: (floorId, spots, locked) => {
+    if (spots.length === 0) return
+    const byRoom = new Map<string, OpeningSpot[]>()
+    for (const spot of spots) {
+      const list = byRoom.get(spot.roomId) ?? []
+      list.push(spot)
+      byRoom.set(spot.roomId, list)
+    }
     set({
       dungeon: mapFloor(get().dungeon, floorId, (floor) => ({
         ...floor,
         rooms: floor.rooms.map((room) => {
           const hits = byRoom.get(room.id)
           if (!hits) return room
-          const openingOpen = { ...(room.openingOpen ?? {}) }
+          const openingLocked = { ...(room.openingLocked ?? {}) }
           for (const hit of hits) {
             const kind = openingAt(room, hit.x, hit.y)
             if (kind !== 'door' && kind !== 'window') continue
-            openingOpen[cellKey(hit.x, hit.y)] = open
+            const key = cellKey(hit.x, hit.y)
+            if (locked) openingLocked[key] = true
+            else delete openingLocked[key]
           }
-          return { ...room, openingOpen }
+          return { ...room, openingLocked }
         }),
       })),
     })
@@ -754,12 +817,14 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
 
   toggleConnectedOpenings: (floorId, roomId, x, y) => {
     const floor = get().dungeon.floors.find((item) => item.id === floorId)
-    const room = floor?.rooms.find((item) => item.id === roomId)
-    if (!floor || !room) return
-    const spots = connectedOpenings(floor.rooms, roomId, x, y)
+    if (!floor) return
+    // The door may be held by the room on the other side of the wall.
+    const start = findOpening(floor.rooms, roomId, x, y)
+    const room = floor.rooms.find((item) => item.id === start?.roomId)
+    if (!start || !room) return
+    const spots = connectedOpenings(floor.rooms, room.id, x, y)
     if (spots.length === 0) return
-    const key = cellKey(x, y)
-    get().setOpeningOpen(floorId, spots, !room.openingOpen?.[key])
+    get().setOpeningOpen(floorId, spots, !openingIsOpen(room, x, y))
   },
 
   addPlayer: (floorId) => {
@@ -771,7 +836,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     if (!spot) return null
     const id = uid()
     set({
-      dungeon: {
+      dungeon: exploreDungeon({
         ...dungeon,
         players: [
           ...players,
@@ -795,7 +860,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             kind: 'player',
           },
         ],
-      },
+      }),
     })
     return id
   },
@@ -826,7 +891,8 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             visible: false,
             size: 1,
             hover: 0,
-            statuses: [],
+            // Unseen until the DM clears Invisible; then players see it when they can see into its room.
+            statuses: ['invisible'],
             characterId: null,
             stats: emptyStats(),
             statsManual: {},
@@ -859,12 +925,12 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
       return false
     }
     set({
-      dungeon: {
+      dungeon: exploreDungeon({
         ...dungeon,
         players: (dungeon.players ?? []).map((player) =>
           player.id === playerId ? { ...player, floorId, x, y } : player,
         ),
-      },
+      }),
     })
     return true
   },
@@ -879,12 +945,12 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     const spot = spotInRoom(room, floor.rooms, players, floorId, playerSize(token), near, floor.ramps ?? [], playerId)
     if (!spot) return false
     set({
-      dungeon: {
+      dungeon: exploreDungeon({
         ...dungeon,
         players: players.map((player) => (player.id === playerId ? { ...player, floorId, x: spot.x, y: spot.y } : player)),
         // A walk this tab was planning for the token no longer starts where it stood.
         travel: dungeon.travel?.playerId === playerId ? null : dungeon.travel,
-      },
+      }),
     })
     return true
   },
@@ -1037,14 +1103,14 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
       placed.push({ ...member, floorId: ground.id, x: spot.x, y: spot.y })
     }
     set({
-      dungeon: {
+      dungeon: exploreDungeon({
         ...base,
         floors,
         // Party first, then this map's monsters.
         players: [...placed.slice(monsters.length), ...monsters],
         combat: emptyCombat(),
         travel: null,
-      },
+      }),
     })
   },
 
@@ -1058,12 +1124,12 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     const players = get().dungeon.players ?? []
     const exists = players.some((item) => item.id === next.id)
     set({
-      dungeon: {
+      dungeon: exploreDungeon({
         ...get().dungeon,
         players: sortByInitiative(
           exists ? players.map((item) => (item.id === next.id ? next : item)) : [...players, next],
         ),
-      },
+      }),
     })
   },
 
@@ -1108,7 +1174,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
 
     const token = newPartyToken(dungeon, { ...info, characterId, name })
     if (!token) return null
-    set({ dungeon: { ...dungeon, players: [...players, token] } })
+    set({ dungeon: exploreDungeon({ ...dungeon, players: [...players, token] }) })
     return token.id
   },
 
@@ -1119,7 +1185,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     if (existing) return existing.id
     const token = newPartyToken(dungeon, { characterId: '', name: name.trim(), portrait: null })
     if (!token) return null
-    set({ dungeon: { ...dungeon, players: [...players, token] } })
+    set({ dungeon: exploreDungeon({ ...dungeon, players: [...players, token] }) })
     return token.id
   },
 
@@ -1205,6 +1271,57 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
           if ((room.tileset ?? null) === own) return room
           return own ? { ...room, tileset: own } : withoutTileset(room)
         }),
+      ),
+    })
+  },
+
+  addObject: (floorId, roomId, kind, x, y, turn) => {
+    const floor = get().dungeon.floors.find((item) => item.id === floorId)
+    const room = floor?.rooms.find((item) => item.id === roomId)
+    if (!floor || !room || !canPlaceObject(floor.rooms, room, kind, x, y, turn)) return null
+    const object: RoomObject = { id: uid(), kind, x, y, turn }
+    set({
+      dungeon: mapFloor(get().dungeon, floorId, (item) =>
+        mapRoom(item, roomId, (target) => ({ ...target, objects: [...(target.objects ?? []), object] })),
+      ),
+    })
+    return object.id
+  },
+
+  moveObject: (floorId, roomId, objectId, x, y) => {
+    const floor = get().dungeon.floors.find((item) => item.id === floorId)
+    const room = floor?.rooms.find((item) => item.id === roomId)
+    const object = room?.objects?.find((item) => item.id === objectId)
+    if (!floor || !room || !object) return false
+    if (object.x === x && object.y === y) return true
+    if (!canPlaceObject(floor.rooms, room, object.kind, x, y, object.turn, objectId)) return false
+    set({
+      dungeon: mapFloor(get().dungeon, floorId, (item) =>
+        mapRoom(item, roomId, (target) => mapObject(target, objectId, (found) => ({ ...found, x, y }))),
+      ),
+    })
+    return true
+  },
+
+  turnObject: (floorId, roomId, objectId, steps) => {
+    const floor = get().dungeon.floors.find((item) => item.id === floorId)
+    const room = floor?.rooms.find((item) => item.id === roomId)
+    const object = room?.objects?.find((item) => item.id === objectId)
+    if (!floor || !room || !object) return false
+    const turn = nextTurn(object.turn, steps)
+    if (!canPlaceObject(floor.rooms, room, object.kind, object.x, object.y, turn, objectId)) return false
+    set({
+      dungeon: mapFloor(get().dungeon, floorId, (item) =>
+        mapRoom(item, roomId, (target) => mapObject(target, objectId, (found) => ({ ...found, turn }))),
+      ),
+    })
+    return true
+  },
+
+  removeObject: (floorId, roomId, objectId) => {
+    set({
+      dungeon: mapFloor(get().dungeon, floorId, (floor) =>
+        mapRoom(floor, roomId, (room) => mapObject(room, objectId, () => null)),
       ),
     })
   },

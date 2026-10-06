@@ -2,4 +2,20 @@ import sheet from './dungeon.png'
 import { standardTileset } from './layout.ts'
 
 // Painted by tools/tilesets/dungeon.mjs (`npm run tiles`).
-export const DUNGEON = standardTileset('dungeon', 'Dungeon', sheet, { left: 0.62, right: 0.88 })
+export const DUNGEON = standardTileset('dungeon', 'Dungeon', sheet, { left: 0.62, right: 0.88 }, [
+  'table',
+  'long-table',
+  'chair',
+  'stool',
+  'chest',
+  'barrel',
+  'crate',
+  'bookshelf',
+  'bed',
+  'rug',
+  'statue',
+  'pillar',
+  'brazier',
+  'weapon-rack',
+  'bones',
+])

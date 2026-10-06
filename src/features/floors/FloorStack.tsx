@@ -1,7 +1,7 @@
 import { playerSize } from '../../model/players.ts'
 import { roomParts } from '../../model/rect.ts'
 import type { CellRect, Floor } from '../../model/types.ts'
-import { roomRevealed } from '../../model/visibility.ts'
+import { roomExplored } from '../../model/visibility.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { tokenShown } from '../party/tokenInfo.ts'
@@ -27,7 +27,7 @@ export function FloorStack({
 }) {
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
   const viewMode = useEditorStore((state) => state.viewMode)
-  const roomsOf = (floor: Floor) => (viewMode === 'player' ? floor.rooms.filter(roomRevealed) : floor.rooms)
+  const roomsOf = (floor: Floor) => (viewMode === 'player' ? floor.rooms.filter(roomExplored) : floor.rooms)
 
   const rects = floors.flatMap((floor) => roomsOf(floor).map((room) => room.rect))
   const bounds: CellRect =
@@ -92,7 +92,7 @@ export function FloorStack({
               )),
             )}
             {tokens
-              .filter((token) => token.floorId === floor.id && tokenShown(token, [floor], viewMode))
+              .filter((token) => token.floorId === floor.id && tokenShown(token, [floor], tokens, viewMode))
               .map((token) => {
                 const size = playerSize(token)
                 const [cx, cy] = at(token.x + size / 2, token.y + size / 2, tier).split(',')
@@ -104,7 +104,7 @@ export function FloorStack({
                     cy={cy}
                     r={3.2}
                     fill={token.color}
-                    fillOpacity={token.visible ? 1 : 0.45}
+                    fillOpacity={tokenShown(token, [floor], tokens, 'player') ? 1 : 0.45}
                   />
                 )
               })}

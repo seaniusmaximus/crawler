@@ -14,6 +14,7 @@ import {
   mix,
   newFace,
   newTop,
+  pairLeaves,
   patches,
   rim,
   ring,
@@ -46,7 +47,7 @@ const PALETTE = {
 // ---------- Tops ----------
 
 /** Oak boards running across the tile, staggered butt joints and a nail at each end. */
-function floorboards(seed, { board = 16, tone = 1, feature = null } = {}) {
+function floorboards(seed, { board = 16, tone = 1 } = {}) {
   const img = newTop()
   const rand = rng(seed)
   for (let row = 0; row * board < TOP; row++) {
@@ -76,45 +77,8 @@ function floorboards(seed, { board = 16, tone = 1, feature = null } = {}) {
     }
     fillRect(img, 0, y0 + board - 1, TOP, 1, PALETTE.oakGap)
   }
-  if (feature === 'knots') {
-    for (let i = 0; i < 3; i++) {
-      const cx = rand.range(12, TOP - 12)
-      const cy = rand.range(8, TOP - 8)
-      disc(img, cx, cy, 2.5, tint(PALETTE.oak, 0.5), 0.9)
-      ring(img, cx, cy, 5, 3, tint(PALETTE.oak, 0.72), 0.08)
-    }
-  }
-  if (feature === 'stain') patches(img, seed + 7, 0.25, [70, 28, 30], { scale: 26, max: 0.4, gain: 3 })
-  if (feature === 'worn') {
-    // Polish walked off down the middle.
-    each(img, (x, y) => {
-      const d = Math.hypot(x - TOP / 2, (y - TOP / 2) * 1.6) / (TOP / 2)
-      if (d < 1) blend(img, x, y, [196, 168, 128], 0.18 * (1 - d))
-    })
-  }
-  if (feature === 'rug') rugCorner(img, seed)
   groutBand(img, tint(PALETTE.oakGap, 1.1))
   return img
-}
-
-/** The fringed corner of a patterned rug that runs off under the next tile. */
-function rugCorner(img, seed) {
-  const x0 = 34
-  const y0 = 30
-  each(img, (x, y) => {
-    if (x < x0 || y < y0) return
-    const border = Math.min(x - x0, y - y0)
-    let color = PALETTE.carpet
-    if (border < 4) color = tint(PALETTE.carpet, 0.6)
-    else if (border < 10) color = (x + y) % 8 < 4 ? PALETTE.gilt : tint(PALETTE.carpet, 0.75)
-    else if (border < 13) color = tint(PALETTE.carpet, 0.6)
-    const n = fbm(x, y, 3, seed, 1) - 0.5
-    blend(img, x, y, tint(color, 1 + n * 0.18))
-  })
-  // Tassels along both edges and a soft shadow round the rug.
-  for (let t = x0; t < TOP; t += 3) fillRect(img, t, y0 - 4, 1, 4, [220, 204, 170])
-  for (let t = y0; t < TOP; t += 3) fillRect(img, x0 - 4, t, 4, 1, [220, 204, 170])
-  for (let t = x0; t < TOP; t++) shade(img, t, y0 - 5, 0.8)
 }
 
 /** The top of an interior wall: a strip of plaster between moulded wooden cappings. */
@@ -304,8 +268,8 @@ function doorLeaf(seed) {
 }
 
 /** Closed window: louvred shutters, slats catching light on their upper edge. */
-function louvres(seed) {
-  const img = newFace()
+function louvres(seed, w = FACE_W) {
+  const img = newFace(w)
   each(img, (x, y) => {
     const stile = x % 64 < 6 || x % 64 > 57 || y < 5 || y > FACE_H - 6
     const slat = (y - 5) % 6
@@ -313,7 +277,7 @@ function louvres(seed) {
     if (!stile) f *= slat === 0 ? 1.3 : slat < 3 ? 1.05 : slat === 5 ? 0.55 : 0.85
     blend(img, x, y, tint(PALETTE.paint, f))
   })
-  fillRect(img, FACE_W / 2 - 1, 0, 2, FACE_H, tint(PALETTE.paint, 0.5))
+  fillRect(img, w / 2 - 1, 0, 2, FACE_H, tint(PALETTE.paint, 0.5))
   rim(img, 3, 0.6)
   return img
 }
@@ -385,13 +349,12 @@ function foundation(seed) {
 
 // ---------- Sheet ----------
 
-const floorFeatures = [null, null, null, null, null, null, null, null, null, null, null, null, 'knots', 'stain', 'worn', 'rug']
 const topFeatures = [null, null, null, null, null, null, null, null, null, null, 'crack', 'dust']
 const faceFeatures = [null, null, null, null, null, null, null, null, null, null, 'painting', 'sconce', 'mirror', 'peeling', 'damp', 'sconce']
 
 writeSheet('manor', {
-  floors: floorFeatures.map((feature, i) =>
-    floorboards(21100 + i * 17, { board: [16, 16, 14, 18][i % 4], tone: tones[i % tones.length], feature }),
+  floors: Array.from({ length: 16 }, (_, i) =>
+    floorboards(21100 + i * 17, { board: [16, 16, 14, 18][i % 4], tone: tones[i % tones.length] }),
   ),
   wallTops: topFeatures.map((feature, i) => wallTop(22200 + i * 23, { tone: tones[(i + 3) % tones.length], feature })),
   stairs: stairs(24400),
@@ -403,4 +366,6 @@ writeSheet('manor', {
   shutters: louvres(26700),
   open: leadedGlass(),
   foundations: [0, 1, 2, 3].map((i) => foundation(27700 + i * 11)),
+  doubleDoor: pairLeaves(doorLeaf(26600), doorLeaf(26650)),
+  doubleShutters: louvres(26700, FACE_W * 2),
 })

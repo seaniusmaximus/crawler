@@ -1,7 +1,7 @@
 // Paints the "lava" tileset: cracked basalt glowing from beneath, volcanic
 // brick set in molten mortar, riveted iron doors and red-hot bars.
 
-import { blend, fbm, fillRect, rng, shade } from './raster.mjs'
+import { blend, fbm, fillRect, rng } from './raster.mjs'
 import {
   FACE_H,
   FACE_W,
@@ -19,6 +19,7 @@ import {
   mix,
   newFace,
   newTop,
+  pairLeaves,
   patches,
   pebbles,
   rim,
@@ -70,22 +71,6 @@ function glowSeams(img, seed, { cell, base, seamWidth = 2, glow = 1, halo = 5, g
 
 // ---------- Features ----------
 
-/** A pool of lava with a dark cooling crust round its rim. */
-function lavaPool(img, seed) {
-  const cx = TOP / 2
-  const cy = TOP / 2
-  each(img, (x, y) => {
-    const d = Math.hypot((x - cx) / 40, (y - cy) / 32) + (fbm(x, y, 18, seed, 2) - 0.5) * 0.45
-    if (d < 0.8) {
-      const swirl = fbm(x + y * 0.5, y, 9, seed + 3, 3)
-      blend(img, x, y, heat(0.45 + swirl * 0.6 - d * 0.3))
-      // Floating crust plates.
-      if (fbm(x, y, 7, seed + 4, 2) > 0.66) blend(img, x, y, PALETTE.crust, 0.85)
-    } else if (d < 1) blend(img, x, y, mix(PALETTE.crust, PALETTE.ember, (1 - d) * 2.5))
-    else if (d < 1.3) blend(img, x, y, PALETTE.lava, 0.3 * (1.3 - d) / 0.3)
-  })
-}
-
 function embers(img, seed, count) {
   const rand = rng(seed)
   for (let i = 0; i < count; i++) {
@@ -96,38 +81,13 @@ function embers(img, seed, count) {
   }
 }
 
-/** Glassy black shards with a sharp highlight. */
-function obsidian(img, seed) {
-  const rand = rng(seed)
-  for (let i = 0; i < 5; i++) {
-    const cx = rand.range(20, TOP - 20)
-    const cy = rand.range(20, TOP - 20)
-    const r = rand.range(5, 10)
-    const a = rand.range(0, Math.PI)
-    for (let y = -r; y <= r; y++) {
-      for (let x = -r; x <= r; x++) {
-        const u = x * Math.cos(a) + y * Math.sin(a)
-        const v = -x * Math.sin(a) + y * Math.cos(a)
-        if (Math.abs(u) / r + Math.abs(v) / (r * 0.45) > 1) continue
-        blend(img, cx + x, cy + y, tint(PALETTE.obsidian, v < 0 ? 1.8 : 0.9))
-        if (Math.abs(v) < 0.8 && u < 0) blend(img, cx + x, cy + y, [200, 190, 230], 0.6)
-      }
-    }
-    for (let x = -r; x <= r; x++) shade(img, cx + x + 2, cy + r * 0.5 + 2, 0.6)
-  }
-}
-
 // ---------- Tops ----------
 
-function floorTile(seed, { cell = 34, tone = 1, glow = 0.8, cooled = 0.4, feature = null } = {}) {
+function floorTile(seed, { cell = 34, tone = 1, glow = 0.8, cooled = 0.4 } = {}) {
   const img = newTop()
   glowSeams(img, seed, { cell, base: tint(PALETTE.basalt, tone), glow, cooled, seamWidth: 1.5, halo: 4, grain: 0.14, dome: 0.12 })
   patches(img, seed + 5, 0.25, PALETTE.soot, { scale: 28, max: 0.45 })
   pebbles(img, seed + 13, 3, PALETTE.basalt, [1, 3])
-  if (feature === 'pool') lavaPool(img, seed + 15)
-  if (feature === 'embers') embers(img, seed + 16, 9)
-  if (feature === 'obsidian') obsidian(img, seed + 17)
-  if (feature === 'crack') longCrack(img, seed + 12, PALETTE.lavaHot)
   groutBand(img, PALETTE.basaltDark)
   return img
 }
@@ -245,11 +205,11 @@ function doorLeaf(seed) {
 }
 
 /** Closed window: iron shutters with glowing slits. */
-function ironShutters(seed) {
-  const img = newFace()
+function ironShutters(seed, w = FACE_W) {
+  const img = newFace(w)
   each(img, (x, y) => blend(img, x, y, tint(PALETTE.iron, 1 + (fbm(x, y, 16, seed, 3) - 0.5) * 0.3)))
-  fillRect(img, FACE_W / 2 - 1, 0, 2, FACE_H, tint(PALETTE.iron, 0.5))
-  for (const cx of [FACE_W / 4, (FACE_W * 3) / 4]) {
+  fillRect(img, w / 2 - 1, 0, 2, FACE_H, tint(PALETTE.iron, 0.5))
+  for (const cx of [w / 4, (w * 3) / 4]) {
     for (const cy of [22, 44]) {
       fillRect(img, cx - 14, cy - 2, 28, 5, tint(PALETTE.iron, 0.4))
       fillRect(img, cx - 13, cy, 26, 2, PALETTE.lava)
@@ -306,13 +266,12 @@ function foundation(seed) {
 
 // ---------- Sheet ----------
 
-const floorFeatures = [null, null, null, null, null, null, null, null, null, null, null, 'embers', 'pool', 'obsidian', 'crack', 'embers']
 const topFeatures = [null, null, null, null, null, null, null, null, null, 'soot', 'crack', 'embers']
 const faceFeatures = [null, null, null, null, null, null, null, null, null, null, null, 'vent', 'lavafall', 'soot', 'crack', 'soot']
 
 writeSheet('lava', {
-  floors: floorFeatures.map((feature, i) =>
-    floorTile(31100 + i * 17, { cell: 36 + (i % 4) * 5, tone: tones[i % tones.length], glow: 0.45 + (i % 3) * 0.2, cooled: 0.35 + (i % 4) * 0.05, feature }),
+  floors: Array.from({ length: 16 }, (_, i) =>
+    floorTile(31100 + i * 17, { cell: 36 + (i % 4) * 5, tone: tones[i % tones.length], glow: 0.45 + (i % 3) * 0.2, cooled: 0.35 + (i % 4) * 0.05 }),
   ),
   wallTops: topFeatures.map((feature, i) =>
     wallTop(32200 + i * 23, { min: 40 + (i % 3) * 6, tone: tones[(i + 3) % tones.length], feature }),
@@ -331,4 +290,6 @@ writeSheet('lava', {
   shutters: ironShutters(36700),
   open: hotBars(),
   foundations: [0, 1, 2, 3].map((i) => foundation(37700 + i * 11)),
+  doubleDoor: pairLeaves(doorLeaf(36600), doorLeaf(36650)),
+  doubleShutters: ironShutters(36700, FACE_W * 2),
 })

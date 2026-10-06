@@ -80,13 +80,13 @@ export function PhysicalDice() {
       if (!useDiceStore.getState().physical) return
       const tokens = useDungeonStore.getState().dungeon.players ?? []
       const floors = useDungeonStore.getState().dungeon.floors
-      const viewMode = useEditorStore.getState().viewMode
       for (const roll of fresh) {
         const dice = diceFor(roll)
         if (dice.length === 0) continue
         const token = tokenForRoll(roll, tokens)
-        // A roll for a token this viewer can't see (a hidden monster) stays off their screen.
-        if (token && !tokenShown(token, floors, viewMode)) continue
+        // A roll for a token players can't see (a hidden monster) throws no dice on any screen;
+        // the DM still has its result in the log.
+        if (token && !tokenShown(token, floors, tokens, 'player')) continue
         markThrown(roll.id)
         void ready().then(
           (table) =>

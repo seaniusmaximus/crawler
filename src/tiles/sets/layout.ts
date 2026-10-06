@@ -10,9 +10,17 @@ const FACES_Y = TOP * 4
 
 const wallTops = [...cells(TOP * 2, TOP, TOP, 8), ...cells(TOP * 3, TOP, TOP, 4)]
 const [doorLeaf, windowShutters, windowBars] = cells(FACES_Y + FACE_H * 2, FACE_W, FACE_H, 3)
+// Two cells wide each, on the row below.
+const [doubleDoor, doubleShutters] = cells(FACES_Y + FACE_H * 3, FACE_W * 2, FACE_H, 2)
 
 /** A tileset laid out like every generated sheet. */
-export function standardTileset(id: string, name: string, sheet: string, shade: Tileset['shade']): Tileset {
+export function standardTileset(
+  id: string,
+  name: string,
+  sheet: string,
+  shade: Tileset['shade'],
+  objects: Tileset['objects'],
+): Tileset {
   return {
     id,
     name,
@@ -30,7 +38,9 @@ export function standardTileset(id: string, name: string, sheet: string, shade: 
     faces: {
       wall: [...cells(FACES_Y, FACE_W, FACE_H, 8), ...cells(FACES_Y + FACE_H, FACE_W, FACE_H, 8)],
       door: [doorLeaf!],
+      'door-double': [doubleDoor!],
       window: [windowShutters!],
+      'window-double': [doubleShutters!],
       'window-open': [windowBars!],
       foundation: cells(FACES_Y + FACE_H * 2, FACE_W, FACE_H, 4, 3),
       // The 3D stair parts sit after the flat stairs: a square tread, then two faces top-aligned in their cells.
@@ -39,5 +49,6 @@ export function standardTileset(id: string, name: string, sheet: string, shade: 
       shaft: [{ x: TOP * 7, y: TOP * 3, w: FACE_W, h: FACE_H }],
     },
     shade,
+    objects,
   }
 }

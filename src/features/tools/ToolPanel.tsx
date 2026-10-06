@@ -1,4 +1,6 @@
-import { Fragment } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
+import { drawObjectThumb } from '../../canvas/objects.ts'
+import { OBJECTS, objectDef, type ObjectDef } from '../../objects/catalog.ts'
 import type { DoorStyle, Tool } from '../../model/tools.ts'
 import type { StairsDir } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -11,7 +13,7 @@ interface ToolDef {
   label: string
   shortcut: string
   hint: string
-  options?: 'doors' | 'stairs' | 'link'
+  options?: 'doors' | 'stairs' | 'link' | 'objects'
   /** Starts a new group, drawn with a rule before it. */
   group?: boolean
 }
@@ -24,6 +26,14 @@ const TOOLS: readonly ToolDef[] = [
   { id: 'windows', label: 'Windows', shortcut: 'W', hint: 'Drag along a wall · Right-click a window to open or close it' },
   { id: 'stairs', label: 'Stairs', shortcut: 'S', hint: 'Drag inside a room to lead up or down a floor', options: 'stairs', group: true },
   { id: 'link', label: 'Link', shortcut: 'L', hint: 'Click two rooms to link them so they move together', options: 'link' },
+  {
+    id: 'objects',
+    label: 'Objects',
+    shortcut: 'O',
+    hint: 'Click a floor to place · Drag one to move it · T to turn · Right-click for more',
+    options: 'objects',
+    group: true,
+  },
 ]
 
 const DOOR_STYLES: ReadonlyArray<{ id: DoorStyle; label: string }> = [
@@ -82,6 +92,7 @@ export function ToolPanel() {
               {item.options === 'doors' ? <DoorOptions /> : null}
               {item.options === 'stairs' ? <StairsOptions /> : null}
               {item.options === 'link' ? <LinkOptions /> : null}
+              {item.options === 'objects' ? <ObjectOptions /> : null}
             </div>
           </Fragment>
         ))}
@@ -233,4 +244,81 @@ function LinkOptions() {
       ))}
     </ul>
   )
+}
+
+/** Picker value listing every object rather than one tileset's. */
+const ALL_OBJECTS = 'all'
+
+/**
+ * The objects to place, sorted by tileset: the map's own look first, or any
+ * other look's list, or the whole catalog.
+ */
+function ObjectOptions() {
+  const mapTileset = useDungeonStore((state) => tilesetById(state.dungeon.tileset))
+  const group = useEditorStore((state) => state.objectGroup) ?? mapTileset.id
+  const kind = useEditorStore((state) => state.objectKind)
+  const tool = useEditorStore((state) => state.tool)
+  const setObjectKind = useEditorStore((state) => state.setObjectKind)
+  const setObjectGroup = useEditorStore((state) => state.setObjectGroup)
+  const turnObjectDraft = useEditorStore((state) => state.turnObjectDraft)
+  const listed: readonly ObjectDef[] = group === ALL_OBJECTS ? OBJECTS : tilesetById(group).objects.map(objectDef)
+
+  return (
+    <div className="tool-options object-picker" aria-label="Objects">
+      <div className="object-picker-head">
+        <select
+          className="tileset-select"
+          value={group}
+          onChange={(event) => setObjectGroup(event.target.value === mapTileset.id ? null : event.target.value)}
+          aria-label="Which objects to list"
+        >
+          {TILESETS.map((set) => (
+            <option key={set.id} value={set.id}>
+              {set.name}
+            </option>
+          ))}
+          <option value={ALL_OBJECTS}>All objects</option>
+        </select>
+        <button type="button" className="tool-option" onClick={() => turnObjectDraft(1)} title="Turn the object before placing it (T)">
+          Turn
+        </button>
+      </div>
+      <ul className="object-grid">
+        {listed.map((def) => {
+          const active = tool === 'objects' && def.id === kind
+          return (
+            <li key={def.id}>
+              <button
+                type="button"
+                className={`object-choice${active ? ' is-active' : ''}`}
+                onClick={() => setObjectKind(def.id)}
+                aria-pressed={active}
+                title={`${def.name} · ${def.w}×${def.d}`}
+              >
+                <ObjectThumb def={def} />
+                <span>{def.name}</span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+const THUMB = 52
+
+function ObjectThumb({ def }: { def: ObjectDef }) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const canvas = ref.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = THUMB * dpr
+    canvas.height = THUMB * dpr
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    drawObjectThumb(ctx, def, THUMB)
+  }, [def])
+  return <canvas ref={ref} className="object-thumb" width={THUMB} height={THUMB} aria-hidden />
 }
