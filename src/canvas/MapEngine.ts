@@ -41,7 +41,6 @@ import {
 } from './camera.ts'
 import { drawOverlays, type DrawView } from './draw.ts'
 import { SceneCache, type SceneKey } from './scene.ts'
-import { DETAIL_ZOOM } from './solids.ts'
 import { useObjectLibraryStore } from '../state/objectLibraryStore.ts'
 import { beginGesture, endGesture, redo, undo } from '../state/history.ts'
 import { edgeCursor, hitHandle } from './handles.ts'
@@ -151,6 +150,8 @@ export class MapEngine {
   private readonly scene = new SceneCache()
   /** Counts tilesets coming ready, so the scene repaints with them. */
   private tilesVersion = 0
+  /** The development frame-time readout (see `drawPerf`). */
+  private readonly perf = { on: false, frame: 0, scene: 0, gap: 0, last: 0 }
   private width = 0
   private height = 0
   private dpr = 1
@@ -361,36 +362,63 @@ export class MapEngine {
       tileCache: this.tiles,
       tilesFor: this.tilesFor,
     }
-    // A stretched scene, mid-zoom, keeps the loop drawing until it's painted sharp.
+    const started = performance.now()
+    // Tiles still to paint, or a zoom still settling, keep the loop drawing.
     if (this.scene.draw(this.ctx, view, this.dpr, this.sceneKey(floor, dungeon.customObjects, view))) this.dirty = true
     // Overlays have always drawn as the tiles left the canvas: unsmoothed.
     this.ctx.imageSmoothingEnabled = false
     drawOverlays(this.ctx, view)
+    if (import.meta.env.DEV && this.perf.on) this.drawPerf(started)
   }
 
   /**
-   * What the scene shows besides the camera's position and zoom (see `drawScene`). Custom
-   * objects are in it because editing one reshapes every copy on the map.
+   * What the scene shows besides the camera (see `drawScene`). Custom objects are
+   * in it because editing one reshapes every copy on the map.
    */
   private sceneKey(floor: Floor, customObjects: unknown, view: DrawView): SceneKey {
     // Who can see what only tones rooms in the player view, and a new set with the same rooms changes nothing.
     const sight = view.viewMode === 'player' ? [...view.sight].sort().join('|') : ''
-    return [
-      floor.rooms,
-      floor.ramps,
-      customObjects,
-      useObjectLibraryStore.getState().objects,
-      view.viewMode,
-      sight,
-      // Rounds are built more coarsely zoomed out, so crossing that line paints again.
-      view.camera.zoom >= DETAIL_ZOOM,
-      view.camera.yaw,
-      view.width,
-      view.height,
-      this.dpr,
-      this.tiles,
-      this.tilesVersion,
+    const draft = view.rampDraft
+    return {
+      rooms: floor.rooms,
+      ramp: draft && !draft.erase ? draft.ramp : null,
+      rest: [
+        floor.ramps,
+        customObjects,
+        useObjectLibraryStore.getState().objects,
+        view.viewMode,
+        sight,
+        this.tiles,
+        this.tilesVersion,
+      ],
+    }
+  }
+
+  /**
+   * Development only: how long frames take, smoothed, in a corner of the map.
+   * The backquote key shows and hides it.
+   */
+  private drawPerf(started: number): void {
+    const perf = this.perf
+    const now = performance.now()
+    const smooth = (before: number, value: number) => (before ? before * 0.85 + value * 0.15 : value)
+    perf.frame = smooth(perf.frame, now - started)
+    perf.scene = smooth(perf.scene, this.scene.stats.ms)
+    // The gap between drawn frames, while the map is busy; an idle pause isn't a slow frame.
+    if (perf.last && now - perf.last < 250) perf.gap = smooth(perf.gap, now - perf.last)
+    perf.last = now
+    const lines = [
+      `frame ${perf.frame.toFixed(1)} ms · every ${perf.gap.toFixed(1)} ms`,
+      `scene ${perf.scene.toFixed(1)} ms · ${this.scene.stats.tiles} tiles`,
     ]
+    const ctx = this.ctx
+    ctx.save()
+    ctx.font = '11px ui-monospace, monospace'
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
+    ctx.fillRect(8, 8, 230, 36)
+    ctx.fillStyle = '#9fe0a8'
+    lines.forEach((line, i) => ctx.fillText(line, 14, 22 + i * 14))
+    ctx.restore()
   }
 
   /** The object the Objects tool would place where the pointer is, centred on it. */
@@ -1499,6 +1527,10 @@ export class MapEngine {
   private onKeyDown = (event: KeyboardEvent): void => {
     const blocked = useEditorStore.getState()
     if ((blocked.stairsPrompt || blocked.stairUse) && event.code !== 'Escape') return
+    if (import.meta.env.DEV && event.code === 'Backquote' && !isTyping(event.target)) {
+      this.perf.on = !this.perf.on
+      this.markDirty()
+    }
     if (event.code === 'Space') {
       if (isTyping(event.target)) return
       this.spaceDown = true

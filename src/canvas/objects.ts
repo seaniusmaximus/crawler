@@ -400,15 +400,27 @@ export function roomObjectPieces(room: Room, camera: Camera): ReadonlyMap<number
   let bySlot = piecesCache.get(objects)
   const known = bySlot?.get(slot)
   if (known && sameDefs(known.defs, defs)) return known.cells
-  const cells = new Map<number, ObjectPiece[]>()
-  const placed = objects.flatMap((object, i) => placedPieces(object, yaw, defs[i], object.id, coarse))
+  // Objects an edit left alone keep their pieces, so moving one rebuilds only that one...
+  const placed = objects.flatMap((object, i) => objectPieces(object, defs[i], yaw, coarse, slot))
+  const gathered = new Map<number, ObjectPiece[]>()
   for (const item of withoutHiddenHalos(placed, yaw)) {
     const key = cellId(item.cellX, item.cellY)
-    const list = cells.get(key)
+    const list = gathered.get(key)
     if (list) list.push(item.piece)
-    else cells.set(key, [item.piece])
+    else gathered.set(key, [item.piece])
   }
-  for (const [key, list] of cells) cells.set(key, sortPieces(list, yaw))
+  // ...and cells holding just what they held before keep their order.
+  const roomSlot = `${room.id}|${slot}`
+  const before = sortedCells.get(roomSlot)
+  const sorted = new Map<number, { input: readonly ObjectPiece[]; sorted: readonly ObjectPiece[] }>()
+  const cells = new Map<number, readonly ObjectPiece[]>()
+  for (const [key, list] of gathered) {
+    const last = before?.get(key)
+    const order = last && samePieces(last.input, list) ? last.sorted : sortPieces(list, yaw)
+    sorted.set(key, { input: list, sorted: order })
+    cells.set(key, order)
+  }
+  sortedCells.set(roomSlot, sorted)
   if (!bySlot) piecesCache.set(objects, (bySlot = new Map()))
   bySlot.set(slot, { defs, cells })
   return cells
@@ -419,6 +431,42 @@ const piecesCache = new WeakMap<
   readonly RoomObject[],
   Map<number, { defs: readonly ObjectDef[]; cells: ReadonlyMap<number, readonly ObjectPiece[]> }>
 >()
+
+/** One object's pieces, kept while it, its shape and the side it's seen from stay the same. */
+function objectPieces(
+  object: RoomObject,
+  def: ObjectDef,
+  yaw: Camera['yaw'],
+  coarse: boolean,
+  slot: number,
+): { cellX: number; cellY: number; piece: ObjectPiece }[] {
+  let bySlot = objectPiecesCache.get(object)
+  const known = bySlot?.get(slot)
+  if (known?.def === def) return known.placed
+  const placed = placedPieces(object, yaw, def, object.id, coarse)
+  if (!bySlot) objectPiecesCache.set(object, (bySlot = new Map()))
+  bySlot.set(slot, { def, placed })
+  return placed
+}
+
+const objectPiecesCache = new WeakMap<
+  RoomObject,
+  Map<number, { def: ObjectDef; placed: { cellX: number; cellY: number; piece: ObjectPiece }[] }>
+>()
+
+/** Each room's cells as last sorted, by room and slot, with the pieces each was sorted from. */
+const sortedCells = new Map<string, Map<number, { input: readonly ObjectPiece[]; sorted: readonly ObjectPiece[] }>>()
+
+function samePieces(a: readonly ObjectPiece[], b: readonly ObjectPiece[]): boolean {
+  return a.length === b.length && a.every((piece, i) => piece === b[i])
+}
+
+/** How far an object reaches above its room's floor, in pixels: its hover and its tallest part. */
+export function objectTop(pose: ObjectPose, def: ObjectDef = objectDef(pose.kind)): number {
+  let tallest = 0
+  for (const part of def.parts) if (part.shape !== 'flat') tallest = Math.max(tallest, part.z + part.h)
+  return objectHover(pose) * LEVEL_HEIGHT + tallest * objectScale(pose)
+}
 
 /** The lights a room's objects give off, kept like its pieces until an edit changes them. */
 export function roomGlows(room: Room): readonly GlowSource[] {
