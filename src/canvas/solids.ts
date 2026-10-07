@@ -22,14 +22,21 @@ export interface Face {
 /** Sides a round is built with: enough to read as round at any zoom the map allows. */
 const SIDES = 20
 const SMALL_SIDES = 12
+/** Sides when the map is zoomed out past `DETAIL_ZOOM`, where rounds are small enough not to show it. */
+const COARSE_SIDES = 12
+const COARSE_SMALL_SIDES = 8
 const EPSILON = 1e-7
+
+/** Below this zoom rounds are built with fewer sides and painted without seam hairlines. */
+export const DETAIL_ZOOM = 0.8
 
 /**
  * A round from (x, y) as faces wound outward: a cylinder, a cone (`r2` 0) or
  * one standing on its point (`r` 0). Its bottom is never seen and left out.
  */
-export function frustum(x: number, y: number, r: number, r2: number, z: number, h: number): Face[] {
-  const sides = Math.max(r, r2) < 0.06 ? SMALL_SIDES : SIDES
+export function frustum(x: number, y: number, r: number, r2: number, z: number, h: number, coarse = false): Face[] {
+  const small = Math.max(r, r2) < 0.06
+  const sides = coarse ? (small ? COARSE_SMALL_SIDES : COARSE_SIDES) : small ? SMALL_SIDES : SIDES
   const ring = (radius: number, height: number) =>
     Array.from({ length: sides }, (_, i) => {
       const angle = (i / sides) * Math.PI * 2
@@ -166,6 +173,8 @@ function faceLight(normal: Vec3, yaw: Camera['yaw'], left: number, right: number
 /**
  * Paint a solid's faces that face the camera, `base` pixels up. A convex
  * solid's front faces never cover each other, so their order doesn't matter.
+ * Without `seams` the hairlines between facets are left out, for when the map
+ * is zoomed out too far for them to show.
  */
 export function drawSolid(
   ctx: CanvasRenderingContext2D,
@@ -175,6 +184,7 @@ export function drawSolid(
   fill: (top: boolean, light: number) => string,
   left: number,
   right: number,
+  seams = true,
 ): void {
   const toward = towardCamera(camera.yaw)
   const at = (p: Vec3): Point => lift(cellToScreen(p.x, p.y, camera), camera, base + p.z)
@@ -191,6 +201,7 @@ export function drawSolid(
     ctx.closePath()
     ctx.fillStyle = color
     ctx.fill()
+    if (!seams) continue
     // A hairline of its own colour closes the seams antialiasing leaves between facets.
     ctx.strokeStyle = color
     ctx.lineWidth = 0.6

@@ -5,6 +5,18 @@ export function cellKey(x: number, y: number): string {
   return `${x},${y}`
 }
 
+const CELL_ID_OFFSET = 2 ** 20
+const CELL_ID_SPAN = 2 ** 21
+
+/**
+ * A cell as one number, for maps looked up in drawing's inner loops, where
+ * building a `cellKey` string per lookup costs more than the lookup. Exact for
+ * coordinates within a million cells of the origin.
+ */
+export function cellId(x: number, y: number): number {
+  return (y + CELL_ID_OFFSET) * CELL_ID_SPAN + (x + CELL_ID_OFFSET)
+}
+
 export function parseCellKey(key: string): { x: number; y: number } {
   const comma = key.indexOf(',')
   return { x: Number(key.slice(0, comma)), y: Number(key.slice(comma + 1)) }

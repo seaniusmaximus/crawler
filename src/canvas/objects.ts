@@ -1,7 +1,7 @@
 import { objectDef, type ObjectDef, type ObjectPart } from '../objects/catalog.ts'
 import { footprintAt, objectHover, objectScale, turnPoint, type ObjectPose } from '../model/objects.ts'
-import { cellKey } from '../model/tiles.ts'
-import type { Camera, CellRect, Room } from '../model/types.ts'
+import { cellId, cellKey } from '../model/tiles.ts'
+import type { Camera, CellRect, Room, RoomObject } from '../model/types.ts'
 import {
   LEVEL_HEIGHT,
   TILE_HEIGHT,
@@ -17,7 +17,7 @@ import {
   type IsoCorners,
   type Point,
 } from './camera.ts'
-import { clipSolid, drawSolid, frustum, solidBounds, type Face, type SolidBounds } from './solids.ts'
+import { DETAIL_ZOOM, clipSolid, drawSolid, frustum, solidBounds, type Face, type SolidBounds } from './solids.ts'
 
 /**
  * One shape of an object, placed on the map in grid coordinates. Boxes and
@@ -85,6 +85,7 @@ export function placedPieces(
   yaw: Camera['yaw'] = 0,
   def: ObjectDef = objectDef(pose.kind),
   owner = '',
+  coarse = false,
 ): { cellX: number; cellY: number; piece: ObjectPiece }[] {
   const scale = objectScale(pose)
   const lift = objectHover(pose)
@@ -107,7 +108,7 @@ export function placedPieces(
   const boxes = def.parts.map((part) => (part.shape === 'box' ? placedCuboid(size, part, pose.x, pose.y, pose.turn, scale) : null))
   def.parts.forEach((part, order) => {
     if (part.shape !== 'box') {
-      for (const piece of placePart(size, part, pose.x, pose.y, pose.turn, scale, lift, owner, order)) out.push(piece)
+      for (const piece of placePart(size, part, pose.x, pose.y, pose.turn, scale, lift, owner, order, coarse)) out.push(piece)
       return
     }
     let kept = [boxes[order]!]
@@ -122,7 +123,7 @@ export function placedPieces(
     const glow = part.glow && part.shape !== 'flat' ? glowOf(part, size, pose.x, pose.y, pose.turn, scale) : null
     if (!glow) return
     // Painted with the nearest cell its part has a piece in, so the whole part is lit and
-    // only what stands in front of it can hide its light.
+    // only what stands in front of it can hide its light (see withoutHiddenHalos).
     let cell: { x: number; y: number } | null = null
     for (const item of out) {
       if (item.piece.order !== order || item.piece.shape === 'shadow') continue
@@ -305,8 +306,9 @@ function placePart(
   lift: number,
   owner: string,
   order: number,
+  coarse: boolean,
 ): { cellX: number; cellY: number; piece: ObjectPiece }[] {
-  if (part.shape === 'round') return placeRound(size, part, ox, oy, turn, scale, lift, owner, order)
+  if (part.shape === 'round') return placeRound(size, part, ox, oy, turn, scale, lift, owner, order, coarse)
   const a = turnPoint(size, turn, part.x * scale, part.y * scale)
   const b = turnPoint(size, turn, (part.x + part.w) * scale, (part.y + part.d) * scale)
   const x0 = ox + Math.min(a.x, b.x)
@@ -350,6 +352,7 @@ function placeRound(
   lift: number,
   owner: string,
   order: number,
+  coarse: boolean,
 ): { cellX: number; cellY: number; piece: ObjectPiece }[] {
   const at = turnPoint(size, turn, part.x * scale, part.y * scale)
   const x = ox + at.x
@@ -357,7 +360,7 @@ function placeRound(
   const r = part.r * scale
   const r2 = (part.r2 ?? part.r) * scale
   const reach = Math.max(r, r2)
-  const whole = frustum(x, y, r, r2, part.z * scale, part.h * scale)
+  const whole = frustum(x, y, r, r2, part.z * scale, part.h * scale, coarse)
   const out: { cellX: number; cellY: number; piece: ObjectPiece }[] = []
   for (let cy = Math.floor(y - reach); cy < y + reach; cy++) {
     for (let cx = Math.floor(x - reach); cx < x + reach; cx++) {
@@ -382,20 +385,115 @@ function placeRound(
 /**
  * A room's objects as pieces grouped by the cell they paint with, each cell's
  * pieces in the order they paint: rugs first, then from the floor up and from
- * the back forward.
+ * the back forward. Keyed by `cellId`. Zoomed out past `DETAIL_ZOOM`, rounds
+ * are built with fewer sides.
  */
-export function roomObjectPieces(room: Room, yaw: Camera['yaw']): Map<string, ObjectPiece[]> {
-  const cells = new Map<string, ObjectPiece[]>()
-  for (const object of room.objects ?? []) {
-    for (const item of placedPieces(object, yaw, undefined, object.id)) {
-      const key = cellKey(item.cellX, item.cellY)
-      const list = cells.get(key)
-      if (list) list.push(item.piece)
-      else cells.set(key, [item.piece])
-    }
+export function roomObjectPieces(room: Room, camera: Camera): ReadonlyMap<number, readonly ObjectPiece[]> {
+  const objects = room.objects
+  if (!objects?.length) return new Map()
+  const yaw = camera.yaw
+  const coarse = camera.zoom < DETAIL_ZOOM
+  // Kept while the room's objects, the side they're seen from and their shapes stay the same:
+  // only an edit changes them, not a pan, a zoom or anything moving over the map.
+  const defs = objects.map((object) => objectDef(object.kind))
+  const slot = yaw + (coarse ? 4 : 0)
+  let bySlot = piecesCache.get(objects)
+  const known = bySlot?.get(slot)
+  if (known && sameDefs(known.defs, defs)) return known.cells
+  const cells = new Map<number, ObjectPiece[]>()
+  const placed = objects.flatMap((object, i) => placedPieces(object, yaw, defs[i], object.id, coarse))
+  for (const item of withoutHiddenHalos(placed, yaw)) {
+    const key = cellId(item.cellX, item.cellY)
+    const list = cells.get(key)
+    if (list) list.push(item.piece)
+    else cells.set(key, [item.piece])
   }
   for (const [key, list] of cells) cells.set(key, sortPieces(list, yaw))
+  if (!bySlot) piecesCache.set(objects, (bySlot = new Map()))
+  bySlot.set(slot, { defs, cells })
   return cells
+}
+
+/** Each room's pieces by the side they're seen from and how finely, with the shapes they were built from. */
+const piecesCache = new WeakMap<
+  readonly RoomObject[],
+  Map<number, { defs: readonly ObjectDef[]; cells: ReadonlyMap<number, readonly ObjectPiece[]> }>
+>()
+
+/** The lights a room's objects give off, kept like its pieces until an edit changes them. */
+export function roomGlows(room: Room): readonly GlowSource[] {
+  const objects = room.objects
+  if (!objects?.length) return []
+  const defs = objects.map((object) => objectDef(object.kind))
+  const known = glowsCache.get(objects)
+  if (known && sameDefs(known.defs, defs)) return known.glows
+  const glows = objects.flatMap((object, i) => objectGlows(object, defs[i]))
+  glowsCache.set(objects, { defs, glows })
+  return glows
+}
+
+const glowsCache = new WeakMap<readonly RoomObject[], { defs: readonly ObjectDef[]; glows: readonly GlowSource[] }>()
+
+function sameDefs(a: readonly ObjectDef[], b: readonly ObjectDef[]): boolean {
+  return a.length === b.length && a.every((def, i) => def === b[i])
+}
+
+/**
+ * Drops the halo of any light hidden behind something. Cells paint one after another,
+ * so a halo can spread over pieces of earlier cells that are nearer than its flame; a
+ * hidden flame shouldn't haze what hides it. Hidden means every point sampled through
+ * the glowing part is behind something, so a lantern's bars don't put out its light.
+ */
+function withoutHiddenHalos<T extends { piece: ObjectPiece }>(placed: T[], yaw: Camera['yaw']): T[] {
+  const halos = placed.filter((item) => item.piece.shape === 'glow')
+  if (!halos.length) return placed
+  const along = alongAxes(yaw)
+  const standing = placed
+    .map((item) => item.piece)
+    .filter((piece) => piece.shape === 'box' || piece.shape === 'solid' || (piece.shape === 'flat' && piece.lift > 0))
+    .map((piece) => ({ piece, space: extent(piece), outline: screenOutline(extent(piece), yaw) }))
+  const hidden = new Set<ObjectPiece>()
+  for (const { piece: halo } of halos) {
+    const own = (piece: ObjectPiece) => piece.owner === halo.owner && piece.order === halo.order - 0.5
+    const part = standing.filter((other) => own(other.piece)).map((other) => other.space)
+    const centre = extent(halo)
+    const space = part.reduce(
+      (a, b) => ({
+        x0: Math.min(a.x0, b.x0),
+        y0: Math.min(a.y0, b.y0),
+        z0: Math.min(a.z0, b.z0),
+        x1: Math.max(a.x1, b.x1),
+        y1: Math.max(a.y1, b.y1),
+        z1: Math.max(a.z1, b.z1),
+      }),
+      centre,
+    )
+    // The middle and, pulled halfway in, the corners of the part: a cone or ball doesn't fill them.
+    const mix = (lo: number, hi: number, mid: number) => [mid + (lo - mid) * 0.5, mid + (hi - mid) * 0.5]
+    const samples = [centre]
+    for (const x of mix(space.x0, space.x1, centre.x0)) {
+      for (const y of mix(space.y0, space.y1, centre.y0)) {
+        for (const z of mix(space.z0, space.z1, centre.z0)) samples.push({ x0: x, x1: x, y0: y, y1: y, z0: z, z1: z })
+      }
+    }
+    const behind = (point: SolidBounds) => {
+      const seen = screenOutline(point, yaw)
+      return standing.some(
+        (other) =>
+          !own(other.piece) && outlinesMeet(seen, other.outline) && relation(halo, other.piece, point, other.space, along) === -2,
+      )
+    }
+    if (samples.every(behind)) hidden.add(halo)
+  }
+  return placed.filter((item) => !hidden.has(item.piece))
+}
+
+/** -1 along an axis when the piece on its low side paints first: the camera is toward the high side. */
+function alongAxes(yaw: Camera['yaw']): { x: number; y: number } {
+  return {
+    x: isoDepth(1, 0, yaw) > isoDepth(0, 0, yaw) ? -1 : 1,
+    y: isoDepth(0, 1, yaw) > isoDepth(0, 0, yaw) ? -1 : 1,
+  }
 }
 
 /** The space a piece takes: plan extent in cells, height in pixels above its room's floor. */
@@ -418,15 +516,15 @@ const GAP = 1e-6
  * space between them go by where they stand, which is right from every side:
  * the lower one first, or the one farther from the camera. Pieces that overlap
  * have no right answer, so their object's layer order decides (later on top).
- * Zero when nothing decides.
+ * Zero when nothing decides; ±2 when space between them decides, ±1 for a best guess.
  */
 function relation(a: ObjectPiece, b: ObjectPiece, ea: SolidBounds, eb: SolidBounds, along: { x: number; y: number }): number {
-  if (ea.z1 <= eb.z0 + GAP) return -1
-  if (eb.z1 <= ea.z0 + GAP) return 1
-  if (ea.x1 <= eb.x0 + GAP) return along.x
-  if (eb.x1 <= ea.x0 + GAP) return -along.x
-  if (ea.y1 <= eb.y0 + GAP) return along.y
-  if (eb.y1 <= ea.y0 + GAP) return -along.y
+  if (ea.z1 <= eb.z0 + GAP) return -2
+  if (eb.z1 <= ea.z0 + GAP) return 2
+  if (ea.x1 <= eb.x0 + GAP) return 2 * along.x
+  if (eb.x1 <= ea.x0 + GAP) return -2 * along.x
+  if (ea.y1 <= eb.y0 + GAP) return 2 * along.y
+  if (eb.y1 <= ea.y0 + GAP) return -2 * along.y
   // Parts that only just sink into each other (a flame into a hearth's stone, tiers of a
   // tree) are nearly apart: order them by where their middles sit on the shallowest axis.
   const shallow = shallowestOverlap(ea, eb)
@@ -434,7 +532,7 @@ function relation(a: ObjectPiece, b: ObjectPiece, ea: SolidBounds, eb: SolidBoun
     const ahead = shallow.axis === 'z' ? -1 : along[shallow.axis]
     return shallow.aFirst ? ahead : -ahead
   }
-  if (a.owner === b.owner && a.order !== b.order) return a.order - b.order
+  if (a.owner === b.owner && a.order !== b.order) return Math.sign(a.order - b.order)
   return 0
 }
 
@@ -553,11 +651,7 @@ function paintStanding(pieces: ObjectPiece[], yaw: Camera['yaw']): ObjectPiece[]
   const n = pieces.length
   if (n < 2) return pieces
   const extents = pieces.map(extent)
-  // -1 when the piece on the low side of that axis paints first: the camera is toward the high side.
-  const along = {
-    x: isoDepth(1, 0, yaw) > isoDepth(0, 0, yaw) ? -1 : 1,
-    y: isoDepth(0, 1, yaw) > isoDepth(0, 0, yaw) ? -1 : 1,
-  }
+  const along = alongAxes(yaw)
   // Pieces that don't overlap on screen can paint in either order; leaving them unordered
   // keeps their spatial rules from chaining into cycles with pieces that do overlap.
   const outlines = extents.map((e) => screenOutline(e, yaw))
@@ -718,11 +812,14 @@ export function drawPiece(
   piece: ObjectPiece,
   elevation: number,
   light: ObjectLight,
+  /** False when zoomed out too far for rounds' seam hairlines to show. */
+  detail = true,
 ): void {
   const base = roomLift(elevation + piece.lift)
   if (piece.shape === 'box') drawBox(ctx, camera, piece, base, light)
   else if (piece.shape === 'solid') {
-    drawSolid(ctx, camera, piece.faces, base, (top, shade) => tone(top ? piece.top : piece.color, shade, light.fog), light.left, light.right)
+    const fill = (top: boolean, shade: number) => tone(top ? piece.top : piece.color, shade, light.fog)
+    drawSolid(ctx, camera, piece.faces, base, fill, light.left, light.right, detail)
   }
   else if (piece.shape === 'shadow') drawShadow(ctx, camera, piece, base)
   // Out of sight, nothing burns.
@@ -743,26 +840,39 @@ function drawShadow(
   ctx.beginPath()
   diamond(ctx, liftCorners(rectCorners(shadow.clip, camera), camera, base))
   ctx.clip()
-  ctx.beginPath()
-  const scale = camera.zoom * Math.SQRT1_2
-  for (const mark of shadow.marks) {
-    if ('r' in mark) {
-      const centre = at(camera, mark.x, mark.y, base)
-      ctx.moveTo(centre.x + mark.r * TILE_WIDTH * scale, centre.y)
-      ctx.ellipse(centre.x, centre.y, mark.r * TILE_WIDTH * scale, mark.r * TILE_HEIGHT * scale, 0, 0, Math.PI * 2)
-      continue
-    }
-    polygon(ctx, [
-      at(camera, mark.x0, mark.y0, base),
-      at(camera, mark.x1, mark.y0, base),
-      at(camera, mark.x1, mark.y1, base),
-      at(camera, mark.x0, mark.y1, base),
-    ])
-  }
+  // The floor is a flat grid seen at a slant, so the outline laid out in grid
+  // cells once is carried onto the screen by the grid's own step across and down.
+  const origin = at(camera, 0, 0, base)
+  const across = at(camera, 1, 0, base)
+  const down = at(camera, 0, 1, base)
+  ctx.transform(across.x - origin.x, across.y - origin.y, down.x - origin.x, down.y - origin.y, origin.x, origin.y)
   ctx.fillStyle = `rgba(0, 0, 0, ${shadow.opacity})`
-  ctx.fill('nonzero')
+  ctx.fill(shadowOutline(shadow.marks), 'nonzero')
   ctx.restore()
 }
+
+/** A shadow's marks as one path in grid cells, built once and shared by every cell the shadow falls in. */
+function shadowOutline(marks: readonly ShadowMark[]): Path2D {
+  const known = shadowOutlines.get(marks)
+  if (known) return known
+  const path = new Path2D()
+  for (const mark of marks) {
+    if ('r' in mark) {
+      path.moveTo(mark.x + mark.r, mark.y)
+      path.arc(mark.x, mark.y, mark.r, 0, Math.PI * 2)
+      continue
+    }
+    path.moveTo(mark.x0, mark.y0)
+    path.lineTo(mark.x1, mark.y0)
+    path.lineTo(mark.x1, mark.y1)
+    path.lineTo(mark.x0, mark.y1)
+    path.closePath()
+  }
+  shadowOutlines.set(marks, path)
+  return path
+}
+
+const shadowOutlines = new WeakMap<readonly ShadowMark[], Path2D>()
 
 function at(camera: Camera, x: number, y: number, height: number): Point {
   return lift(cellToScreen(x, y, camera), camera, height)
@@ -881,7 +991,7 @@ export function drawWholeObject(
 ): void {
   // Cell by cell from the back, each cell's pieces in their own order, as the map paints them.
   const cells = new Map<string, { depth: number; pieces: ObjectPiece[] }>()
-  for (const item of placedPieces(pose, camera.yaw, def, 'whole')) {
+  for (const item of withoutHiddenHalos(placedPieces(pose, camera.yaw, def, 'whole'), camera.yaw)) {
     const key = cellKey(item.cellX, item.cellY)
     const cell = cells.get(key) ?? { depth: isoDepth(item.cellX, item.cellY, camera.yaw), pieces: [] }
     cell.pieces.push(item.piece)

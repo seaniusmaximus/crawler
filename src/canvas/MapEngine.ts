@@ -39,7 +39,10 @@ import {
   screenToCellAt,
   zoomAt,
 } from './camera.ts'
-import { drawMap } from './draw.ts'
+import { drawOverlays, type DrawView } from './draw.ts'
+import { SceneCache, type SceneKey } from './scene.ts'
+import { DETAIL_ZOOM } from './solids.ts'
+import { useObjectLibraryStore } from '../state/objectLibraryStore.ts'
 import { beginGesture, endGesture, redo, undo } from '../state/history.ts'
 import { edgeCursor, hitHandle } from './handles.ts'
 import {
@@ -144,8 +147,13 @@ export class MapEngine {
   private resizeObserver: ResizeObserver | null = null
   private raf = 0
   private dirty = true
+  /** The map under its overlays, painted again only when what it shows changes. */
+  private readonly scene = new SceneCache()
+  /** Counts tilesets coming ready, so the scene repaints with them. */
+  private tilesVersion = 0
   private width = 0
   private height = 0
+  private dpr = 1
   private centered = false
   private spaceDown = false
   private hoverCell: { x: number; y: number } | null = null
@@ -194,6 +202,7 @@ export class MapEngine {
     cancelAnimationFrame(this.raf)
     window.clearTimeout(this.noticeTimer)
     this.resizeObserver?.disconnect()
+    this.scene.release()
     this.tiles.destroy()
     this.pendingTiles?.destroy()
     this.pendingTiles = null
@@ -261,6 +270,7 @@ export class MapEngine {
       this.pendingTiles = null
       this.tiles.destroy()
       this.tiles = next
+      this.tilesVersion++
       this.markDirty()
     })
   }
@@ -280,7 +290,10 @@ export class MapEngine {
       if (this.roomTiles.has(id)) continue
       const cache = new TileCache(tilesetById(id))
       this.roomTiles.set(id, cache)
-      void cache.init().then(() => this.markDirty())
+      void cache.init().then(() => {
+        this.tilesVersion++
+        this.markDirty()
+      })
     }
   }
 
@@ -315,7 +328,7 @@ export class MapEngine {
     const floor = getActiveFloor()
     this.syncPortraits(dungeon.players ?? [])
     const players = this.visiblePlayers(dungeon.players ?? [], floor.id)
-    drawMap(this.ctx, {
+    const view: DrawView = {
       width: this.width,
       height: this.height,
       camera: editor.camera,
@@ -347,7 +360,37 @@ export class MapEngine {
       objectFocus: editor.viewMode === 'player' ? [] : this.objectFocus(floor.rooms),
       tileCache: this.tiles,
       tilesFor: this.tilesFor,
-    })
+    }
+    // A stretched scene, mid-zoom, keeps the loop drawing until it's painted sharp.
+    if (this.scene.draw(this.ctx, view, this.dpr, this.sceneKey(floor, dungeon.customObjects, view))) this.dirty = true
+    // Overlays have always drawn as the tiles left the canvas: unsmoothed.
+    this.ctx.imageSmoothingEnabled = false
+    drawOverlays(this.ctx, view)
+  }
+
+  /**
+   * What the scene shows besides the camera's position and zoom (see `drawScene`). Custom
+   * objects are in it because editing one reshapes every copy on the map.
+   */
+  private sceneKey(floor: Floor, customObjects: unknown, view: DrawView): SceneKey {
+    // Who can see what only tones rooms in the player view, and a new set with the same rooms changes nothing.
+    const sight = view.viewMode === 'player' ? [...view.sight].sort().join('|') : ''
+    return [
+      floor.rooms,
+      floor.ramps,
+      customObjects,
+      useObjectLibraryStore.getState().objects,
+      view.viewMode,
+      sight,
+      // Rounds are built more coarsely zoomed out, so crossing that line paints again.
+      view.camera.zoom >= DETAIL_ZOOM,
+      view.camera.yaw,
+      view.width,
+      view.height,
+      this.dpr,
+      this.tiles,
+      this.tilesVersion,
+    ]
   }
 
   /** The object the Objects tool would place where the pointer is, centred on it. */
@@ -496,6 +539,7 @@ export class MapEngine {
     this.width = Math.max(1, rect.width)
     this.height = Math.max(1, rect.height)
     const dpr = window.devicePixelRatio || 1
+    this.dpr = dpr
     this.canvas.width = Math.max(1, Math.floor(this.width * dpr))
     this.canvas.height = Math.max(1, Math.floor(this.height * dpr))
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)

@@ -16,7 +16,7 @@ import { rampFlight, rampOccupancy } from '../model/ramps.ts'
 import type { RampDraft, RampSlice } from '../model/ramps.ts'
 import { openingGroup } from '../model/openings.ts'
 import type { OpeningGroup } from '../model/openings.ts'
-import { cellKey, openingAt, openingIsLocked, openingIsOpen, parseCellKey, spriteAt, stairsAt } from '../model/tiles.ts'
+import { cellId, openingAt, openingIsLocked, openingIsOpen, parseCellKey, spriteAt, stairsAt } from '../model/tiles.ts'
 import { stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import { sharedWalls } from '../model/walls.ts'
 import type { SharedWalls } from '../model/walls.ts'
@@ -28,11 +28,12 @@ import type { TileCache } from '../tiles/TileCache.ts'
 import { seedFor, type FaceKind, type Variant } from '../tiles/tileset.ts'
 import type { LinkBadge } from './badges.ts'
 import type { ObjectDraft } from '../model/objects.ts'
+import { DETAIL_ZOOM } from './solids.ts'
 import {
   drawGlowPool,
   drawPiece,
   drawWholeObject,
-  objectGlows,
+  roomGlows,
   roomObjectPieces,
   type GlowSource,
   type ObjectLight,
@@ -153,7 +154,12 @@ function roomView(view: DrawView, room: Room | undefined, shade: Shade = 'none')
   return tileCache === view.tileCache ? view : { ...view, tileCache }
 }
 
-export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
+/**
+ * The map under its overlays: the grid, the rooms and everything in them. It
+ * depends only on the floor, the camera, the view mode, what the party can see
+ * and the tiles, so it can be painted once and kept (see SceneCache).
+ */
+export function drawScene(ctx: CanvasRenderingContext2D, view: DrawView): void {
   ctx.clearRect(0, 0, view.width, view.height)
   ctx.fillStyle = '#0b0c10'
   ctx.fillRect(0, 0, view.width, view.height)
@@ -165,17 +171,20 @@ export function drawMap(ctx: CanvasRenderingContext2D, view: DrawView): void {
   const shared = sharedWalls(shown)
   const top = topRoomAtCell(shown)
   const ramps = visibleRamps(view)
-  const rampCells = rampOccupancy(ramps, shown)
-  if (view.viewMode === 'player') {
-    for (const slice of [...rampCells.values()]) {
-      const room = occupantRoom(view.rooms, slice.x, slice.y)
-      if (room && !roomExplored(room)) rampCells.delete(cellKey(slice.x, slice.y))
-    }
+  const rampCells = new Map<number, RampSlice>()
+  for (const slice of rampOccupancy(ramps, shown).values()) {
+    const room = view.viewMode === 'player' ? occupantRoom(view.rooms, slice.x, slice.y) : undefined
+    if (!room || roomExplored(room)) rampCells.set(cellId(slice.x, slice.y), slice)
   }
   const painted: DrawView = { ...view, rooms: shown }
-  drawSupports(ctx, painted, top, rampCells)
+  drawSupports(ctx, painted, bounds, top, rampCells)
   drawTiles(ctx, painted, bounds, shared, top, rampCells)
   if (view.viewMode === 'dm') drawLocks(ctx, painted)
+}
+
+/** Everything drawn over the scene each frame: outlines, badges, paths, tokens and previews. */
+export function drawOverlays(ctx: CanvasRenderingContext2D, view: DrawView): void {
+  const painted: DrawView = { ...view, rooms: view.viewMode === 'player' ? playerRooms(view.rooms) : view.rooms }
   for (const focus of view.objectFocus) drawObjectFocus(ctx, view, focus)
 
   const selected =
@@ -240,15 +249,15 @@ function visibleCellBounds(view: DrawView): CellRect {
 }
 
 /** Highest room on each cell — overlapping lower floors must not paint there. */
-function topRoomAtCell(rooms: readonly Room[]): Map<string, number> {
-  const top = new Map<string, number>()
+function topRoomAtCell(rooms: readonly Room[]): Map<number, number> {
+  const top = new Map<number, number>()
   rooms.forEach((room, index) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
     for (let y = rect.minY; y <= rect.maxY; y++) {
       for (let x = rect.minX; x <= rect.maxX; x++) {
         if (!roomContains(room, x, y)) continue
-        const key = cellKey(x, y)
+        const key = cellId(x, y)
         const prev = top.get(key)
         if (prev === undefined) {
           top.set(key, index)
@@ -284,11 +293,11 @@ const ORTHO: readonly [number, number][] = [
 /** Empty grid sits on the ground plane (elevation 0). */
 function elevationAt(
   rooms: readonly Room[],
-  top: Map<string, number>,
+  top: Map<number, number>,
   x: number,
   y: number,
 ): number {
-  const index = top.get(cellKey(x, y))
+  const index = top.get(cellId(x, y))
   if (index === undefined) return 0
   return rooms[index].elevation ?? 0
 }
@@ -299,7 +308,7 @@ function elevationAt(
  */
 function supportBottom(
   rooms: readonly Room[],
-  top: Map<string, number>,
+  top: Map<number, number>,
   x: number,
   y: number,
   elevation: number,
@@ -315,8 +324,9 @@ function supportBottom(
 function drawSupports(
   ctx: CanvasRenderingContext2D,
   view: DrawView,
-  top: Map<string, number>,
-  rampCells: Map<string, RampSlice>,
+  bounds: CellRect,
+  top: Map<number, number>,
+  rampCells: Map<number, RampSlice>,
 ): void {
   const cells: {
     x: number
@@ -331,12 +341,20 @@ function drawSupports(
   view.rooms.forEach((room, roomIndex) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
+    // Off screen is skipped: the bounds already reach far enough for the tallest prism.
+    const minX = Math.max(rect.minX, bounds.minX)
+    const maxX = Math.min(rect.maxX, bounds.maxX)
+    const minY = Math.max(rect.minY, bounds.minY)
+    const maxY = Math.min(rect.maxY, bounds.maxY)
+    if (minX > maxX || minY > maxY) return
     const shade = shadeOf(view, room)
     const own = roomView(view, room, shade)
-    for (let y = rect.minY; y <= rect.maxY; y++) {
-      for (let x = rect.minX; x <= rect.maxX; x++) {
-        if (top.get(cellKey(x, y)) !== roomIndex) continue
-        if (rampCells.has(cellKey(x, y))) continue
+    const hideFace = (nx: number, ny: number) =>
+      roomContains(room, nx, ny) || elevationAt(view.rooms, top, nx, ny) >= elevation
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        if (top.get(cellId(x, y)) !== roomIndex) continue
+        if (rampCells.has(cellId(x, y))) continue
         const bottom = supportBottom(view.rooms, top, x, y, elevation)
         if (elevation <= bottom) continue
         cells.push({
@@ -347,8 +365,7 @@ function drawSupports(
           depth: isoDepth(x, y, view.camera.yaw),
           shade,
           view: own,
-          hideFace: (nx, ny) =>
-            roomContains(room, nx, ny) || elevationAt(view.rooms, top, nx, ny) >= elevation,
+          hideFace,
         })
       }
     }
@@ -443,8 +460,8 @@ function drawTiles(
   view: DrawView,
   bounds: CellRect,
   shared: SharedWalls,
-  top: Map<string, number>,
-  rampCells: Map<string, RampSlice>,
+  top: Map<number, number>,
+  rampCells: Map<number, RampSlice>,
 ): void {
   const queue: Queued[] = []
   const yaw = view.camera.yaw
@@ -456,16 +473,16 @@ function drawTiles(
     const seed = seedFor(room.id)
     const shade = shadeOf(view, room)
     const own = roomView(view, room, shade)
-    const pieces = room.objects?.length ? roomObjectPieces(room, yaw) : null
     const minX = Math.max(rect.minX, bounds.minX)
     const maxX = Math.min(rect.maxX, bounds.maxX)
     const minY = Math.max(rect.minY, bounds.minY)
     const maxY = Math.min(rect.maxY, bounds.maxY)
     if (minX > maxX || minY > maxY) return
+    const pieces = room.objects?.length ? roomObjectPieces(room, view.camera) : null
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
-        if (top.get(cellKey(x, y)) !== roomIndex) continue
-        if (rampCells.has(cellKey(x, y))) continue
+        if (top.get(cellId(x, y)) !== roomIndex) continue
+        if (rampCells.has(cellId(x, y))) continue
         const opening = openingAt(room, x, y)
         const planted = opening === 'wall' || opening === 'door' || opening === 'window'
         const sprite = shared.has(room.id, x, y) && !planted ? 'floor' : spriteAt(room, x, y)
@@ -488,7 +505,7 @@ function drawTiles(
           view: own,
         })
         // Objects only show where their room's floor does; a wall painted over one hides it.
-        const here = sprite === 'floor' ? pieces?.get(cellKey(x, y)) : undefined
+        const here = sprite === 'floor' ? pieces?.get(cellId(x, y)) : undefined
         for (const piece of here ?? []) {
           queue.push({
             x,
@@ -529,17 +546,19 @@ function drawTiles(
     }
   }
   queue.sort(paintOrder)
+  const occluders = new Occluders(view, top, rampCells)
+  const detail = view.camera.zoom >= DETAIL_ZOOM
   ctx.imageSmoothingEnabled = true
   for (const tile of queue) {
     const own = tile.view
     if ('piece' in tile) {
       const light = objectLight(own, tile.shade)
-      drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () =>
-        shaded(ctx, tile.shade, own.tileCache, () => drawPiece(ctx, view.camera, tile.piece, tile.elevation, light)),
+      occluders.under(ctx, tile.x, tile.y, tile.elevation, () =>
+        shaded(ctx, tile.shade, own.tileCache, () => drawPiece(ctx, view.camera, tile.piece, tile.elevation, light, detail)),
       )
       continue
     }
-    drawingUnderOccluders(ctx, view, top, rampCells, tile.x, tile.y, tile.elevation, () =>
+    occluders.under(ctx, tile.x, tile.y, tile.elevation, () =>
       shaded(ctx, tile.shade, own.tileCache, () => {
         if (tile.ramp) {
           // Its stone reaches down to the ground, or to a lower neighbour's floor.
@@ -547,7 +566,7 @@ function drawTiles(
           drawRampStairs(ctx, own, tile.ramp, bottom, tile.variant)
         } else if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
           drawFloor(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation)
-          for (const light of lights.get(cellKey(tile.x, tile.y)) ?? []) {
+          for (const light of lights.get(cellId(tile.x, tile.y)) ?? []) {
             if (light.elevation === tile.elevation) drawGlowPool(ctx, view.camera, light.glow, light.elevation, tile)
           }
         } else if (tile.sprite === 'wall') {
@@ -567,21 +586,19 @@ function drawTiles(
  * reach, so each floor tile can be lit as it's painted. A room remembered but
  * out of sight stays dark; light spills only onto floor of the same height.
  */
-function floorLights(view: DrawView): Map<string, { glow: GlowSource; elevation: number }[]> {
-  const cells = new Map<string, { glow: GlowSource; elevation: number }[]>()
+function floorLights(view: DrawView): Map<number, { glow: GlowSource; elevation: number }[]> {
+  const cells = new Map<number, { glow: GlowSource; elevation: number }[]>()
   for (const room of view.rooms) {
     if (!room.objects?.length || shadeOf(view, room) === 'fog') continue
     const elevation = room.elevation ?? 0
-    for (const object of room.objects) {
-      for (const glow of objectGlows(object)) {
-        for (let y = Math.floor(glow.y - glow.reach); y <= Math.floor(glow.y + glow.reach); y++) {
-          for (let x = Math.floor(glow.x - glow.reach); x <= Math.floor(glow.x + glow.reach); x++) {
-            const key = cellKey(x, y)
-            const list = cells.get(key)
-            const entry = { glow, elevation }
-            if (list) list.push(entry)
-            else cells.set(key, [entry])
-          }
+    for (const glow of roomGlows(room)) {
+      const entry = { glow, elevation }
+      for (let y = Math.floor(glow.y - glow.reach); y <= Math.floor(glow.y + glow.reach); y++) {
+        for (let x = Math.floor(glow.x - glow.reach); x <= Math.floor(glow.x + glow.reach); x++) {
+          const key = cellId(x, y)
+          const list = cells.get(key)
+          if (list) list.push(entry)
+          else cells.set(key, [entry])
         }
       }
     }
@@ -594,60 +611,93 @@ function objectLight(view: DrawView, shade: Shade): ObjectLight {
   return { left: falloff.left, right: falloff.right, fog: shade === 'fog' }
 }
 
-/** Keep a lower tile from painting inside a higher room's solid volume. */
-function drawingUnderOccluders(
-  ctx: CanvasRenderingContext2D,
-  view: DrawView,
-  top: Map<string, number>,
-  rampCells: Map<string, RampSlice>,
-  x: number,
-  y: number,
-  elevation: number,
-  paint: () => void,
-): void {
-  const yaw = view.camera.yaw
-  const tileDepth = isoDepth(x, y, yaw)
-  const solids: { ground: IsoCorners; deck: IsoCorners }[] = []
-  for (let roomIndex = 0; roomIndex < view.rooms.length; roomIndex++) {
-    const room = view.rooms[roomIndex]
-    if (!room) continue
-    const above = room.elevation ?? 0
-    if (above <= elevation) continue
-    const rect = room.rect
-    const span = Math.abs(above - elevation) * 2 + 2
-    const minX = Math.max(rect.minX, x - span)
-    const maxX = Math.min(rect.maxX, x + span)
-    const minY = Math.max(rect.minY, y - span)
-    const maxY = Math.min(rect.maxY, y + span)
-    if (minX > maxX || minY > maxY) continue
-    for (let cy = minY; cy <= maxY; cy++) {
-      for (let cx = minX; cx <= maxX; cx++) {
-        if (rampCells.has(cellKey(cx, cy))) continue
-        if (top.get(cellKey(cx, cy)) !== roomIndex) continue
+/** A cell of a raised room standing above its surroundings: a solid that hides lower tiles behind it. */
+interface RaisedCell {
+  x: number
+  y: number
+  above: number
+  bottom: number
+  depth: number
+  /** Its outline on screen, worked out the first time something needs it. */
+  path?: { ground: IsoCorners; deck: IsoCorners }
+}
+
+/**
+ * The raised solids of one paint, indexed by cell, so each tile can find the
+ * ones that hide it without scanning every room. The clip each cell and height
+ * needs is kept too: a cell's floor and every object piece on it share one.
+ */
+class Occluders {
+  private readonly cells = new Map<number, RaisedCell>()
+  private readonly clips = new Map<number, Path2D | null>()
+  private highest = -Infinity
+  private readonly view: DrawView
+
+  constructor(view: DrawView, top: Map<number, number>, rampCells: Map<number, RampSlice>) {
+    this.view = view
+    const yaw = view.camera.yaw
+    view.rooms.forEach((room, roomIndex) => {
+      const above = room.elevation ?? 0
+      const rect = room.rect
+      for (let y = rect.minY; y <= rect.maxY; y++) {
+        for (let x = rect.minX; x <= rect.maxX; x++) {
+          const id = cellId(x, y)
+          if (rampCells.has(id) || top.get(id) !== roomIndex) continue
+          const bottom = supportBottom(view.rooms, top, x, y, above)
+          if (above <= bottom) continue
+          this.cells.set(id, { x, y, above, bottom, depth: isoDepth(x, y, yaw) })
+          this.highest = Math.max(this.highest, above)
+        }
+      }
+    })
+  }
+
+  /** Paint with lower tiles kept out of any higher room's solid volume in front of them. */
+  under(ctx: CanvasRenderingContext2D, x: number, y: number, elevation: number, paint: () => void): void {
+    const clip = this.clip(x, y, elevation)
+    if (!clip) {
+      paint()
+      return
+    }
+    ctx.save()
+    ctx.clip(clip, 'evenodd')
+    paint()
+    ctx.restore()
+  }
+
+  private clip(x: number, y: number, elevation: number): Path2D | null {
+    if (elevation >= this.highest) return null
+    // Heights run -8..8, so 32 slots per cell keeps every cell and height apart.
+    const key = cellId(x, y) * 32 + (elevation + 16)
+    const known = this.clips.get(key)
+    if (known !== undefined) return known
+    const { camera } = this.view
+    const tileDepth = isoDepth(x, y, camera.yaw)
+    const reach = (this.highest - elevation) * 2 + 2
+    let path: Path2D | null = null
+    for (let cy = y - reach; cy <= y + reach; cy++) {
+      for (let cx = x - reach; cx <= x + reach; cx++) {
+        const cell = this.cells.get(cellId(cx, cy))
+        if (!cell || cell.above <= elevation) continue
+        const span = (cell.above - elevation) * 2 + 2
+        if (Math.abs(cx - x) > span || Math.abs(cy - y) > span) continue
         // Only nearer cubes occlude. A raised volume behind this tile must
         // not punch a hole — this tile is in front and should paint over it.
-        if (isoDepth(cx, cy, yaw) <= tileDepth) continue
-        const bottom = supportBottom(view.rooms, top, cx, cy, above)
-        if (above <= bottom) continue
-        const base = screenCorners(cellCorners(cx, cy, view.camera))
-        solids.push({
-          ground: liftCorners(base, view.camera, roomLift(bottom)),
-          deck: liftCorners(base, view.camera, roomLift(above)),
-        })
+        if (cell.depth <= tileDepth) continue
+        if (!cell.path) {
+          const base = screenCorners(cellCorners(cx, cy, camera))
+          cell.path = { ground: liftCorners(base, camera, roomLift(cell.bottom)), deck: liftCorners(base, camera, roomLift(cell.above)) }
+        }
+        if (!path) {
+          path = new Path2D()
+          path.rect(0, 0, this.view.width, this.view.height)
+        }
+        appendCubePath(path, cell.path.ground, cell.path.deck)
       }
     }
+    this.clips.set(key, path)
+    return path
   }
-  if (solids.length === 0) {
-    paint()
-    return
-  }
-  ctx.save()
-  ctx.beginPath()
-  ctx.rect(0, 0, view.width, view.height)
-  for (const solid of solids) appendCubePath(ctx, solid.ground, solid.deck)
-  ctx.clip('evenodd')
-  paint()
-  ctx.restore()
 }
 
 function drawFloor(
@@ -998,7 +1048,7 @@ function neighborForEdge(a: Corner, b: Corner): { dx: number; dy: number } {
 }
 
 function appendCubePath(
-  ctx: CanvasRenderingContext2D,
+  ctx: CanvasPath,
   ground: IsoCorners,
   deck: IsoCorners,
 ): void {
