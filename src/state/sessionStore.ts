@@ -135,11 +135,14 @@ let lastSentSeq = 0
 /**
  * Keeping players in step (DM side): players get a full snapshot when they join or
  * fall out of step, and otherwise just what changed, as numbered patches. A full
- * copy goes to the relay for saving at most every SAVE_MS, and isn't sent on to
- * the players.
+ * copy goes to the relay for saving once changes rest for SAVE_IDLE_MS (and at
+ * least every SAVE_MAX_MS while they don't), and isn't sent on to the players.
+ * Building that copy is the one costly step, so it waits for a pause rather
+ * than landing in the middle of a drag.
  */
 const PATCH_MS = 30
-const SAVE_MS = 1500
+const SAVE_IDLE_MS = 1000
+const SAVE_MAX_MS = 10_000
 /** The map as the players last received it; the next patch is the difference from this. */
 let synced: Dungeon | null = null
 let syncedYou = ''
@@ -152,6 +155,8 @@ let patchTimer = 0
 let fullTimer = 0
 let saveTimer = 0
 let saveQueued = false
+/** When the oldest change not yet saved must go out, however busy the map still is; 0 when none is waiting. */
+let saveDueBy = 0
 /** Players whose position must go out even if unchanged (a move the DM refused). */
 let forced = new Set<string>()
 /** Resend who holds which token even if unchanged: the answer to a refused pick. */
@@ -226,6 +231,7 @@ function destroySocket(): void {
   window.clearTimeout(resyncTimer)
   patchTimer = fullTimer = saveTimer = resyncTimer = 0
   saveQueued = false
+  saveDueBy = 0
   synced = null
   guestRev = null
   forced = new Set()
@@ -279,6 +285,7 @@ function sendSnapshot(): void {
   window.clearTimeout(saveTimer)
   patchTimer = fullTimer = saveTimer = 0
   saveQueued = false
+  saveDueBy = 0
   forced = new Set()
   resendClaims = false
   if (useSessionStore.getState().role !== 'host') return
@@ -307,7 +314,10 @@ function scheduleSync(): void {
   setSaveState(connected() ? 'saving' : 'offline')
   if (!patchTimer) patchTimer = window.setTimeout(flushPatch, PATCH_MS)
   saveQueued = true
-  if (!saveTimer) saveTimer = window.setTimeout(saveNow, SAVE_MS)
+  const now = Date.now()
+  if (!saveDueBy) saveDueBy = now + SAVE_MAX_MS
+  window.clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(saveNow, Math.max(0, Math.min(SAVE_IDLE_MS, saveDueBy - now)))
 }
 
 /** Send players what changed since they were last in step. */
@@ -343,6 +353,7 @@ function saveNow(): void {
   saveTimer = 0
   if (patchTimer) flushPatch()
   saveQueued = false
+  saveDueBy = 0
   if (useSessionStore.getState().role !== 'host') return
   if (!connected()) {
     setSaveState('offline')
