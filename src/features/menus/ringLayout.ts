@@ -1,9 +1,7 @@
 /** Every control on the ring is a circle this wide. */
 export const RING_CONTROL = 68
-/** Clear space kept between neighbouring controls, and between the controls and a label in the middle. */
+/** Clear space kept between neighbouring controls. */
 export const RING_GAP = 20
-/** The label some rings hold in their middle (a door's state). */
-export const RING_CORE = 64
 /** Box for menus that open as a card rather than a ring (statuses, pulling a token). */
 export const CARD_FRAME = 260
 
@@ -29,15 +27,14 @@ function spot(degrees: number, radius: number): Spot {
 /**
  * `count` evenly spaced seats, clockwise from twelve o'clock (or from `start`
  * degrees), on a ring just wide enough to keep RING_GAP between neighbouring
- * controls, and between the controls and a middle label when there is one.
+ * controls.
  * More options make a wider ring; fewer, a tighter one.
  */
-export function ringLayout(count: number, options: { core?: boolean; start?: number } = {}): RingLayout {
+export function ringLayout(count: number, options: { start?: number } = {}): RingLayout {
   const n = Math.max(1, count)
   // Neighbours' centres are a chord apart: 2r·sin(π/n) = control + gap.
   const neighbours = n > 1 ? (RING_CONTROL + RING_GAP) / (2 * Math.sin(Math.PI / n)) : 0
-  const middle = options.core ? RING_CONTROL / 2 + RING_GAP + RING_CORE / 2 : 0
-  const radius = Math.ceil(Math.max(neighbours, middle))
+  const radius = Math.ceil(neighbours)
   const start = options.start ?? 0
   return {
     radius,

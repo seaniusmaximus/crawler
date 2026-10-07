@@ -1,5 +1,5 @@
 import { sameLink } from '../model/links.ts'
-import { normalizeRect, resizeRect, topmostRoomAt, translateRect } from '../model/rect.ts'
+import { normalizeRect, rectContains, resizeRect, topmostRoomAt, translateRect } from '../model/rect.ts'
 import { featureAt, isFeatureTool, pendingFeature, stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import type { FeatureDraft, FeatureTool, Tool } from '../model/tools.ts'
 import { pathFeet, tokenTrail } from '../model/movement.ts'
@@ -21,7 +21,7 @@ import { useEditorStore } from '../state/editorStore.ts'
 import { canControlPlayer, useSessionStore } from '../state/sessionStore.ts'
 import { remoteTravelAnimating, useTravelStore, type RemoteTravel } from '../state/travelStore.ts'
 import type { FocusRequest, ObjectRef } from '../state/editorStore.ts'
-import { canPlaceObject, objectAt, objectFootprint, turnedSize } from '../model/objects.ts'
+import { canPlaceObject, liesOnFloor, objectFootprint, objectHover, turnedSize } from '../model/objects.ts'
 import type { ObjectDraft } from '../model/objects.ts'
 import { objectDef } from '../objects/catalog.ts'
 import { getActiveFloor } from '../state/selectors.ts'
@@ -29,7 +29,16 @@ import { TileCache } from '../tiles/TileCache.ts'
 import { tilesetById } from '../tiles/sets/index.ts'
 import { hitLinkBadge, linkBadges } from './badges.ts'
 import type { LinkBadge } from './badges.ts'
-import { LEVEL_HEIGHT, cellToWorld, cameraFocused, centerOnWorld, panBy, screenToCell, zoomAt } from './camera.ts'
+import {
+  LEVEL_HEIGHT,
+  cellToWorld,
+  cameraFocused,
+  centerOnWorld,
+  panBy,
+  screenToCell,
+  screenToCellAt,
+  zoomAt,
+} from './camera.ts'
 import { drawMap } from './draw.ts'
 import { beginGesture, endGesture, redo, undo } from '../state/history.ts'
 import { edgeCursor, hitHandle } from './handles.ts'
@@ -68,6 +77,8 @@ interface ObjectDrag {
   objectId: string
   dx: number
   dy: number
+  /** Steps up its floor, room and hover together: where the pointer is read. */
+  level: number
 }
 
 interface TokenDrag {
@@ -348,17 +359,18 @@ export class MapEngine {
     if (!room) return null
     const editor = useEditorStore.getState()
     const size = turnedSize(objectDef(editor.objectKind), editor.objectTurn)
-    const x = spot.x - Math.floor((size.w - 1) / 2)
-    const y = spot.y - Math.floor((size.d - 1) / 2)
+    const pose = {
+      kind: editor.objectKind,
+      x: spot.x - Math.floor((size.w - 1) / 2),
+      y: spot.y - Math.floor((size.d - 1) / 2),
+      turn: editor.objectTurn,
+    }
     return {
+      ...pose,
       roomId: room.id,
       objectId: null,
-      kind: editor.objectKind,
-      x,
-      y,
-      turn: editor.objectTurn,
       elevation: room.elevation ?? 0,
-      fits: canPlaceObject(floor.rooms, room, editor.objectKind, x, y, editor.objectTurn),
+      fits: canPlaceObject(floor.rooms, room, pose),
     }
   }
 
@@ -368,20 +380,34 @@ export class MapEngine {
     const add = (ref: ObjectRef | null, selected: boolean) => {
       const room = ref ? rooms.find((item) => item.id === ref.roomId) : undefined
       const object = room?.objects?.find((item) => item.id === ref?.objectId)
-      if (room && object) focus.push({ rect: objectFootprint(object), elevation: room.elevation ?? 0, selected })
+      if (room && object) {
+        focus.push({ rect: objectFootprint(object), elevation: (room.elevation ?? 0) + objectHover(object), selected })
+      }
     }
     if (editor.tool === 'objects') add(this.hoverObject, false)
     add(editor.selectedObject, true)
     return focus
   }
 
-  /** The placed object under a screen point, on rooms this view shows. */
-  private objectUnder(sx: number, sy: number): (ObjectRef & { x: number; y: number }) | null {
-    const room = this.roomAt(sx, sy)
-    if (!room) return null
-    const cell = this.cellAt(sx, sy, room)
-    const object = objectAt(room, cell.x, cell.y)
-    return object ? { roomId: room.id, objectId: object.id, x: object.x, y: object.y } : null
+  /**
+   * The placed object under a screen point, on rooms this view shows, with the
+   * cell of it that was hit. A floating object is found where it floats; the
+   * highest wins, and furniture wins over the rug it stands on.
+   */
+  private objectUnder(sx: number, sy: number): (ObjectDrag & { rank: number }) | null {
+    const camera = useEditorStore.getState().camera
+    let best: (ObjectDrag & { rank: number }) | null = null
+    for (const room of this.viewRooms()) {
+      for (const object of room.objects ?? []) {
+        const level = (room.elevation ?? 0) + objectHover(object)
+        const cell = screenToCellAt(sx, sy, camera, level)
+        if (!rectContains(objectFootprint(object), cell.x, cell.y)) continue
+        const rank = level * 2 + (liesOnFloor(object) ? 0 : 1)
+        if (best && best.rank >= rank) continue
+        best = { roomId: room.id, objectId: object.id, dx: cell.x - object.x, dy: cell.y - object.y, level, rank }
+      }
+    }
+    return best
   }
 
   private badges(): LinkBadge[] {
@@ -509,6 +535,12 @@ export class MapEngine {
       return
     }
 
+    // Pressing the map is a click elsewhere, but the preventDefault below stops
+    // focus from leaving a toolbar control, which would hold open whatever
+    // panel it is in (the object picker) until something else took focus.
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && focused !== this.canvas) focused.blur()
+
     const editor = useEditorStore.getState()
     editor.closeMenu()
     this.tween = null
@@ -599,11 +631,11 @@ export class MapEngine {
       }
     } else if (!pan && tool === 'objects') {
       // Grab a placed object to move it; click open floor to place one; elsewhere the drag pans.
-      mode = hit ? 'object' : 'pan'
-      roomId = hit?.id ?? null
       const object = this.objectUnder(point.x, point.y)
+      mode = object || hit ? 'object' : 'pan'
+      roomId = hit?.id ?? null
       if (object) {
-        this.objectDrag = { roomId: object.roomId, objectId: object.objectId, dx: cell.x - object.x, dy: cell.y - object.y }
+        this.objectDrag = object
         editor.selectObject({ roomId: object.roomId, objectId: object.objectId })
       } else {
         editor.selectObject(null)
@@ -714,8 +746,7 @@ export class MapEngine {
     if (session.mode === 'object' && session.moved) {
       const drag = this.objectDrag
       if (drag) {
-        const room = this.lookupRoom(drag.roomId)
-        const cell = this.cellAt(point.x, point.y, room)
+        const cell = screenToCellAt(point.x, point.y, useEditorStore.getState().camera, drag.level)
         // It follows the pointer wherever it fits, and waits where it doesn't.
         useDungeonStore.getState().moveObject(getActiveFloor().id, drag.roomId, drag.objectId, cell.x - drag.dx, cell.y - drag.dy)
       } else {

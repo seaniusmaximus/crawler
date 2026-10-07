@@ -57,7 +57,7 @@ import type { OpeningSpot } from '../model/openings.ts'
 import { cellKey, openingAt, openingIsOpen, parseCellKey } from '../model/tiles.ts'
 import { exploreDungeon, exploreFloor } from '../model/visibility.ts'
 import { tilesetById } from '../tiles/sets/index.ts'
-import { canPlaceObject, nextTurn } from '../model/objects.ts'
+import { canPlaceObject, nextTurn, rehoveredObject, rescaledObject, withPose } from '../model/objects.ts'
 import type {
   Cell,
   CellRect,
@@ -146,6 +146,32 @@ function shiftRoom(room: Room, dx: number, dy: number): Room {
       ? { objects: room.objects.map((object) => ({ ...object, x: object.x + dx, y: object.y + dy })) }
       : {}),
   }
+}
+
+/**
+ * Puts one object into a new pose: `change` returns it as it should now be,
+ * or null when it can't change that way. False when nothing changed.
+ */
+function reposeObject(
+  floorId: string,
+  roomId: string,
+  objectId: string,
+  change: (object: RoomObject, rooms: readonly Room[], room: Room) => RoomObject | null,
+): boolean {
+  const store = useDungeonStore
+  const floor = store.getState().dungeon.floors.find((item) => item.id === floorId)
+  const room = floor?.rooms.find((item) => item.id === roomId)
+  const object = room?.objects?.find((item) => item.id === objectId)
+  if (!floor || !room || !object) return false
+  const next = change(object, floor.rooms, room)
+  if (!next) return false
+  if (next === object) return true
+  store.setState({
+    dungeon: mapFloor(store.getState().dungeon, floorId, (item) =>
+      mapRoom(item, roomId, (target) => mapObject(target, objectId, () => next)),
+    ),
+  })
+  return true
 }
 
 /** Changes one object of a room; a room without it is left alone. */
@@ -369,6 +395,10 @@ interface DungeonState {
   moveObject: (floorId: string, roomId: string, objectId: string, x: number, y: number) => boolean
   /** Turns an object a quarter turn in place, if it still fits turned. */
   turnObject: (floorId: string, roomId: string, objectId: string, steps: number) => boolean
+  /** Grows or shrinks an object by whole steps, if it still fits; false when it doesn't. */
+  nudgeObjectScale: (floorId: string, roomId: string, objectId: string, delta: number) => boolean
+  /** Raises or lowers an object off its room's floor, if nothing is in the way there. */
+  nudgeObjectHover: (floorId: string, roomId: string, objectId: string, delta: number) => boolean
   removeObject: (floorId: string, roomId: string, objectId: string) => void
   playTravel: () => void
   finishTravel: () => void
@@ -1278,8 +1308,8 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
   addObject: (floorId, roomId, kind, x, y, turn) => {
     const floor = get().dungeon.floors.find((item) => item.id === floorId)
     const room = floor?.rooms.find((item) => item.id === roomId)
-    if (!floor || !room || !canPlaceObject(floor.rooms, room, kind, x, y, turn)) return null
     const object: RoomObject = { id: uid(), kind, x, y, turn }
+    if (!floor || !room || !canPlaceObject(floor.rooms, room, object)) return null
     set({
       dungeon: mapFloor(get().dungeon, floorId, (item) =>
         mapRoom(item, roomId, (target) => ({ ...target, objects: [...(target.objects ?? []), object] })),
@@ -1288,35 +1318,24 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     return object.id
   },
 
-  moveObject: (floorId, roomId, objectId, x, y) => {
-    const floor = get().dungeon.floors.find((item) => item.id === floorId)
-    const room = floor?.rooms.find((item) => item.id === roomId)
-    const object = room?.objects?.find((item) => item.id === objectId)
-    if (!floor || !room || !object) return false
-    if (object.x === x && object.y === y) return true
-    if (!canPlaceObject(floor.rooms, room, object.kind, x, y, object.turn, objectId)) return false
-    set({
-      dungeon: mapFloor(get().dungeon, floorId, (item) =>
-        mapRoom(item, roomId, (target) => mapObject(target, objectId, (found) => ({ ...found, x, y }))),
-      ),
-    })
-    return true
-  },
+  moveObject: (floorId, roomId, objectId, x, y) =>
+    reposeObject(floorId, roomId, objectId, (object, rooms, room) => {
+      if (object.x === x && object.y === y) return object
+      const moved = withPose(object, { x, y })
+      return canPlaceObject(rooms, room, moved, objectId) ? moved : null
+    }),
 
-  turnObject: (floorId, roomId, objectId, steps) => {
-    const floor = get().dungeon.floors.find((item) => item.id === floorId)
-    const room = floor?.rooms.find((item) => item.id === roomId)
-    const object = room?.objects?.find((item) => item.id === objectId)
-    if (!floor || !room || !object) return false
-    const turn = nextTurn(object.turn, steps)
-    if (!canPlaceObject(floor.rooms, room, object.kind, object.x, object.y, turn, objectId)) return false
-    set({
-      dungeon: mapFloor(get().dungeon, floorId, (item) =>
-        mapRoom(item, roomId, (target) => mapObject(target, objectId, (found) => ({ ...found, turn }))),
-      ),
-    })
-    return true
-  },
+  turnObject: (floorId, roomId, objectId, steps) =>
+    reposeObject(floorId, roomId, objectId, (object, rooms, room) => {
+      const turned = withPose(object, { turn: nextTurn(object.turn, steps) })
+      return canPlaceObject(rooms, room, turned, objectId) ? turned : null
+    }),
+
+  nudgeObjectScale: (floorId, roomId, objectId, delta) =>
+    reposeObject(floorId, roomId, objectId, (object, rooms, room) => rescaledObject(rooms, room, object, delta)),
+
+  nudgeObjectHover: (floorId, roomId, objectId, delta) =>
+    reposeObject(floorId, roomId, objectId, (object, rooms, room) => rehoveredObject(rooms, room, object, delta)),
 
   removeObject: (floorId, roomId, objectId) => {
     set({

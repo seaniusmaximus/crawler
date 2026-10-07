@@ -1,11 +1,13 @@
 import { objectDef, type ObjectDef, type ObjectPart } from '../objects/catalog.ts'
-import { footprintAt, turnPoint } from '../model/objects.ts'
+import { objectFootprint, objectHover, objectScale, turnPoint, type ObjectPose } from '../model/objects.ts'
 import { cellKey } from '../model/tiles.ts'
-import type { Camera, CellRect, ObjectTurn, Room } from '../model/types.ts'
+import type { Camera, CellRect, Room } from '../model/types.ts'
 import {
+  LEVEL_HEIGHT,
   TILE_HEIGHT,
   TILE_WIDTH,
   cellToScreen,
+  unorient,
   isoDepth,
   lift,
   liftCorners,
@@ -18,9 +20,11 @@ import {
 /**
  * One shape of an object, placed on the map in grid coordinates. A box is cut
  * at cell lines into one piece per cell, so each piece can be painted in turn
- * with the walls and floors around it; rugs are clipped to each cell instead.
+ * with the walls and floors around it; rugs and shadows are clipped to each
+ * cell instead. `lift` is how many steps above its room's floor the piece's
+ * object floats.
  */
-export type ObjectPiece =
+export type ObjectPiece = (
   | { shape: 'box'; x0: number; y0: number; x1: number; y1: number; z: number; h: number; color: string; top: string }
   | { shape: 'round'; x: number; y: number; r: number; r2: number; z: number; h: number; color: string; top: string }
   | {
@@ -34,6 +38,12 @@ export type ObjectPiece =
       /** The cell this copy is clipped to. */
       clip: CellRect
     }
+  /** The shadow an object casts on the floor: its shapes seen from above, darkened as one. */
+  | { shape: 'shadow'; marks: readonly ShadowMark[]; opacity: number; clip: CellRect }
+) & { lift: number }
+
+/** One shape of a shadow, in grid coordinates on the floor. */
+type ShadowMark = { x0: number; y0: number; x1: number; y1: number } | { x: number; y: number; r: number }
 
 /** How objects take light: the tileset's falloff on the two faces the camera sees, and greyed when out of sight. */
 export interface ObjectLight {
@@ -45,44 +55,140 @@ export interface ObjectLight {
 /** A rug's border band, in cells. */
 const BORDER = 0.07
 
-/** Every piece of an object at (x, y), placed and turned, each with the cell it paints with. */
-export function placedPieces(
-  def: ObjectDef,
-  x: number,
-  y: number,
-  turn: ObjectTurn,
-): { cellX: number; cellY: number; piece: ObjectPiece }[] {
+/** How dark the shadow under an object is: a faint one where it stands, darker when it floats. */
+const SHADOW_STANDING = 0.3
+const SHADOW_FLOATING = 0.3
+/** How far a shadow spreads past what casts it, in cells. */
+const SHADOW_SPREAD = 0.04
+/** How far a shadow falls per pixel of height above the floor, in cells, and the most it ever falls. */
+const SHADOW_FALL = 0.016
+const SHADOW_REACH = 0.8
+/** Spacing of the copies a shadow is swept out of, in cells. */
+const SHADOW_STEP = 0.06
+
+/**
+ * Every piece of an object where `pose` puts it, placed, scaled and turned,
+ * each with the cell it paints with. Anything that stands up casts a shadow
+ * on the floor, so it sits in the room rather than on top of the picture.
+ */
+export function placedPieces(pose: ObjectPose, yaw: Camera['yaw'] = 0): { cellX: number; cellY: number; piece: ObjectPiece }[] {
+  const def = objectDef(pose.kind)
+  const scale = objectScale(pose)
+  const lift = objectHover(pose)
+  const size = { w: def.w * scale, d: def.d * scale }
   const out: { cellX: number; cellY: number; piece: ObjectPiece }[] = []
+  const marks = shadowMarks(def.parts, size, pose, scale, lift, yaw)
+  if (marks.length > 0) {
+    // A shadow can fall past the footprint; cells that aren't this room's floor never draw it.
+    const rect = marksBounds(marks)
+    const opacity = lift > 0 ? SHADOW_FLOATING : SHADOW_STANDING
+    for (let cy = rect.minY; cy <= rect.maxY; cy++) {
+      for (let cx = rect.minX; cx <= rect.maxX; cx++) {
+        const clip = { minX: cx, minY: cy, maxX: cx, maxY: cy }
+        out.push({ cellX: cx, cellY: cy, piece: { shape: 'shadow', marks, opacity, clip, lift: 0 } })
+      }
+    }
+  }
   for (const part of def.parts) {
-    for (const piece of placePart(def, part, x, y, turn)) out.push(piece)
+    for (const piece of placePart(size, part, pose.x, pose.y, pose.turn, scale, lift)) out.push(piece)
   }
   return out
 }
 
+/**
+ * The plan of every part that stands up, swept toward the lower left of the
+ * screen (away from the light that shades the faces) by how high it reaches,
+ * so taller things throw longer shadows.
+ */
+function shadowMarks(
+  parts: readonly ObjectPart[],
+  size: { w: number; d: number },
+  pose: ObjectPose,
+  scale: number,
+  lift: number,
+  yaw: Camera['yaw'],
+): ShadowMark[] {
+  // Straight down the screen in view space is (0, 1); this is that on the grid.
+  const away = unorient(0, 1, yaw)
+  const marks: ShadowMark[] = []
+  for (const part of parts) {
+    if (part.shape === 'flat') continue
+    const bottom = lift * LEVEL_HEIGHT + part.z * scale
+    const near = Math.min(SHADOW_REACH, bottom * SHADOW_FALL)
+    const far = Math.min(SHADOW_REACH, (bottom + part.h * scale) * SHADOW_FALL)
+    const copies = Math.max(1, Math.ceil((far - near) / SHADOW_STEP) + 1)
+    let mark: ShadowMark
+    if (part.shape === 'round') {
+      const at = turnPoint(size, pose.turn, part.x * scale, part.y * scale)
+      const r = Math.max(part.r, part.r2 ?? part.r) * scale
+      mark = { x: pose.x + at.x, y: pose.y + at.y, r: r + SHADOW_SPREAD }
+    } else {
+      const a = turnPoint(size, pose.turn, part.x * scale, part.y * scale)
+      const b = turnPoint(size, pose.turn, (part.x + part.w) * scale, (part.y + part.d) * scale)
+      mark = {
+        x0: pose.x + Math.min(a.x, b.x) - SHADOW_SPREAD,
+        y0: pose.y + Math.min(a.y, b.y) - SHADOW_SPREAD,
+        x1: pose.x + Math.max(a.x, b.x) + SHADOW_SPREAD,
+        y1: pose.y + Math.max(a.y, b.y) + SHADOW_SPREAD,
+      }
+    }
+    for (let i = 0; i < copies; i++) {
+      const fall = copies === 1 ? near : near + ((far - near) * i) / (copies - 1)
+      marks.push(shiftMark(mark, away.x * fall, away.y * fall))
+    }
+  }
+  return marks
+}
+
+function shiftMark(mark: ShadowMark, dx: number, dy: number): ShadowMark {
+  if ('r' in mark) return { x: mark.x + dx, y: mark.y + dy, r: mark.r }
+  return { x0: mark.x0 + dx, y0: mark.y0 + dy, x1: mark.x1 + dx, y1: mark.y1 + dy }
+}
+
+/** The cells a shadow touches. */
+function marksBounds(marks: readonly ShadowMark[]): CellRect {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const mark of marks) {
+    const box = 'r' in mark ? { x0: mark.x - mark.r, y0: mark.y - mark.r, x1: mark.x + mark.r, y1: mark.y + mark.r } : mark
+    minX = Math.min(minX, box.x0)
+    minY = Math.min(minY, box.y0)
+    maxX = Math.max(maxX, box.x1)
+    maxY = Math.max(maxY, box.y1)
+  }
+  return { minX: Math.floor(minX), minY: Math.floor(minY), maxX: Math.ceil(maxX) - 1, maxY: Math.ceil(maxY) - 1 }
+}
+
+/** `size` is the footprint once scaled, before turning; the part's own numbers are scaled here. */
 function placePart(
-  def: ObjectDef,
+  size: { w: number; d: number },
   part: ObjectPart,
   ox: number,
   oy: number,
-  turn: ObjectTurn,
+  turn: ObjectPose['turn'],
+  scale: number,
+  lift: number,
 ): { cellX: number; cellY: number; piece: ObjectPiece }[] {
   if (part.shape === 'round') {
-    const at = turnPoint(def, turn, part.x, part.y)
+    const at = turnPoint(size, turn, part.x * scale, part.y * scale)
     const piece: ObjectPiece = {
       shape: 'round',
       x: ox + at.x,
       y: oy + at.y,
-      r: part.r,
-      r2: part.r2 ?? part.r,
-      z: part.z,
-      h: part.h,
+      r: part.r * scale,
+      r2: (part.r2 ?? part.r) * scale,
+      z: part.z * scale,
+      h: part.h * scale,
       color: part.color,
       top: part.top ?? part.color,
+      lift,
     }
     return [{ cellX: Math.floor(piece.x), cellY: Math.floor(piece.y), piece }]
   }
-  const a = turnPoint(def, turn, part.x, part.y)
-  const b = turnPoint(def, turn, part.x + part.w, part.y + part.d)
+  const a = turnPoint(size, turn, part.x * scale, part.y * scale)
+  const b = turnPoint(size, turn, (part.x + part.w) * scale, (part.y + part.d) * scale)
   const x0 = ox + Math.min(a.x, b.x)
   const x1 = ox + Math.max(a.x, b.x)
   const y0 = oy + Math.min(a.y, b.y)
@@ -103,6 +209,7 @@ function placePart(
             color: part.color,
             border: part.border,
             clip: { minX: cx, minY: cy, maxX: cx, maxY: cy },
+            lift,
           },
         })
         continue
@@ -121,10 +228,11 @@ function placePart(
           y0: py0,
           x1: px1,
           y1: py1,
-          z: part.z,
-          h: part.h,
+          z: part.z * scale,
+          h: part.h * scale,
           color: part.color,
           top: part.top ?? part.color,
+          lift,
         },
       })
     }
@@ -140,7 +248,7 @@ function placePart(
 export function roomObjectPieces(room: Room, yaw: Camera['yaw']): Map<string, ObjectPiece[]> {
   const cells = new Map<string, ObjectPiece[]>()
   for (const object of room.objects ?? []) {
-    for (const item of placedPieces(objectDef(object.kind), object.x, object.y, object.turn)) {
+    for (const item of placedPieces(object, yaw)) {
       const key = cellKey(item.cellX, item.cellY)
       const list = cells.get(key)
       if (list) list.push(item.piece)
@@ -155,16 +263,19 @@ function pieceOrder(a: ObjectPiece, b: ObjectPiece, yaw: Camera['yaw']): number 
   return pieceBottom(a) - pieceBottom(b) || pieceDepth(a, yaw) - pieceDepth(b, yaw)
 }
 
+/** Rugs first, then shadows falling on them, then everything standing, from the floor up. */
 function pieceBottom(piece: ObjectPiece): number {
-  return piece.shape === 'flat' ? -1 : piece.z
+  if (piece.shape === 'shadow') return -0.5
+  return piece.lift * LEVEL_HEIGHT + (piece.shape === 'flat' ? -1 : piece.z)
 }
 
 function pieceDepth(piece: ObjectPiece, yaw: Camera['yaw']): number {
   if (piece.shape === 'round') return isoDepth(piece.x, piece.y, yaw)
+  if (piece.shape === 'shadow') return isoDepth(piece.clip.minX + 0.5, piece.clip.minY + 0.5, yaw)
   return isoDepth((piece.x0 + piece.x1) / 2, (piece.y0 + piece.y1) / 2, yaw)
 }
 
-/** Paints one piece standing on a floor `elevation` steps up. */
+/** Paints one piece of an object standing in a room whose floor is `elevation` steps up. */
 export function drawPiece(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
@@ -172,10 +283,43 @@ export function drawPiece(
   elevation: number,
   light: ObjectLight,
 ): void {
-  const base = roomLift(elevation)
+  const base = roomLift(elevation + piece.lift)
   if (piece.shape === 'box') drawBox(ctx, camera, piece, base, light)
   else if (piece.shape === 'round') drawRound(ctx, camera, piece, base, light)
+  else if (piece.shape === 'shadow') drawShadow(ctx, camera, piece, base)
   else drawFlat(ctx, camera, piece, base, light)
+}
+
+/** Every mark in one path, filled once, so where they overlap is no darker. */
+function drawShadow(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  shadow: Extract<ObjectPiece, { shape: 'shadow' }>,
+  base: number,
+): void {
+  ctx.save()
+  ctx.beginPath()
+  diamond(ctx, liftCorners(rectCorners(shadow.clip, camera), camera, base))
+  ctx.clip()
+  ctx.beginPath()
+  const scale = camera.zoom * Math.SQRT1_2
+  for (const mark of shadow.marks) {
+    if ('r' in mark) {
+      const centre = at(camera, mark.x, mark.y, base)
+      ctx.moveTo(centre.x + mark.r * TILE_WIDTH * scale, centre.y)
+      ctx.ellipse(centre.x, centre.y, mark.r * TILE_WIDTH * scale, mark.r * TILE_HEIGHT * scale, 0, 0, Math.PI * 2)
+      continue
+    }
+    polygon(ctx, [
+      at(camera, mark.x0, mark.y0, base),
+      at(camera, mark.x1, mark.y0, base),
+      at(camera, mark.x1, mark.y1, base),
+      at(camera, mark.x0, mark.y1, base),
+    ])
+  }
+  ctx.fillStyle = `rgba(0, 0, 0, ${shadow.opacity})`
+  ctx.fill('nonzero')
+  ctx.restore()
 }
 
 function at(camera: Camera, x: number, y: number, height: number): Point {
@@ -318,22 +462,19 @@ function diamond(ctx: CanvasRenderingContext2D, corners: IsoCorners): void {
 export function drawWholeObject(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
-  def: ObjectDef,
-  x: number,
-  y: number,
-  turn: ObjectTurn,
+  pose: ObjectPose,
   elevation: number,
   light: ObjectLight,
   outline?: string,
 ): void {
-  const pieces = placedPieces(def, x, y, turn)
+  const pieces = placedPieces(pose, camera.yaw)
   pieces.sort(
     (a, b) =>
       isoDepth(a.cellX, a.cellY, camera.yaw) - isoDepth(b.cellX, b.cellY, camera.yaw) ||
       pieceOrder(a.piece, b.piece, camera.yaw),
   )
   if (outline) {
-    const rect = footprintAt(def, x, y, turn)
+    const rect = objectFootprint(pose)
     ctx.beginPath()
     diamond(ctx, liftCorners(rectCorners(rect, camera), camera, roomLift(elevation)))
     ctx.fillStyle = `${outline}33`
@@ -355,7 +496,7 @@ export function drawObjectThumb(ctx: CanvasRenderingContext2D, def: ObjectDef, s
   const midY = (bounds.minY + bounds.maxY) / 2
   const camera: Camera = { x: midX - size / 2 / zoom, y: midY - size / 2 / zoom, zoom, yaw: 0 }
   ctx.clearRect(0, 0, size, size)
-  drawWholeObject(ctx, camera, def, 0, 0, 0, 0, { left: 0.66, right: 0.9, fog: false })
+  drawWholeObject(ctx, camera, { kind: def.id, x: 0, y: 0, turn: 0 }, 0, { left: 0.66, right: 0.9, fog: false })
 }
 
 /** The screen box an object fills at a camera, footprint and height together. */

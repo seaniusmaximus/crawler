@@ -76,6 +76,10 @@ export interface RoomObject {
   x: number
   y: number
   turn: ObjectTurn
+  /** Whole-number multiple of its catalog size, footprint and height together; missing means 1. */
+  scale?: number
+  /** Steps above its room's floor, 5 ft each like a token's; missing means 0. */
+  hover?: number
   actions?: ObjectAction[]
 }
 

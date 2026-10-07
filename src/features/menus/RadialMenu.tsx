@@ -17,9 +17,9 @@ import {
 import { FEET_PER_TILE } from '../../model/scale.ts'
 import { STATUS_EFFECTS } from '../../model/status.ts'
 import type { StatusId } from '../../model/status.ts'
-import { openingAt, openingIsLocked, openingIsOpen } from '../../model/tiles.ts'
+import { openingIsLocked, openingIsOpen } from '../../model/tiles.ts'
 import type { Player, Room, RoomObject } from '../../model/types.ts'
-import { objectDef } from '../../objects/catalog.ts'
+import { objectHover, objectScale, rehoveredObject, rescaledObject } from '../../model/objects.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import type { ObjectMenu, OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
@@ -52,7 +52,7 @@ export function RadialMenu() {
   if (menu.kind === 'object') {
     const object = room.objects?.find((item) => item.id === menu.objectId)
     if (!object) return null
-    return <ObjectRing menu={menu} floorId={floor.id} room={room} object={object} />
+    return <ObjectRing menu={menu} floorId={floor.id} room={room} rooms={floor.rooms} object={object} />
   }
   return <RoomRing menu={menu} floorId={floor.id} room={room} />
 }
@@ -371,23 +371,27 @@ function TilesetPicker({
   )
 }
 
-/** Turn an object either way, or take it away; its name between them. */
+/** Turn an object either way, size it, raise it off the floor, or take it away. */
 function ObjectRing({
   menu,
   floorId,
   room,
+  rooms,
   object,
 }: {
   menu: ObjectMenu
   floorId: string
   room: Room
+  rooms: readonly Room[]
   object: RoomObject
 }) {
   const closeMenu = useEditorStore((state) => state.closeMenu)
-  const [stuck, setStuck] = useState(false)
+  const store = useDungeonStore.getState()
+  const scale = objectScale(object)
+  const hover = objectHover(object)
 
   function turn(steps: number): void {
-    setStuck(!useDungeonStore.getState().turnObject(floorId, room.id, object.id, steps))
+    useDungeonStore.getState().turnObject(floorId, room.id, object.id, steps)
   }
 
   function remove(): void {
@@ -396,17 +400,38 @@ function ObjectRing({
     closeMenu()
   }
 
-  const ring = ringLayout(3, { core: true, start: 300 })
+  // A step that wouldn't fit (into a wall, or onto something at that height) is greyed out.
+  const ring = ringLayout(5)
   return (
     <RingFrame menu={menu} ring={ring}>
       <Ring radius={ring.radius}>
-        <RingButton spot={ring.seats[0]} icon="rotateLeft" label="Turn left" onClick={() => turn(-1)} />
-        <RingButton spot={ring.seats[1]} icon="rotateRight" label="Turn right" onClick={() => turn(1)} />
-        <RingButton spot={ring.seats[2]} icon="trash" label="Remove" danger onClick={remove} />
-        <RingCore className="is-label">
-          <span>{objectDef(object.kind).name}</span>
-          <small>{stuck ? 'No room to turn' : room.name}</small>
-        </RingCore>
+        <RingButton spot={ring.seats[0]} icon="rotateRight" label="Turn right" onClick={() => turn(1)} />
+        <RingStepper
+          spot={ring.seats[1]}
+          label="Object size"
+          value={`${scale}×`}
+          caption="SIZE"
+          incLabel="Larger"
+          decLabel="Smaller"
+          onInc={() => store.nudgeObjectScale(floorId, room.id, object.id, 1)}
+          onDec={() => store.nudgeObjectScale(floorId, room.id, object.id, -1)}
+          incDisabled={!rescaledObject(rooms, room, object, 1)}
+          decDisabled={!rescaledObject(rooms, room, object, -1)}
+        />
+        <RingStepper
+          spot={ring.seats[2]}
+          label="Height above floor"
+          value={`${hover * FEET_PER_TILE} ft`}
+          caption="HEIGHT"
+          incLabel={`Raise ${FEET_PER_TILE} ft`}
+          decLabel={`Lower ${FEET_PER_TILE} ft`}
+          onInc={() => store.nudgeObjectHover(floorId, room.id, object.id, 1)}
+          onDec={() => store.nudgeObjectHover(floorId, room.id, object.id, -1)}
+          incDisabled={!rehoveredObject(rooms, room, object, 1)}
+          decDisabled={!rehoveredObject(rooms, room, object, -1)}
+        />
+        <RingButton spot={ring.seats[3]} icon="trash" label="Remove" danger onClick={remove} />
+        <RingButton spot={ring.seats[4]} icon="rotateLeft" label="Turn left" onClick={() => turn(-1)} />
       </Ring>
     </RingFrame>
   )
@@ -559,10 +584,8 @@ function OpeningRing({
   rooms: readonly Room[]
 }) {
   const closeMenu = useEditorStore((state) => state.closeMenu)
-  const kind = openingAt(room, menu.cellX, menu.cellY)
   const open = openingIsOpen(room, menu.cellX, menu.cellY)
   const locked = openingIsLocked(room, menu.cellX, menu.cellY)
-  const label = kind === 'window' ? 'Window' : 'Door'
 
   function choose(next: boolean): void {
     const spots = connectedOpenings(rooms, room.id, menu.cellX, menu.cellY)
@@ -576,8 +599,8 @@ function OpeningRing({
     closeMenu()
   }
 
-  // Open upper left, Close upper right, Lock below; the door's state between them.
-  const ring = ringLayout(3, { core: true, start: 300 })
+  // Open upper left, Close upper right, Lock below.
+  const ring = ringLayout(3, { start: 300 })
   return (
     <RingFrame menu={menu} ring={ring}>
       <Ring radius={ring.radius}>
@@ -591,13 +614,6 @@ function OpeningRing({
           active={locked}
           onClick={() => lock(!locked)}
         />
-        <RingCore className="is-label">
-          <span>{label}</span>
-          <small>
-            {open ? 'Open' : 'Closed'}
-            {locked ? ' · Locked' : ''}
-          </small>
-        </RingCore>
       </Ring>
     </RingFrame>
   )

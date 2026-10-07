@@ -27,7 +27,6 @@ import type { ViewMode } from '../model/visibility.ts'
 import type { TileCache } from '../tiles/TileCache.ts'
 import { seedFor, type FaceKind, type Variant } from '../tiles/tileset.ts'
 import type { LinkBadge } from './badges.ts'
-import { objectDef } from '../objects/catalog.ts'
 import type { ObjectDraft } from '../model/objects.ts'
 import { drawPiece, drawWholeObject, roomObjectPieces, type ObjectLight, type ObjectPiece } from './objects.ts'
 import {
@@ -487,7 +486,7 @@ function drawTiles(
             depth: isoDepth(x, y, yaw),
             elevation,
             roomIndex,
-            layer: piece.shape === 'flat' ? 1 : 2,
+            layer: piece.shape === 'shadow' || (piece.shape === 'flat' && piece.lift === 0) ? 1 : 2,
             piece,
             shade,
             view: own,
@@ -2299,17 +2298,13 @@ const OBJECT_BLOCKED = '#e5484d'
 
 /** The object about to be placed or moved, half see-through, its footprint green where it fits and red where not. */
 function drawObjectDraft(ctx: CanvasRenderingContext2D, view: DrawView, draft: ObjectDraft): void {
-  const def = objectDef(draft.kind)
   const shade = view.tileCache.tileset.shade
   ctx.save()
   ctx.globalAlpha = draft.fits ? 0.75 : 0.45
   drawWholeObject(
     ctx,
     view.camera,
-    def,
-    draft.x,
-    draft.y,
-    draft.turn,
+    draft,
     draft.elevation,
     { left: shade.left, right: shade.right, fog: false },
     draft.fits ? OBJECT_FITS : OBJECT_BLOCKED,

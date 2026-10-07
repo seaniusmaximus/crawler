@@ -1070,6 +1070,10 @@ a:hover {
   text-decoration: none;
 }
 
+.campaign-signin:hover {
+  color: var(--gold-ink);
+}
+
 .campaign-user {
   display: flex;
   align-items: center;
@@ -3465,38 +3469,14 @@ a:hover {
   pointer-events: none;
 }
 
-.ring-core.is-label,
 .ring-core.is-editing {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 64px;
-  height: 64px;
-  border: 1px solid var(--gold-line);
-  background: var(--panel-solid);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  font-family: var(--font-display);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.1;
-  text-align: center;
-}
-
-.ring-core.is-label small {
-  max-width: 54px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-body);
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--text-faint);
-}
-
-.ring-core.is-editing {
   width: 160px;
   height: 40px;
+  border: 1px solid var(--gold-line);
   border-radius: 20px;
+  background: var(--panel-solid);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   pointer-events: auto;
 }
 
