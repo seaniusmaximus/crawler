@@ -1,10 +1,13 @@
 import { Fragment, useEffect, useRef } from 'react'
 import { drawObjectThumb } from '../../canvas/objects.ts'
 import { OBJECTS, objectDef, type ObjectDef } from '../../objects/catalog.ts'
+import { blankObject, copyObject } from '../../objects/custom.ts'
+import { CUSTOM_OBJECTS } from '../objectEditor/ObjectEditor.tsx'
 import type { DoorStyle, Tool } from '../../model/tools.ts'
 import type { StairsDir } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
+import { useObjectLibraryStore } from '../../state/objectLibraryStore.ts'
 import { roomsWithOwnTileset, TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Icon } from '../../ui/Icon.tsx'
 
@@ -260,8 +263,16 @@ function ObjectOptions() {
   const tool = useEditorStore((state) => state.tool)
   const setObjectKind = useEditorStore((state) => state.setObjectKind)
   const setObjectGroup = useEditorStore((state) => state.setObjectGroup)
-  const turnObjectDraft = useEditorStore((state) => state.turnObjectDraft)
-  const listed: readonly ObjectDef[] = group === ALL_OBJECTS ? OBJECTS : tilesetById(group).objects.map(objectDef)
+  const openObjectEditor = useEditorStore((state) => state.openObjectEditor)
+  const customs = useObjectLibraryStore((state) => state.objects)
+  const listed: readonly ObjectDef[] =
+    group === ALL_OBJECTS
+      ? [...OBJECTS, ...customs]
+      : group === CUSTOM_OBJECTS
+        ? customs
+        : tilesetById(group).objects.map(objectDef)
+  const custom = customs.find((def) => def.id === kind)
+  const builtIn = OBJECTS.find((def) => def.id === kind)
 
   return (
     <div className="tool-options object-picker" aria-label="Objects">
@@ -277,12 +288,11 @@ function ObjectOptions() {
               {set.name}
             </option>
           ))}
+          <option value={CUSTOM_OBJECTS}>Custom objects</option>
           <option value={ALL_OBJECTS}>All objects</option>
         </select>
-        <button type="button" className="tool-option" onClick={() => turnObjectDraft(1)} title="Turn the object before placing it (T)">
-          Turn
-        </button>
       </div>
+      {listed.length === 0 && <p className="object-picker-empty">No custom objects yet. Make one with New object.</p>}
       <ul className="object-grid">
         {listed.map((def) => {
           const active = tool === 'objects' && def.id === kind
@@ -302,6 +312,25 @@ function ObjectOptions() {
           )
         })}
       </ul>
+      <div className="object-picker-foot">
+        <button type="button" className="gold-btn" onClick={() => openObjectEditor(blankObject())} title="Build a new object out of simple shapes">
+          New object
+        </button>
+        {custom ? (
+          <button type="button" className="gold-btn" onClick={() => openObjectEditor(custom)} title={`Change ${custom.name}`}>
+            Edit
+          </button>
+        ) : builtIn ? (
+          <button
+            type="button"
+            className="gold-btn"
+            onClick={() => openObjectEditor(copyObject(builtIn))}
+            title={`Make a copy of ${builtIn.name} to change`}
+          >
+            Copy &amp; edit
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }

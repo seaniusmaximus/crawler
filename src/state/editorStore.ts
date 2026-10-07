@@ -5,6 +5,7 @@ import type { DoorStyle, Tool } from '../model/tools.ts'
 import type { StairLanding, StairUsePrompt } from '../model/stairs.ts'
 import type { ViewMode } from '../model/visibility.ts'
 import type { Camera, ObjectTurn, StairsDir } from '../model/types.ts'
+import type { ObjectDef } from '../objects/catalog.ts'
 
 export interface RoomMenu {
   kind: 'room'
@@ -92,6 +93,8 @@ interface EditorState {
   stairUse: StairUsePrompt | null
   /** A map tileset waiting on whether rooms with their own tileset keep it. */
   tilesetPrompt: string | null
+  /** The object open in the object editor, as it was when opened; null when the editor is closed. */
+  objectEditor: ObjectDef | null
   viewMode: ViewMode
   /** Token whose character sheet or stat block is open beside its card. */
   sheetPlayerId: string | null
@@ -130,6 +133,8 @@ interface EditorState {
   closeStairUse: () => void
   promptTileset: (id: string) => void
   closeTilesetPrompt: () => void
+  openObjectEditor: (def: ObjectDef) => void
+  closeObjectEditor: () => void
   setViewMode: (mode: ViewMode) => void
   openSheet: (playerId: string | null) => void
 }
@@ -169,6 +174,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   stairsPrompt: null,
   stairUse: null,
   tilesetPrompt: null,
+  objectEditor: null,
   viewMode: 'dm',
   sheetPlayerId: null,
   setCamera: (camera) => set({ camera }),
@@ -283,6 +289,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   closeStairUse: () => set({ stairUse: null }),
   promptTileset: (tilesetPrompt) => set({ tilesetPrompt }),
   closeTilesetPrompt: () => set({ tilesetPrompt: null }),
+  openObjectEditor: (objectEditor) => set({ objectEditor, menu: null }),
+  closeObjectEditor: () => set({ objectEditor: null }),
   setViewMode: (viewMode) =>
     set({ viewMode, menu: null, resizeRoomId: null, linkRoomId: null, hoverRoomId: null }),
   openSheet: (sheetPlayerId) => set({ sheetPlayerId }),

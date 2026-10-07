@@ -1,4 +1,5 @@
 import { configured, currentUser, finishSignIn, signOut, startSignIn, type AuthEnv, type User } from './auth.ts'
+import { MAX_LIBRARY_OBJECTS, parseObject } from '../src/objects/custom.ts'
 import { DmLibrary } from './library.ts'
 import { TableRoom, USER_HEADER } from './room.ts'
 
@@ -15,6 +16,8 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif
 /** Portraits are small cutouts; this leaves room under the 2 MB row limit. */
 const MAX_ASSET_BYTES = 1_500_000
 const MAX_NAME = 80
+/** A custom object of the most parts, with long colour names, is well under this. */
+const MAX_OBJECT_BYTES = 32_000
 
 export default {
   async fetch(request, env) {
@@ -123,6 +126,13 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     return new Response(null, { status: 405 })
   }
 
+  if (path === '/api/objects') {
+    if (request.method === 'GET') return Response.json({ objects: await library.listObjects() })
+    return new Response(null, { status: 405 })
+  }
+  const objectMatch = /^\/api\/objects\/([^/]+)$/.exec(path)
+  if (objectMatch) return customObject(request, library, decodeURIComponent(objectMatch[1]))
+
   const match = /^\/api\/campaigns\/([a-z0-9]{4,32})(\/.*)?$/.exec(path)
   if (match) {
     const id = match[1]
@@ -173,6 +183,30 @@ async function maps(request: Request, room: DurableObjectStub<TableRoom>, rest: 
     return Response.json({ error: error instanceof Error ? error.message : 'Failed' }, { status: 400 })
   }
   return new Response(null, { status: 405 })
+}
+
+/** /api/objects/:id — one object in the DM's Custom objects collection, put whole or deleted. */
+async function customObject(request: Request, library: DurableObjectStub<DmLibrary>, id: string): Promise<Response> {
+  if (request.method === 'DELETE') {
+    await library.removeObject(id)
+    return new Response(null, { status: 204 })
+  }
+  if (request.method !== 'PUT') return new Response(null, { status: 405 })
+  const text = await request.text()
+  if (text.length > MAX_OBJECT_BYTES) return Response.json({ error: 'That object is too big' }, { status: 413 })
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = null
+  }
+  const def = parseObject(body)
+  if (!def || def.id !== id) return Response.json({ error: "That isn't an object" }, { status: 400 })
+  if (!(await library.hasObject(id)) && (await library.objectCount()) >= MAX_LIBRARY_OBJECTS) {
+    return Response.json({ error: `Custom objects holds at most ${MAX_LIBRARY_OBJECTS}` }, { status: 400 })
+  }
+  await library.putObject(id, def)
+  return Response.json({ object: def })
 }
 
 /** /api/campaigns/:id/saves[/:saveId[/restore]] — the campaign's save points. */

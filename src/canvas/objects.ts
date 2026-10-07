@@ -1,5 +1,5 @@
 import { objectDef, type ObjectDef, type ObjectPart } from '../objects/catalog.ts'
-import { objectFootprint, objectHover, objectScale, turnPoint, type ObjectPose } from '../model/objects.ts'
+import { footprintAt, objectHover, objectScale, turnPoint, type ObjectPose } from '../model/objects.ts'
 import { cellKey } from '../model/tiles.ts'
 import type { Camera, CellRect, Room } from '../model/types.ts'
 import {
@@ -8,6 +8,7 @@ import {
   TILE_WIDTH,
   cellToScreen,
   unorient,
+  orient,
   isoDepth,
   lift,
   liftCorners,
@@ -16,17 +17,20 @@ import {
   type IsoCorners,
   type Point,
 } from './camera.ts'
+import { clipSolid, drawSolid, frustum, solidBounds, type Face, type SolidBounds } from './solids.ts'
 
 /**
- * One shape of an object, placed on the map in grid coordinates. A box is cut
- * at cell lines into one piece per cell, so each piece can be painted in turn
- * with the walls and floors around it; rugs and shadows are clipped to each
- * cell instead. `lift` is how many steps above its room's floor the piece's
- * object floats.
+ * One shape of an object, placed on the map in grid coordinates. Boxes and
+ * rounds are cut at cell lines into one piece per cell, so each piece can be
+ * painted in turn with the walls and floors around it; rugs and shadows are
+ * clipped to each cell instead. `lift` is how many steps above its room's
+ * floor the piece's object floats; `owner` and `order` say which object and
+ * which of its parts it came from: the part's layer.
  */
 export type ObjectPiece = (
   | { shape: 'box'; x0: number; y0: number; x1: number; y1: number; z: number; h: number; color: string; top: string }
-  | { shape: 'round'; x: number; y: number; r: number; r2: number; z: number; h: number; color: string; top: string }
+  /** A round, as a many-sided solid already cut to its cell. */
+  | { shape: 'solid'; faces: readonly Face[]; bounds: SolidBounds; color: string; top: string }
   | {
       shape: 'flat'
       x0: number
@@ -40,7 +44,12 @@ export type ObjectPiece = (
     }
   /** The shadow an object casts on the floor: its shapes seen from above, darkened as one. */
   | { shape: 'shadow'; marks: readonly ShadowMark[]; opacity: number; clip: CellRect }
-) & { lift: number }
+  /**
+   * The halo where a glowing part burns. It paints in turn like any piece, so
+   * what stands in front of the flame hides its light too.
+   */
+  | ({ shape: 'glow' } & GlowSource)
+) & { lift: number; owner: string; order: number }
 
 /** One shape of a shadow, in grid coordinates on the floor. */
 type ShadowMark = { x0: number; y0: number; x1: number; y1: number } | { x: number; y: number; r: number }
@@ -71,8 +80,12 @@ const SHADOW_STEP = 0.06
  * each with the cell it paints with. Anything that stands up casts a shadow
  * on the floor, so it sits in the room rather than on top of the picture.
  */
-export function placedPieces(pose: ObjectPose, yaw: Camera['yaw'] = 0): { cellX: number; cellY: number; piece: ObjectPiece }[] {
-  const def = objectDef(pose.kind)
+export function placedPieces(
+  pose: ObjectPose,
+  yaw: Camera['yaw'] = 0,
+  def: ObjectDef = objectDef(pose.kind),
+  owner = '',
+): { cellX: number; cellY: number; piece: ObjectPiece }[] {
   const scale = objectScale(pose)
   const lift = objectHover(pose)
   const size = { w: def.w * scale, d: def.d * scale }
@@ -85,12 +98,128 @@ export function placedPieces(pose: ObjectPose, yaw: Camera['yaw'] = 0): { cellX:
     for (let cy = rect.minY; cy <= rect.maxY; cy++) {
       for (let cx = rect.minX; cx <= rect.maxX; cx++) {
         const clip = { minX: cx, minY: cy, maxX: cx, maxY: cy }
-        out.push({ cellX: cx, cellY: cy, piece: { shape: 'shadow', marks, opacity, clip, lift: 0 } })
+        out.push({ cellX: cx, cellY: cy, piece: { shape: 'shadow', marks, opacity, clip, lift: 0, owner, order: -1 } })
       }
     }
   }
-  for (const part of def.parts) {
-    for (const piece of placePart(size, part, pose.x, pose.y, pose.turn, scale, lift)) out.push(piece)
+  // Where boxes overlap, the later one (the higher layer) is cut out of the earlier, so no
+  // two boxes share space and each can be painted in the right order from every side.
+  const boxes = def.parts.map((part) => (part.shape === 'box' ? placedCuboid(size, part, pose.x, pose.y, pose.turn, scale) : null))
+  def.parts.forEach((part, order) => {
+    if (part.shape !== 'box') {
+      for (const piece of placePart(size, part, pose.x, pose.y, pose.turn, scale, lift, owner, order)) out.push(piece)
+      return
+    }
+    let kept = [boxes[order]!]
+    for (let later = order + 1; later < boxes.length; later++) {
+      const cutter = boxes[later]
+      if (cutter) kept = kept.flatMap((cuboid) => subtract(cuboid, cutter))
+    }
+    for (const cuboid of kept) for (const piece of placeCuboid(cuboid, part, lift, owner, order)) out.push(piece)
+  })
+  def.parts.forEach((part, order) => {
+    // A glowing rug lights the floor around it but has no flame to haze; its own colour is its light.
+    const glow = part.glow && part.shape !== 'flat' ? glowOf(part, size, pose.x, pose.y, pose.turn, scale) : null
+    if (!glow) return
+    // Painted with the nearest cell its part has a piece in, so the whole part is lit and
+    // only what stands in front of it can hide its light.
+    let cell: { x: number; y: number } | null = null
+    for (const item of out) {
+      if (item.piece.order !== order || item.piece.shape === 'shadow') continue
+      if (!cell || isoDepth(item.cellX, item.cellY, yaw) > isoDepth(cell.x, cell.y, yaw)) cell = { x: item.cellX, y: item.cellY }
+    }
+    cell ??= { x: Math.floor(glow.x), y: Math.floor(glow.y) }
+    out.push({ cellX: cell.x, cellY: cell.y, piece: { shape: 'glow', ...glow, lift, owner, order: order + 0.5 } })
+  })
+  return out
+}
+
+/** A box's space once placed: grid cells across, pixels up. */
+interface Cuboid {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+  z0: number
+  z1: number
+}
+
+function placedCuboid(
+  size: { w: number; d: number },
+  part: Extract<ObjectPart, { shape: 'box' }>,
+  ox: number,
+  oy: number,
+  turn: ObjectPose['turn'],
+  scale: number,
+): Cuboid {
+  const a = turnPoint(size, turn, part.x * scale, part.y * scale)
+  const b = turnPoint(size, turn, (part.x + part.w) * scale, (part.y + part.d) * scale)
+  return {
+    x0: ox + Math.min(a.x, b.x),
+    x1: ox + Math.max(a.x, b.x),
+    y0: oy + Math.min(a.y, b.y),
+    y1: oy + Math.max(a.y, b.y),
+    z0: part.z * scale,
+    z1: (part.z + part.h) * scale,
+  }
+}
+
+/** What's left of `a` with `b` taken out: up to six boxes around the hole, or `a` whole if they don't meet. */
+function subtract(a: Cuboid, b: Cuboid): Cuboid[] {
+  const meet =
+    Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > GAP &&
+    Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > GAP &&
+    Math.min(a.z1, b.z1) - Math.max(a.z0, b.z0) > GAP
+  if (!meet) return [a]
+  const out: Cuboid[] = []
+  if (b.x0 > a.x0 + GAP) out.push({ ...a, x1: b.x0 })
+  if (b.x1 < a.x1 - GAP) out.push({ ...a, x0: b.x1 })
+  const x0 = Math.max(a.x0, b.x0)
+  const x1 = Math.min(a.x1, b.x1)
+  if (b.y0 > a.y0 + GAP) out.push({ ...a, x0, x1, y1: b.y0 })
+  if (b.y1 < a.y1 - GAP) out.push({ ...a, x0, x1, y0: b.y1 })
+  const y0 = Math.max(a.y0, b.y0)
+  const y1 = Math.min(a.y1, b.y1)
+  if (b.z0 > a.z0 + GAP) out.push({ x0, x1, y0, y1, z0: a.z0, z1: b.z0 })
+  if (b.z1 < a.z1 - GAP) out.push({ x0, x1, y0, y1, z0: b.z1, z1: a.z1 })
+  return out
+}
+
+/** A box's space cut into a piece for every cell it covers. */
+function placeCuboid(
+  c: Cuboid,
+  part: Extract<ObjectPart, { shape: 'box' }>,
+  lift: number,
+  owner: string,
+  order: number,
+): { cellX: number; cellY: number; piece: ObjectPiece }[] {
+  const out: { cellX: number; cellY: number; piece: ObjectPiece }[] = []
+  for (let cy = Math.floor(c.y0); cy < c.y1; cy++) {
+    for (let cx = Math.floor(c.x0); cx < c.x1; cx++) {
+      const px0 = Math.max(c.x0, cx)
+      const px1 = Math.min(c.x1, cx + 1)
+      const py0 = Math.max(c.y0, cy)
+      const py1 = Math.min(c.y1, cy + 1)
+      if (px1 - px0 <= GAP || py1 - py0 <= GAP) continue
+      out.push({
+        cellX: cx,
+        cellY: cy,
+        piece: {
+          shape: 'box',
+          x0: px0,
+          y0: py0,
+          x1: px1,
+          y1: py1,
+          z: c.z0,
+          h: c.z1 - c.z0,
+          color: part.color,
+          top: part.top ?? part.color,
+          lift,
+          owner,
+          order,
+        },
+      })
+    }
   }
   return out
 }
@@ -161,32 +290,23 @@ function marksBounds(marks: readonly ShadowMark[]): CellRect {
   return { minX: Math.floor(minX), minY: Math.floor(minY), maxX: Math.ceil(maxX) - 1, maxY: Math.ceil(maxY) - 1 }
 }
 
-/** `size` is the footprint once scaled, before turning; the part's own numbers are scaled here. */
+/**
+ * A round or a rug where the pose puts it. `size` is the footprint once scaled,
+ * before turning; the part's own numbers are scaled here. Boxes go through
+ * `placeCuboid`, once the boxes over them are cut out.
+ */
 function placePart(
   size: { w: number; d: number },
-  part: ObjectPart,
+  part: Exclude<ObjectPart, { shape: 'box' }>,
   ox: number,
   oy: number,
   turn: ObjectPose['turn'],
   scale: number,
   lift: number,
+  owner: string,
+  order: number,
 ): { cellX: number; cellY: number; piece: ObjectPiece }[] {
-  if (part.shape === 'round') {
-    const at = turnPoint(size, turn, part.x * scale, part.y * scale)
-    const piece: ObjectPiece = {
-      shape: 'round',
-      x: ox + at.x,
-      y: oy + at.y,
-      r: part.r * scale,
-      r2: (part.r2 ?? part.r) * scale,
-      z: part.z * scale,
-      h: part.h * scale,
-      color: part.color,
-      top: part.top ?? part.color,
-      lift,
-    }
-    return [{ cellX: Math.floor(piece.x), cellY: Math.floor(piece.y), piece }]
-  }
+  if (part.shape === 'round') return placeRound(size, part, ox, oy, turn, scale, lift, owner, order)
   const a = turnPoint(size, turn, part.x * scale, part.y * scale)
   const b = turnPoint(size, turn, (part.x + part.w) * scale, (part.y + part.d) * scale)
   const x0 = ox + Math.min(a.x, b.x)
@@ -194,46 +314,65 @@ function placePart(
   const y0 = oy + Math.min(a.y, b.y)
   const y1 = oy + Math.max(a.y, b.y)
   const out: { cellX: number; cellY: number; piece: ObjectPiece }[] = []
+  // A rug is drawn whole in every cell it covers, clipped to that cell.
   for (let cy = Math.floor(y0); cy < y1; cy++) {
     for (let cx = Math.floor(x0); cx < x1; cx++) {
-      if (part.shape === 'flat') {
-        out.push({
-          cellX: cx,
-          cellY: cy,
-          piece: {
-            shape: 'flat',
-            x0,
-            y0,
-            x1,
-            y1,
-            color: part.color,
-            border: part.border,
-            clip: { minX: cx, minY: cy, maxX: cx, maxY: cy },
-            lift,
-          },
-        })
-        continue
-      }
-      const px0 = Math.max(x0, cx)
-      const px1 = Math.min(x1, cx + 1)
-      const py0 = Math.max(y0, cy)
-      const py1 = Math.min(y1, cy + 1)
-      if (px1 - px0 <= 0 || py1 - py0 <= 0) continue
       out.push({
         cellX: cx,
         cellY: cy,
         piece: {
-          shape: 'box',
-          x0: px0,
-          y0: py0,
-          x1: px1,
-          y1: py1,
-          z: part.z * scale,
-          h: part.h * scale,
+          shape: 'flat',
+          x0,
+          y0,
+          x1,
+          y1,
           color: part.color,
-          top: part.top ?? part.color,
+          border: part.border,
+          clip: { minX: cx, minY: cy, maxX: cx, maxY: cy },
           lift,
+          owner,
+          order,
         },
+      })
+    }
+  }
+  return out
+}
+
+/** A round as a solid, cut into a piece for every cell it reaches into. */
+function placeRound(
+  size: { w: number; d: number },
+  part: Extract<ObjectPart, { shape: 'round' }>,
+  ox: number,
+  oy: number,
+  turn: ObjectPose['turn'],
+  scale: number,
+  lift: number,
+  owner: string,
+  order: number,
+): { cellX: number; cellY: number; piece: ObjectPiece }[] {
+  const at = turnPoint(size, turn, part.x * scale, part.y * scale)
+  const x = ox + at.x
+  const y = oy + at.y
+  const r = part.r * scale
+  const r2 = (part.r2 ?? part.r) * scale
+  const reach = Math.max(r, r2)
+  const whole = frustum(x, y, r, r2, part.z * scale, part.h * scale)
+  const out: { cellX: number; cellY: number; piece: ObjectPiece }[] = []
+  for (let cy = Math.floor(y - reach); cy < y + reach; cy++) {
+    for (let cx = Math.floor(x - reach); cx < x + reach; cx++) {
+      let faces: Face[] = whole
+      if (x - reach < cx) faces = clipSolid(faces, 'x', cx, 'hi')
+      if (x + reach > cx + 1) faces = clipSolid(faces, 'x', cx + 1, 'lo')
+      if (y - reach < cy) faces = clipSolid(faces, 'y', cy, 'hi')
+      if (y + reach > cy + 1) faces = clipSolid(faces, 'y', cy + 1, 'lo')
+      if (faces.length === 0) continue
+      const bounds = solidBounds(faces)
+      if (bounds.x1 - bounds.x0 < 1e-6 || bounds.y1 - bounds.y0 < 1e-6) continue
+      out.push({
+        cellX: cx,
+        cellY: cy,
+        piece: { shape: 'solid', faces, bounds, color: part.color, top: part.top ?? part.color, lift, owner, order },
       })
     }
   }
@@ -248,31 +387,328 @@ function placePart(
 export function roomObjectPieces(room: Room, yaw: Camera['yaw']): Map<string, ObjectPiece[]> {
   const cells = new Map<string, ObjectPiece[]>()
   for (const object of room.objects ?? []) {
-    for (const item of placedPieces(object, yaw)) {
+    for (const item of placedPieces(object, yaw, undefined, object.id)) {
       const key = cellKey(item.cellX, item.cellY)
       const list = cells.get(key)
       if (list) list.push(item.piece)
       else cells.set(key, [item.piece])
     }
   }
-  for (const list of cells.values()) list.sort((a, b) => pieceOrder(a, b, yaw))
+  for (const [key, list] of cells) cells.set(key, sortPieces(list, yaw))
   return cells
 }
 
-function pieceOrder(a: ObjectPiece, b: ObjectPiece, yaw: Camera['yaw']): number {
-  return pieceBottom(a) - pieceBottom(b) || pieceDepth(a, yaw) - pieceDepth(b, yaw)
+/** The space a piece takes: plan extent in cells, height in pixels above its room's floor. */
+function extent(piece: ObjectPiece): SolidBounds {
+  const lifted = piece.lift * LEVEL_HEIGHT
+  if (piece.shape === 'solid') return { ...piece.bounds, z0: piece.bounds.z0 + lifted, z1: piece.bounds.z1 + lifted }
+  if (piece.shape === 'box') {
+    return { x0: piece.x0, y0: piece.y0, x1: piece.x1, y1: piece.y1, z0: lifted + piece.z, z1: lifted + piece.z + piece.h }
+  }
+  if (piece.shape === 'flat') return { x0: piece.x0, y0: piece.y0, x1: piece.x1, y1: piece.y1, z0: lifted, z1: lifted }
+  // Halos never reach the sort (see sortPieces); a point where they burn will do.
+  if (piece.shape === 'glow') return { x0: piece.x, y0: piece.y, x1: piece.x, y1: piece.y, z0: lifted + piece.z, z1: lifted + piece.z }
+  return { x0: piece.clip.minX, y0: piece.clip.minY, x1: piece.clip.minX + 1, y1: piece.clip.minY + 1, z0: 0, z1: 0 }
 }
 
-/** Rugs first, then shadows falling on them, then everything standing, from the floor up. */
-function pieceBottom(piece: ObjectPiece): number {
-  if (piece.shape === 'shadow') return -0.5
-  return piece.lift * LEVEL_HEIGHT + (piece.shape === 'flat' ? -1 : piece.z)
+const GAP = 1e-6
+
+/**
+ * Which of two standing pieces paints first: negative for `a`. Pieces with
+ * space between them go by where they stand, which is right from every side:
+ * the lower one first, or the one farther from the camera. Pieces that overlap
+ * have no right answer, so their object's layer order decides (later on top).
+ * Zero when nothing decides.
+ */
+function relation(a: ObjectPiece, b: ObjectPiece, ea: SolidBounds, eb: SolidBounds, along: { x: number; y: number }): number {
+  if (ea.z1 <= eb.z0 + GAP) return -1
+  if (eb.z1 <= ea.z0 + GAP) return 1
+  if (ea.x1 <= eb.x0 + GAP) return along.x
+  if (eb.x1 <= ea.x0 + GAP) return -along.x
+  if (ea.y1 <= eb.y0 + GAP) return along.y
+  if (eb.y1 <= ea.y0 + GAP) return -along.y
+  // Parts that only just sink into each other (a flame into a hearth's stone, tiers of a
+  // tree) are nearly apart: order them by where their middles sit on the shallowest axis.
+  const shallow = shallowestOverlap(ea, eb)
+  if (shallow) {
+    const ahead = shallow.axis === 'z' ? -1 : along[shallow.axis]
+    return shallow.aFirst ? ahead : -ahead
+  }
+  if (a.owner === b.owner && a.order !== b.order) return a.order - b.order
+  return 0
 }
 
-function pieceDepth(piece: ObjectPiece, yaw: Camera['yaw']): number {
-  if (piece.shape === 'round') return isoDepth(piece.x, piece.y, yaw)
-  if (piece.shape === 'shadow') return isoDepth(piece.clip.minX + 0.5, piece.clip.minY + 0.5, yaw)
-  return isoDepth((piece.x0 + piece.x1) / 2, (piece.y0 + piece.y1) / 2, yaw)
+/** How deep an overlap may go, against the smaller part's size, and still count as resting against it. */
+const SHALLOW = 0.3
+
+/**
+ * The axis two overlapping pieces sink into each other least along, if that's
+ * shallow enough to treat them as side by side, and whether \`a\` is the low side.
+ */
+function shallowestOverlap(ea: SolidBounds, eb: SolidBounds): { axis: 'x' | 'y' | 'z'; aFirst: boolean } | null {
+  let best: { axis: 'x' | 'y' | 'z'; aFirst: boolean; ratio: number } | null = null
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const lo = axis === 'x' ? 'x0' : axis === 'y' ? 'y0' : 'z0'
+    const hi = axis === 'x' ? 'x1' : axis === 'y' ? 'y1' : 'z1'
+    const depth = Math.min(ea[hi], eb[hi]) - Math.max(ea[lo], eb[lo])
+    const smaller = Math.min(ea[hi] - ea[lo], eb[hi] - eb[lo])
+    if (smaller <= GAP) continue
+    const ratio = depth / smaller
+    if (ratio < SHALLOW && (!best || ratio < best.ratio)) {
+      best = { axis, aFirst: ea[lo] + ea[hi] < eb[lo] + eb[hi], ratio }
+    }
+  }
+  return best
+}
+
+/**
+ * A piece's outline on screen at zoom 1, as the hexagon its box projects to:
+ * the range it covers along screen x, screen y, and the two grid diagonals.
+ * Two outlines that miss on any of the four can't cover each other.
+ */
+interface Outline {
+  sx0: number
+  sx1: number
+  sy0: number
+  sy1: number
+  u0: number
+  u1: number
+  v0: number
+  v1: number
+}
+
+function screenOutline(e: SolidBounds, yaw: Camera['yaw']): Outline {
+  const out = { sx0: Infinity, sx1: -Infinity, sy0: Infinity, sy1: -Infinity, u0: Infinity, u1: -Infinity, v0: Infinity, v1: -Infinity }
+  for (const x of [e.x0, e.x1]) {
+    for (const y of [e.y0, e.y1]) {
+      const view = orient(x, y, yaw)
+      for (const z of [e.z0, e.z1]) {
+        const sx = (view.x - view.y) * (TILE_WIDTH / 2)
+        const sy = (view.x + view.y) * (TILE_HEIGHT / 2) - z
+        // Screen directions along the two grid axes, where a box's side edges run.
+        const u = sy + sx / 2
+        const v = sy - sx / 2
+        out.sx0 = Math.min(out.sx0, sx)
+        out.sx1 = Math.max(out.sx1, sx)
+        out.sy0 = Math.min(out.sy0, sy)
+        out.sy1 = Math.max(out.sy1, sy)
+        out.u0 = Math.min(out.u0, u)
+        out.u1 = Math.max(out.u1, u)
+        out.v0 = Math.min(out.v0, v)
+        out.v1 = Math.max(out.v1, v)
+      }
+    }
+  }
+  return out
+}
+
+const OUTLINE_GAP = 0.01
+
+function outlinesMeet(a: Outline, b: Outline): boolean {
+  return (
+    a.sx0 < b.sx1 - OUTLINE_GAP &&
+    b.sx0 < a.sx1 - OUTLINE_GAP &&
+    a.sy0 < b.sy1 - OUTLINE_GAP &&
+    b.sy0 < a.sy1 - OUTLINE_GAP &&
+    a.u0 < b.u1 - OUTLINE_GAP &&
+    b.u0 < a.u1 - OUTLINE_GAP &&
+    a.v0 < b.v1 - OUTLINE_GAP &&
+    b.v0 < a.v1 - OUTLINE_GAP
+  )
+}
+
+/** For pieces nothing else orders: from the floor up, then from the back forward. */
+function fallback(ea: SolidBounds, eb: SolidBounds, yaw: Camera['yaw']): number {
+  return (
+    ea.z0 - eb.z0 ||
+    isoDepth((ea.x0 + ea.x1) / 2, (ea.y0 + ea.y1) / 2, yaw) - isoDepth((eb.x0 + eb.x1) / 2, (eb.y0 + eb.y1) / 2, yaw)
+  )
+}
+
+/**
+ * One cell's pieces in the order they paint: rugs (in their layer order), the
+ * shadows falling on them, then everything standing, each after whatever it
+ * must cover.
+ */
+export function sortPieces(pieces: readonly ObjectPiece[], yaw: Camera['yaw']): ObjectPiece[] {
+  const onFloor = pieces.filter((p) => p.shape === 'flat' && p.lift === 0).sort((a, b) => a.order - b.order)
+  const shadows = pieces.filter((p) => p.shape === 'shadow')
+  const halos = pieces.filter((p) => p.shape === 'glow')
+  const standing = pieces.filter((p) => p.shape !== 'shadow' && p.shape !== 'glow' && !(p.shape === 'flat' && p.lift === 0))
+  const painted = [...onFloor, ...shadows, ...paintStanding(standing, yaw)]
+  // A halo goes straight after the last piece of the part it burns over, so it lights that
+  // part and is covered by whatever paints over it next.
+  for (const halo of halos) {
+    let at = -1
+    painted.forEach((piece, i) => {
+      if (piece.owner === halo.owner && piece.order === halo.order - 0.5) at = i
+    })
+    painted.splice(at < 0 ? painted.length : at + 1, 0, halo)
+  }
+  return painted
+}
+
+/** A topological sort by `relation`, using `fallback` to choose among the free and to break any cycle. */
+function paintStanding(pieces: ObjectPiece[], yaw: Camera['yaw']): ObjectPiece[] {
+  const n = pieces.length
+  if (n < 2) return pieces
+  const extents = pieces.map(extent)
+  // -1 when the piece on the low side of that axis paints first: the camera is toward the high side.
+  const along = {
+    x: isoDepth(1, 0, yaw) > isoDepth(0, 0, yaw) ? -1 : 1,
+    y: isoDepth(0, 1, yaw) > isoDepth(0, 0, yaw) ? -1 : 1,
+  }
+  // Pieces that don't overlap on screen can paint in either order; leaving them unordered
+  // keeps their spatial rules from chaining into cycles with pieces that do overlap.
+  const outlines = extents.map((e) => screenOutline(e, yaw))
+  const after: number[][] = pieces.map(() => [])
+  const waiting = new Array<number>(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (!outlinesMeet(outlines[i]!, outlines[j]!)) continue
+      const order = relation(pieces[i]!, pieces[j]!, extents[i]!, extents[j]!, along)
+      if (order < 0) {
+        after[i]!.push(j)
+        waiting[j]!++
+      } else if (order > 0) {
+        after[j]!.push(i)
+        waiting[i]!++
+      }
+    }
+  }
+  const done = new Array<boolean>(n).fill(false)
+  const out: ObjectPiece[] = []
+  for (let step = 0; step < n; step++) {
+    let pick = -1
+    for (let i = 0; i < n; i++) {
+      if (done[i] || waiting[i]! > 0) continue
+      if (pick < 0 || fallback(extents[i]!, extents[pick]!, yaw) < 0) pick = i
+    }
+    // A cycle: take the lowest, farthest piece left and carry on.
+    if (pick < 0) {
+      for (let i = 0; i < n; i++) if (!done[i] && (pick < 0 || fallback(extents[i]!, extents[pick]!, yaw) < 0)) pick = i
+    }
+    done[pick] = true
+    out.push(pieces[pick]!)
+    for (const next of after[pick]!) waiting[next]!--
+  }
+  return out
+}
+
+/** Somewhere an object gives off light: a point in grid cells, `z` pixels above its room's floor. */
+export interface GlowSource {
+  x: number
+  y: number
+  z: number
+  /** How far the light reaches, in cells. */
+  reach: number
+  color: string
+}
+
+/** Where a glowing part's light comes from, placed: its middle, `z` pixels above the object's base. */
+function glowOf(
+  part: ObjectPart,
+  size: { w: number; d: number },
+  ox: number,
+  oy: number,
+  turn: ObjectPose['turn'],
+  scale: number,
+): GlowSource {
+  let centre: { x: number; y: number }
+  let across: number
+  let z: number
+  if (part.shape === 'round') {
+    centre = turnPoint(size, turn, part.x * scale, part.y * scale)
+    across = Math.max(part.r, part.r2 ?? part.r) * 2
+    z = part.z + part.h * 0.55
+  } else {
+    centre = turnPoint(size, turn, (part.x + part.w / 2) * scale, (part.y + part.d / 2) * scale)
+    across = Math.max(part.w, part.d)
+    z = part.shape === 'flat' ? 0 : part.z + part.h / 2
+  }
+  return {
+    x: ox + centre.x,
+    y: oy + centre.y,
+    z: z * scale,
+    reach: Math.min(2.4, 0.5 + across * 1.3) * scale,
+    color: part.shape === 'flat' ? part.color : (part.top ?? part.color),
+  }
+}
+
+/** The lights an object gives off where `pose` puts it, one for each glowing part; `z` includes its hover. */
+export function objectGlows(pose: ObjectPose, def: ObjectDef = objectDef(pose.kind)): GlowSource[] {
+  const scale = objectScale(pose)
+  const lifted = objectHover(pose) * LEVEL_HEIGHT
+  const size = { w: def.w * scale, d: def.d * scale }
+  return def.parts
+    .filter((part) => part.glow)
+    .map((part) => {
+      const glow = glowOf(part, size, pose.x, pose.y, pose.turn, scale)
+      return { ...glow, z: glow.z + lifted }
+    })
+}
+
+function glowRadius(camera: Camera, glow: GlowSource): number {
+  return glow.reach * TILE_WIDTH * camera.zoom * Math.SQRT1_2
+}
+
+/**
+ * The pool of light a glow casts on the floor beneath it, added over what's
+ * painted, clipped to `cell` when given: the map lays it on each floor tile as
+ * that tile is painted, so anything standing in front covers it.
+ */
+export function drawGlowPool(
+  ctx: CanvasRenderingContext2D,
+  camera: Camera,
+  glow: GlowSource,
+  elevation: number,
+  cell?: { x: number; y: number },
+): void {
+  const rgb = hexRgb(glow.color)
+  const base = roomLift(elevation)
+  const radius = glowRadius(camera, glow)
+  ctx.save()
+  if (cell) {
+    ctx.beginPath()
+    diamond(ctx, liftCorners(rectCorners({ minX: cell.x, minY: cell.y, maxX: cell.x, maxY: cell.y }, camera), camera, base))
+    ctx.clip()
+  }
+  ctx.globalCompositeOperation = 'lighter'
+  // The pool lies on the floor, so it's squashed to the floor's slant.
+  const floor = at(camera, glow.x, glow.y, base)
+  ctx.translate(floor.x, floor.y)
+  ctx.scale(1, TILE_HEIGHT / TILE_WIDTH)
+  const pool = ctx.createRadialGradient(0, 0, 0, 0, 0, radius)
+  pool.addColorStop(0, `rgba(${rgb}, 0.32)`)
+  pool.addColorStop(0.45, `rgba(${rgb}, 0.1)`)
+  pool.addColorStop(1, `rgba(${rgb}, 0)`)
+  ctx.fillStyle = pool
+  ctx.beginPath()
+  ctx.arc(0, 0, radius, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+/** The halo where a glow burns, added over what's painted, `base` pixels up. */
+function drawHalo(ctx: CanvasRenderingContext2D, camera: Camera, glow: GlowSource, base: number): void {
+  const rgb = hexRgb(glow.color)
+  const radius = glowRadius(camera, glow) * 0.6
+  const source = at(camera, glow.x, glow.y, base + glow.z)
+  ctx.save()
+  ctx.globalCompositeOperation = 'lighter'
+  const halo = ctx.createRadialGradient(source.x, source.y, 0, source.x, source.y, radius)
+  halo.addColorStop(0, `rgba(${rgb}, 0.36)`)
+  halo.addColorStop(1, `rgba(${rgb}, 0)`)
+  ctx.fillStyle = halo
+  ctx.beginPath()
+  ctx.arc(source.x, source.y, radius, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+function hexRgb(hex: string): string {
+  const value = Number.parseInt(hex.slice(1), 16)
+  return `${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}`
 }
 
 /** Paints one piece of an object standing in a room whose floor is `elevation` steps up. */
@@ -285,8 +721,14 @@ export function drawPiece(
 ): void {
   const base = roomLift(elevation + piece.lift)
   if (piece.shape === 'box') drawBox(ctx, camera, piece, base, light)
-  else if (piece.shape === 'round') drawRound(ctx, camera, piece, base, light)
+  else if (piece.shape === 'solid') {
+    drawSolid(ctx, camera, piece.faces, base, (top, shade) => tone(top ? piece.top : piece.color, shade, light.fog), light.left, light.right)
+  }
   else if (piece.shape === 'shadow') drawShadow(ctx, camera, piece, base)
+  // Out of sight, nothing burns.
+  else if (piece.shape === 'glow') {
+    if (!light.fog) drawHalo(ctx, camera, piece, base)
+  }
   else drawFlat(ctx, camera, piece, base, light)
 }
 
@@ -342,14 +784,18 @@ function drawBox(
   const low = grid.map((p) => at(camera, p.x, p.y, base + box.z))
   const high = grid.map((p) => at(camera, p.x, p.y, base + box.z + box.h))
   const middle = (low[0]!.x + low[1]!.x + low[2]!.x + low[3]!.x) / 4
-  // Back faces first; a box is convex, so the faces in front then cover them.
+  // Only the two sides turned to the camera: a box's far sides are hidden behind it, and
+  // painting them anyway would show through a part that overlaps this one.
+  const toward = unorient(1, 1, camera.yaw)
+  const outward = [
+    { x: 0, y: -1 },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+  ]
   const sides = [0, 1, 2, 3]
-    .map((i) => {
-      const j = (i + 1) % 4
-      const mid = { x: (grid[i]!.x + grid[j]!.x) / 2, y: (grid[i]!.y + grid[j]!.y) / 2 }
-      return { i, j, depth: isoDepth(mid.x, mid.y, camera.yaw) }
-    })
-    .sort((a, b) => a.depth - b.depth)
+    .filter((i) => outward[i]!.x * toward.x + outward[i]!.y * toward.y > 0)
+    .map((i) => ({ i, j: (i + 1) % 4 }))
   for (const side of sides) {
     const lo = low[side.i]!
     const hi = low[side.j]!
@@ -366,42 +812,6 @@ function drawBox(
   ctx.beginPath()
   polygon(ctx, high)
   ctx.fillStyle = tone(box.top, 1, light.fog)
-  ctx.fill()
-}
-
-function drawRound(
-  ctx: CanvasRenderingContext2D,
-  camera: Camera,
-  round: Extract<ObjectPiece, { shape: 'round' }>,
-  base: number,
-  light: ObjectLight,
-): void {
-  // A circle on the grid is an upright ellipse on screen, whatever the yaw.
-  const scale = camera.zoom * Math.SQRT1_2
-  const rx0 = round.r * TILE_WIDTH * scale
-  const ry0 = round.r * TILE_HEIGHT * scale
-  const rx1 = round.r2 * TILE_WIDTH * scale
-  const ry1 = round.r2 * TILE_HEIGHT * scale
-  const low = at(camera, round.x, round.y, base + round.z)
-  const high = at(camera, round.x, round.y, base + round.z + round.h)
-
-  ctx.beginPath()
-  ctx.ellipse(low.x, low.y, rx0, ry0, 0, Math.PI, 0, true)
-  ctx.lineTo(high.x + rx1, high.y)
-  ctx.ellipse(high.x, high.y, rx1, ry1, 0, 0, Math.PI, true)
-  ctx.closePath()
-  const width = Math.max(rx0, rx1, 0.5)
-  const side = ctx.createLinearGradient(low.x - width, 0, low.x + width, 0)
-  side.addColorStop(0, tone(round.color, light.left, light.fog))
-  side.addColorStop(0.7, tone(round.color, 1, light.fog))
-  side.addColorStop(1, tone(round.color, light.right, light.fog))
-  ctx.fillStyle = side
-  ctx.fill()
-
-  if (round.r2 <= 0) return
-  ctx.beginPath()
-  ctx.ellipse(high.x, high.y, rx1, ry1, 0, 0, Math.PI * 2)
-  ctx.fillStyle = tone(round.top, 1, light.fog)
   ctx.fill()
 }
 
@@ -457,7 +867,8 @@ function diamond(ctx: CanvasRenderingContext2D, corners: IsoCorners): void {
 /**
  * An object drawn whole, outside the map's paint order: the ghost of one being
  * placed or moved, or a picker thumbnail. Its footprint is outlined on the floor
- * when `outline` is given.
+ * when `outline` is given. `def` stands in for the catalog's, for an object
+ * still being built in the editor.
  */
 export function drawWholeObject(
   ctx: CanvasRenderingContext2D,
@@ -466,15 +877,19 @@ export function drawWholeObject(
   elevation: number,
   light: ObjectLight,
   outline?: string,
+  def: ObjectDef = objectDef(pose.kind),
 ): void {
-  const pieces = placedPieces(pose, camera.yaw)
-  pieces.sort(
-    (a, b) =>
-      isoDepth(a.cellX, a.cellY, camera.yaw) - isoDepth(b.cellX, b.cellY, camera.yaw) ||
-      pieceOrder(a.piece, b.piece, camera.yaw),
-  )
+  // Cell by cell from the back, each cell's pieces in their own order, as the map paints them.
+  const cells = new Map<string, { depth: number; pieces: ObjectPiece[] }>()
+  for (const item of placedPieces(pose, camera.yaw, def, 'whole')) {
+    const key = cellKey(item.cellX, item.cellY)
+    const cell = cells.get(key) ?? { depth: isoDepth(item.cellX, item.cellY, camera.yaw), pieces: [] }
+    cell.pieces.push(item.piece)
+    cells.set(key, cell)
+  }
+  const ordered = [...cells.values()].sort((a, b) => a.depth - b.depth)
   if (outline) {
-    const rect = objectFootprint(pose)
+    const rect = footprintAt(def, pose.x, pose.y, pose.turn, objectScale(pose))
     ctx.beginPath()
     diamond(ctx, liftCorners(rectCorners(rect, camera), camera, roomLift(elevation)))
     ctx.fillStyle = `${outline}33`
@@ -483,26 +898,61 @@ export function drawWholeObject(
     ctx.lineWidth = 1.5
     ctx.stroke()
   }
-  for (const item of pieces) drawPiece(ctx, camera, item.piece, elevation, light)
+  for (const cell of ordered) for (const piece of sortPieces(cell.pieces, camera.yaw)) drawPiece(ctx, camera, piece, elevation, light)
 }
+
+const THUMB_LIGHT: ObjectLight = { left: 0.66, right: 0.9, fog: false }
 
 /** Draws an object centred in a `size`-pixel square, for the picker. */
 export function drawObjectThumb(ctx: CanvasRenderingContext2D, def: ObjectDef, size: number): void {
-  const probe: Camera = { x: 0, y: 0, zoom: 1, yaw: 0 }
-  const bounds = objectScreenBounds(def, probe)
-  const pad = 4
-  const zoom = Math.min((size - pad * 2) / (bounds.maxX - bounds.minX), (size - pad * 2) / (bounds.maxY - bounds.minY), 1.4)
-  const midX = (bounds.minX + bounds.maxX) / 2
-  const midY = (bounds.minY + bounds.maxY) / 2
-  const camera: Camera = { x: midX - size / 2 / zoom, y: midY - size / 2 / zoom, zoom, yaw: 0 }
   ctx.clearRect(0, 0, size, size)
-  drawWholeObject(ctx, camera, { kind: def.id, x: 0, y: 0, turn: 0 }, 0, { left: 0.66, right: 0.9, fog: false })
+  const camera = fitObjectCamera(def, size, size, 0, 4, 1.4)
+  drawWholeObject(ctx, camera, { kind: def.id, x: 0, y: 0, turn: 0 }, 0, THUMB_LIGHT, undefined, def)
 }
 
-/** The screen box an object fills at a camera, footprint and height together. */
-function objectScreenBounds(def: ObjectDef, camera: Camera): { minX: number; minY: number; maxX: number; maxY: number } {
-  let tallest = 0
-  for (const part of def.parts) if (part.shape !== 'flat') tallest = Math.max(tallest, part.z + part.h)
+/**
+ * A camera that fits an object, footprint and full height, centred in a
+ * `width` by `height` pixel box seen from `yaw`, zoomed in no further than `maxZoom`.
+ */
+export function fitObjectCamera(
+  def: ObjectDef,
+  width: number,
+  height: number,
+  yaw: Camera['yaw'],
+  pad: number,
+  maxZoom: number,
+  tallest?: number,
+): Camera {
+  const bounds = objectScreenBounds(def, { x: 0, y: 0, zoom: 1, yaw }, tallest)
+  const zoom = Math.min(
+    (width - pad * 2) / (bounds.maxX - bounds.minX),
+    (height - pad * 2) / (bounds.maxY - bounds.minY),
+    maxZoom,
+  )
+  const midX = (bounds.minX + bounds.maxX) / 2
+  const midY = (bounds.minY + bounds.maxY) / 2
+  return { x: midX - width / 2 / zoom, y: midY - height / 2 / zoom, zoom, yaw }
+}
+
+/**
+ * An object still being built, drawn standing on its outlined footprint, for
+ * the object editor. The light matches the picker's.
+ */
+export function drawObjectPreview(ctx: CanvasRenderingContext2D, camera: Camera, def: ObjectDef, outline: string): void {
+  const pose = { kind: def.id, x: 0, y: 0, turn: 0 as const }
+  // No floor tiles here to lay the pools on, so they go under the object instead.
+  for (const glow of objectGlows(pose, def)) drawGlowPool(ctx, camera, glow, 0)
+  drawWholeObject(ctx, camera, pose, 0, THUMB_LIGHT, outline, def)
+}
+
+/** The screen box an object fills at a camera, footprint and height together (or `reach` high, when given). */
+function objectScreenBounds(
+  def: ObjectDef,
+  camera: Camera,
+  reach?: number,
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  let tallest = reach ?? 0
+  if (reach === undefined) for (const part of def.parts) if (part.shape !== 'flat') tallest = Math.max(tallest, part.z + part.h)
   const points: Point[] = []
   for (const [gx, gy] of [
     [0, 0],

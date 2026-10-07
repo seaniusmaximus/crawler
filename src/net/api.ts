@@ -1,4 +1,6 @@
-/** The DM's Google account and saved campaigns (see worker/index.ts). */
+/** The DM's Google account, saved campaigns and Custom objects (see worker/index.ts). */
+import type { ObjectDef } from '../objects/catalog.ts'
+
 
 export interface Account {
   id: string
@@ -117,4 +119,17 @@ export async function signOut(): Promise<void> {
 export function signInHref(): string {
   const back = `${window.location.pathname}${window.location.search}`
   return `/auth/google?return=${encodeURIComponent(back)}`
+}
+
+/** The DM's Custom objects collection, as stored; each still needs checking before use. */
+export async function listCustomObjects(): Promise<unknown[]> {
+  return (await call<{ objects: unknown[] }>('/api/objects')).objects
+}
+
+export async function putCustomObject(def: ObjectDef): Promise<void> {
+  await call(`/api/objects/${encodeURIComponent(def.id)}`, { method: 'PUT', body: JSON.stringify(def) })
+}
+
+export async function deleteCustomObject(id: string): Promise<void> {
+  await call(`/api/objects/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }

@@ -28,7 +28,16 @@ import type { TileCache } from '../tiles/TileCache.ts'
 import { seedFor, type FaceKind, type Variant } from '../tiles/tileset.ts'
 import type { LinkBadge } from './badges.ts'
 import type { ObjectDraft } from '../model/objects.ts'
-import { drawPiece, drawWholeObject, roomObjectPieces, type ObjectLight, type ObjectPiece } from './objects.ts'
+import {
+  drawGlowPool,
+  drawPiece,
+  drawWholeObject,
+  objectGlows,
+  roomObjectPieces,
+  type GlowSource,
+  type ObjectLight,
+  type ObjectPiece,
+} from './objects.ts'
 import {
   TILE_HEIGHT,
   WALL_HEIGHT,
@@ -439,6 +448,7 @@ function drawTiles(
 ): void {
   const queue: Queued[] = []
   const yaw = view.camera.yaw
+  const lights = floorLights(view)
   view.rooms.forEach((room, roomIndex) => {
     const elevation = room.elevation ?? 0
     const rect = room.rect
@@ -537,6 +547,9 @@ function drawTiles(
           drawRampStairs(ctx, own, tile.ramp, bottom, tile.variant)
         } else if (tile.sprite === 'floor' || tile.sprite === 'stairs') {
           drawFloor(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation)
+          for (const light of lights.get(cellKey(tile.x, tile.y)) ?? []) {
+            if (light.elevation === tile.elevation) drawGlowPool(ctx, view.camera, light.glow, light.elevation, tile)
+          }
         } else if (tile.sprite === 'wall') {
           drawWall(ctx, own, tile.x, tile.y, tile.bitmap, tile.elevation, tile.variant)
         } else drawOpening(ctx, own, tile.x, tile.y, tile.sprite, tile.elevation, tile.open, tile.variant, tile.group)
@@ -547,6 +560,33 @@ function drawTiles(
     )
   }
   ctx.imageSmoothingEnabled = false
+}
+
+/**
+ * The pools of light glowing objects cast, gathered by the floor cells they
+ * reach, so each floor tile can be lit as it's painted. A room remembered but
+ * out of sight stays dark; light spills only onto floor of the same height.
+ */
+function floorLights(view: DrawView): Map<string, { glow: GlowSource; elevation: number }[]> {
+  const cells = new Map<string, { glow: GlowSource; elevation: number }[]>()
+  for (const room of view.rooms) {
+    if (!room.objects?.length || shadeOf(view, room) === 'fog') continue
+    const elevation = room.elevation ?? 0
+    for (const object of room.objects) {
+      for (const glow of objectGlows(object)) {
+        for (let y = Math.floor(glow.y - glow.reach); y <= Math.floor(glow.y + glow.reach); y++) {
+          for (let x = Math.floor(glow.x - glow.reach); x <= Math.floor(glow.x + glow.reach); x++) {
+            const key = cellKey(x, y)
+            const list = cells.get(key)
+            const entry = { glow, elevation }
+            if (list) list.push(entry)
+            else cells.set(key, [entry])
+          }
+        }
+      }
+    }
+  }
+  return cells
 }
 
 function objectLight(view: DrawView, shade: Shade): ObjectLight {

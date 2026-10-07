@@ -881,8 +881,8 @@ a:hover {
 .tool-block:focus-within .object-picker {
   flex-direction: column;
   gap: 8px;
-  width: 316px;
-  padding: 16px 6px 2px;
+  width: 332px;
+  padding: 16px 10px 10px;
 }
 
 .object-picker > * {
@@ -902,12 +902,15 @@ a:hover {
 
 .object-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   max-height: min(340px, 50vh);
   margin: 0;
-  padding: 0;
+  padding: 2px 8px 2px 2px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
   list-style: none;
 }
 
@@ -943,6 +946,33 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.object-picker-foot {
+  display: flex;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.gold-btn {
+  flex: 1;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--gold-line);
+  border-radius: 9px;
+  background: var(--gold-wash);
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.gold-btn:hover {
+  border-color: var(--gold);
+  background: rgba(227, 191, 106, 0.18);
+  color: var(--gold-hi);
 }
 
 .object-thumb {
@@ -3919,4 +3949,780 @@ a.dialog-button {
   .save-panel {
     width: min(400px, calc(100vw - 32px));
   }
+}
+
+
+/* ---------- Object editor ---------- */
+
+.object-picker-empty {
+  margin: 0;
+  padding: 4px 6px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.gold-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.studio-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(6, 7, 10, 0.7);
+}
+
+.studio {
+  position: absolute;
+  inset: 16px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+  outline: none;
+  overflow: hidden;
+}
+
+.studio-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.studio-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.studio-name {
+  width: 220px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--wash);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.studio-name:focus-visible,
+.studio-label-input:focus-visible,
+.studio-field-input:focus-within {
+  border-color: var(--gold-line);
+  outline: none;
+}
+
+.studio-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.studio-group .tileset-select {
+  height: 30px;
+}
+
+.studio-times {
+  color: var(--text-faint);
+}
+
+.studio-spacer {
+  flex: 1;
+}
+
+.studio-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.studio-stepper strong {
+  min-width: 14px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.studio-stepper button,
+.studio-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(17, 18, 23, 0.8);
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.studio-stepper button:hover:not(:disabled),
+.studio-icon-btn:hover:not(:disabled) {
+  border-color: var(--gold-line);
+  color: var(--gold);
+}
+
+.studio-stepper button:disabled,
+.studio-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.studio-bar .dialog-button {
+  height: 34px;
+}
+
+.studio-bar .dialog-button.is-cancel {
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.studio-bar .dialog-button.is-cancel:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.studio-bar .dialog-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.studio-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.studio-body {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr) 380px;
+  gap: 12px;
+  min-height: 0;
+  padding: 12px;
+}
+
+.studio-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--wash);
+}
+
+.studio-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.studio-panel-head h3,
+.studio-section h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.studio-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.studio-panel-head .studio-hint {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Parts */
+
+.studio-part-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+.studio-part-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.studio-part-row:hover,
+.studio-part-row.is-hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.studio-part-row.is-active {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+  color: var(--gold);
+}
+
+.studio-part-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-part-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.studio-swatch-dot {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+.studio-add {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.studio-from {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.studio-where {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.studio-where.is-error {
+  color: var(--danger);
+}
+
+/* Views */
+
+.studio-views,
+.studio-side {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+}
+
+.studio-views {
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+}
+
+.studio-side {
+  grid-template-rows: minmax(200px, 0.62fr) minmax(0, 1fr);
+}
+
+.studio-view {
+  padding-bottom: 8px;
+}
+
+.studio-svg {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  touch-action: none;
+  user-select: none;
+}
+
+.studio-grid {
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+}
+
+.studio-grid.is-major {
+  stroke: rgba(255, 255, 255, 0.12);
+}
+
+.studio-footprint {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+}
+
+.studio-ground {
+  stroke: rgba(255, 255, 255, 0.45);
+  stroke-width: 1.5;
+}
+
+.studio-wall-line {
+  stroke: rgba(227, 191, 106, 0.35);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+
+.studio-axis-label {
+  fill: var(--text-faint);
+  font-family: var(--font-body);
+  letter-spacing: 0.1em;
+  user-select: none;
+}
+
+.studio-part {
+  cursor: move;
+}
+
+.studio-handle {
+  fill: var(--gold);
+  stroke: var(--gold-ink);
+  stroke-width: 1;
+}
+
+.studio-handle:hover {
+  fill: var(--gold-hi);
+}
+
+.studio-marquee {
+  fill: rgba(227, 191, 106, 0.08);
+  stroke: var(--gold);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.studio-iso {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.studio-iso-canvas {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at 50% 62%, rgba(255, 255, 255, 0.06), transparent 70%);
+  overflow: hidden;
+}
+
+.studio-iso-canvas canvas {
+  display: block;
+  cursor: pointer;
+}
+
+.studio-iso-turn {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 4px;
+}
+
+/* Inspector */
+
+.studio-inspector-wrap {
+  padding: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+.studio-inspector {
+  display: flex;
+  flex-direction: column;
+}
+
+.studio-inspector.is-empty {
+  gap: 6px;
+  padding: 16px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.studio-inspector.is-empty p {
+  margin: 0;
+}
+
+.studio-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.studio-section + .studio-section {
+  border-top: 1px solid var(--line);
+}
+
+.studio-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.studio-label-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.studio-label-input:hover {
+  border-color: var(--line);
+}
+
+.studio-label-input::placeholder {
+  color: var(--text);
+}
+
+.studio-segment {
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.studio-segment button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.studio-segment button:hover {
+  color: var(--text);
+}
+
+.studio-segment button.is-active {
+  background: var(--gold-wash);
+  color: var(--gold);
+  box-shadow: inset 0 0 0 1px var(--gold-line);
+}
+
+.studio-segment.is-small button {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.studio-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.studio-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.studio-field-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: ew-resize;
+  user-select: none;
+}
+
+.studio-field-label:hover {
+  color: var(--gold);
+}
+
+.studio-field-input {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.studio-field-input input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.studio-field-input em {
+  font-size: 10px;
+  font-style: normal;
+  color: var(--text-faint);
+}
+
+.studio-swatches {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+}
+
+.studio-swatches.is-small {
+  grid-template-columns: repeat(12, 1fr);
+}
+
+.studio-swatch {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.studio-swatch:hover {
+  transform: scale(1.12);
+}
+
+.studio-swatch.is-active {
+  box-shadow:
+    0 0 0 2px var(--panel-solid),
+    0 0 0 3px var(--gold);
+}
+
+.studio-used {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.studio-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.studio-custom-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.studio-custom-color input {
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.studio-tools {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.studio-chip {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.studio-chip:hover {
+  border-color: var(--gold-line);
+  color: var(--gold);
+}
+
+.studio-chip.is-danger:hover {
+  border-color: rgba(217, 98, 94, 0.45);
+  color: var(--danger);
+}
+
+.studio-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.studio-keys kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 1100px) {
+  .studio-body {
+    grid-template-columns: 200px minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .studio-side {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 320px;
+  }
+}
+
+/* Layers list and light switch */
+
+.studio-icon-btn.is-small {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.studio-parts > .studio-hint {
+  margin-top: -4px;
+  line-height: 1.4;
+}
+
+.studio-part-list li {
+  position: relative;
+}
+
+.studio-part-list li.is-drop-above::before,
+.studio-part-list li.is-drop-below::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--gold);
+  pointer-events: none;
+}
+
+.studio-part-list li.is-drop-above::before {
+  top: -2px;
+}
+
+.studio-part-list li.is-drop-below::after {
+  bottom: -2px;
+}
+
+.studio-part-row.is-dragging {
+  opacity: 0.45;
+}
+
+.studio-grip {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: -2px;
+  color: var(--text-faint);
+  cursor: grab;
+}
+
+.studio-part-glow {
+  flex: none;
+  font-size: 11px;
+  color: var(--gold-hi);
+  text-shadow: 0 0 6px rgba(255, 200, 90, 0.8);
+}
+
+.studio-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.studio-toggle input {
+  margin-top: 2px;
+  accent-color: var(--gold);
+}
+
+.studio-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.studio-toggle strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.studio-toggle em {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--text-faint);
 }

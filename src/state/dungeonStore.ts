@@ -58,6 +58,7 @@ import { cellKey, openingAt, openingIsOpen, parseCellKey } from '../model/tiles.
 import { exploreDungeon, exploreFloor } from '../model/visibility.ts'
 import { tilesetById } from '../tiles/sets/index.ts'
 import { canPlaceObject, nextTurn, rehoveredObject, rescaledObject, withPose } from '../model/objects.ts'
+import { isCustomKind, libraryObject, setMapObjectSource, type ObjectDef } from '../objects/catalog.ts'
 import type {
   Cell,
   CellRect,
@@ -400,6 +401,8 @@ interface DungeonState {
   /** Raises or lowers an object off its room's floor, if nothing is in the way there. */
   nudgeObjectHover: (floorId: string, roomId: string, objectId: string, delta: number) => boolean
   removeObject: (floorId: string, roomId: string, objectId: string) => void
+  /** Bring the map's copies of custom objects up to date with `defs`; ones the map doesn't keep are ignored. */
+  refreshObjectCopies: (defs: readonly ObjectDef[]) => void
   playTravel: () => void
   finishTravel: () => void
 }
@@ -1310,11 +1313,13 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     const room = floor?.rooms.find((item) => item.id === roomId)
     const object: RoomObject = { id: uid(), kind, x, y, turn }
     if (!floor || !room || !canPlaceObject(floor.rooms, room, object)) return null
-    set({
-      dungeon: mapFloor(get().dungeon, floorId, (item) =>
-        mapRoom(item, roomId, (target) => ({ ...target, objects: [...(target.objects ?? []), object] })),
-      ),
-    })
+    const placed = mapFloor(get().dungeon, floorId, (item) =>
+      mapRoom(item, roomId, (target) => ({ ...target, objects: [...(target.objects ?? []), object] })),
+    )
+    // The map keeps its own copy of a custom object, so players (who have no collection) can draw it.
+    const kept = placed.customObjects ?? []
+    const copy = isCustomKind(kind) && !kept.some((def) => def.id === kind) ? libraryObject(kind) : undefined
+    set({ dungeon: copy ? { ...placed, customObjects: [...kept, copy] } : placed })
     return object.id
   },
 
@@ -1343,6 +1348,21 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         mapRoom(floor, roomId, (room) => mapObject(room, objectId, () => null)),
       ),
     })
+  },
+
+  refreshObjectCopies: (defs) => {
+    const dungeon = get().dungeon
+    const kept = dungeon.customObjects
+    if (!kept?.length) return
+    const latest = new Map(defs.map((def) => [def.id, def]))
+    let changed = false
+    const customObjects = kept.map((def) => {
+      const next = latest.get(def.id)
+      if (!next || JSON.stringify(next) === JSON.stringify(def)) return def
+      changed = true
+      return next
+    })
+    if (changed) set({ dungeon: { ...dungeon, customObjects } })
   },
 
   setTravel: (travel) => {
@@ -1411,3 +1431,6 @@ function newPartyToken(
 function getActiveFloorId(dungeon: Dungeon): string | null {
   return dungeon.floors.find((floor) => floor.order === 0)?.id ?? dungeon.floors[0]?.id ?? null
 }
+
+// Placing and drawing look objects up by kind alone; the map's copies of custom objects come from here.
+setMapObjectSource(() => useDungeonStore.getState().dungeon.customObjects)

@@ -1,4 +1,5 @@
 import { normalizePlayer } from '../model/players.ts'
+import type { ObjectDef } from '../objects/catalog.ts'
 import type { Dungeon, Floor, Player, Room } from '../model/types.ts'
 
 /**
@@ -11,6 +12,8 @@ export interface DungeonPatch {
   top?: { id?: string; name?: string; tileset?: string | null; combat?: Dungeon['combat'] }
   players?: KeyedPatch<Partial<Player> & { id: string }>
   floors?: KeyedPatch<FloorPatch>
+  /** The map's own objects, each sent whole when it changes. */
+  customObjects?: KeyedPatch<ObjectDef>
 }
 
 /** Changed or added items, removed ids, and the full id order when it changed. */
@@ -108,6 +111,10 @@ export function diffDungeon(prev: Dungeon, next: Dungeon, force: ReadonlySet<str
 
   const floors = diffKeyed(prev.floors, next.floors, diffFloor)
   if (floors) patch.floors = floors
+  const customObjects = diffKeyed(prev.customObjects ?? [], next.customObjects ?? [], (old, def) =>
+    old && same(old, def) ? null : def,
+  )
+  if (customObjects) patch.customObjects = customObjects
   return Object.keys(patch).length ? patch : null
 }
 
@@ -150,6 +157,9 @@ export function applyDungeonPatch(dungeon: Dungeon, patch: DungeonPatch): Dungeo
       const base = before ?? ({ id: change.id, name: '', order: 0, rooms: [], links: [], ramps: [] } as Floor)
       return { ...base, ...fields, rooms: applyKeyed(base.rooms, rooms, (_old, room) => room) }
     })
+  }
+  if (patch.customObjects) {
+    next.customObjects = applyKeyed(dungeon.customObjects ?? [], patch.customObjects, (_old, def) => def)
   }
   return next
 }

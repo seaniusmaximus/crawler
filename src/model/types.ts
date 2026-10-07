@@ -1,3 +1,4 @@
+import type { ObjectDef } from '../objects/catalog.ts'
 import type { Combat } from './combat.ts'
 import type { CharacterStats, StatsManual } from './stats.ts'
 import type { TokenTravel } from './travel.ts'
@@ -149,6 +150,8 @@ export interface Dungeon {
   travel: TokenTravel | null
   /** Id of the tileset rooms are drawn with unless they have their own; unknown or missing means the default. */
   tileset?: string
+  /** Objects the DM built for this map in the object editor; missing means none. */
+  customObjects?: ObjectDef[]
 }
 
 /** A character token that stands on a floor tile. */

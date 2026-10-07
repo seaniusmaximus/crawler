@@ -5,6 +5,7 @@ import { PhysicalDice } from '../features/dice/PhysicalDice.tsx'
 import { RollToasts } from '../features/dice/RollToasts.tsx'
 import { FloorDock } from '../features/floors/FloorPanel.tsx'
 import { RadialMenu } from '../features/menus/RadialMenu.tsx'
+import { ObjectEditor } from '../features/objectEditor/ObjectEditor.tsx'
 import { Contained } from '../ui/Contained.tsx'
 import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
 import { TokenSheet } from '../features/party/TokenSheet.tsx'
@@ -87,6 +88,7 @@ export function EditorPage() {
       <StairsPrompt />
       <StairUsePrompt />
       <TilesetPrompt />
+      <ObjectEditor />
       <SeatPrompt />
     </div>
   )
