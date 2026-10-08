@@ -1,4 +1,4 @@
-import type { Camera, Room } from '../model/types.ts'
+import type { Camera, ElevationRamp, Room } from '../model/types.ts'
 import { GROUND, drawScene, prepareScene, type DrawView, type ScenePrep } from './draw.ts'
 import { changedRegions, sameRampPreview, type RampPreview, type WorldRect } from './sceneDiff.ts'
 
@@ -17,6 +17,8 @@ const POOL = 24
 export interface SceneKey {
   /** The floor's rooms: a change to some of them repaints just where they paint. */
   rooms: readonly Room[]
+  /** The floor's ramps: a change to some of them repaints just where they stand. */
+  ramps: readonly ElevationRamp[] | undefined
   /** The ramp being drawn, previewed in the scene; a change repaints just where it stands. */
   ramp: RampPreview | null
   /** Everything else, compared item by item by identity: any change repaints it all. */
@@ -186,11 +188,13 @@ export class SceneCache {
     if (this.prep && this.prepYaw !== yaw) this.prep = null
     if (!old) return
     const restSame = old.rest.length === key.rest.length && old.rest.every((item, i) => Object.is(item, key.rest[i]))
-    if (restSame && old.rooms === key.rooms && sameRampPreview(old.ramp, key.ramp)) return
+    if (restSame && old.rooms === key.rooms && old.ramps === key.ramps && sameRampPreview(old.ramp, key.ramp)) return
     this.prep = null
     const regions = restSame ? changedRegions(old, key, yaw) : null
     if (!regions) {
       this.generation++
+      // Repaint what's on screen all at once: a few tiles at a time would show old and new map side by side.
+      for (const tile of this.current?.tiles.values() ?? []) tile.urgent = true
       return
     }
     for (const level of [this.current, this.previous]) {

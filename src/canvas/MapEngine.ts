@@ -381,9 +381,9 @@ export class MapEngine {
     const draft = view.rampDraft
     return {
       rooms: floor.rooms,
+      ramps: floor.ramps,
       ramp: draft && !draft.erase ? draft.ramp : null,
       rest: [
-        floor.ramps,
         customObjects,
         useObjectLibraryStore.getState().objects,
         view.viewMode,

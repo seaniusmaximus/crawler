@@ -24,18 +24,22 @@ const HALO = 70
 /** Deep enough for any stone under a raised floor. */
 const LOWEST = roomLift(MIN_ELEVATION)
 
+/** The parts of the scene whose changes can be found in place (see `changedRegions`). */
+export interface SceneShape {
+  rooms: readonly Room[]
+  ramps: readonly ElevationRamp[] | undefined
+  /** The ramp being drawn, previewed in the scene. */
+  ramp: RampPreview | null
+}
+
 /**
- * Where on the map painting differs between two versions of the floor's rooms
- * and of the ramp being previewed, as world boxes; null when too much changed
- * to say (rooms added, removed or reordered) and it should all be painted again.
- * A room whose only change is its objects gives just those objects' spots, old
- * and new; any other change to a room gives the whole room.
+ * Where on the map painting differs between two versions of the floor's rooms,
+ * its ramps and the ramp being previewed, as world boxes; null when too much
+ * changed to say (rooms or ramps added, removed or reordered) and it should all
+ * be painted again. A room whose only change is its objects gives just those
+ * objects' spots, old and new; any other change to a room gives the whole room.
  */
-export function changedRegions(
-  before: { rooms: readonly Room[]; ramp: RampPreview | null },
-  after: { rooms: readonly Room[]; ramp: RampPreview | null },
-  yaw: Camera['yaw'],
-): WorldRect[] | null {
+export function changedRegions(before: SceneShape, after: SceneShape, yaw: Camera['yaw']): WorldRect[] | null {
   const regions: WorldRect[] = []
   if (before.rooms !== after.rooms) {
     if (before.rooms.length !== after.rooms.length) return null
@@ -53,12 +57,27 @@ export function changedRegions(
       }
     }
   }
-  if (!sameRampPreview(before.ramp, after.ramp)) {
-    for (const ramp of [before.ramp, after.ramp]) {
-      if (ramp) regions.push(region(ramp.rect, yaw, LOWEST, roomLift(Math.max(ramp.fromElev, ramp.toElev)) + WALL_HEIGHT))
+  if (before.ramps !== after.ramps) {
+    const was = before.ramps ?? []
+    const is = after.ramps ?? []
+    if (was.length !== is.length) return null
+    for (let i = 0; i < is.length; i++) {
+      const old = was[i]!
+      const next = is[i]!
+      if (old === next) continue
+      if (old.id !== next.id) return null
+      regions.push(rampRegion(old, yaw), rampRegion(next, yaw))
     }
   }
+  if (!sameRampPreview(before.ramp, after.ramp)) {
+    for (const ramp of [before.ramp, after.ramp]) if (ramp) regions.push(rampRegion(ramp, yaw))
+  }
   return regions
+}
+
+/** All a ramp can paint: its flight, from the deepest stone to a wall above its top. */
+function rampRegion(ramp: RampPreview, yaw: Camera['yaw']): WorldRect {
+  return region(ramp.rect, yaw, LOWEST, roomLift(Math.max(ramp.fromElev, ramp.toElev)) + WALL_HEIGHT)
 }
 
 /** Whether two versions of a room differ in nothing but their objects. */

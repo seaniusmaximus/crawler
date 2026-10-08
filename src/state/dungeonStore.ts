@@ -499,16 +499,16 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         if (dx === 0 && dy === 0) return dungeon
         const group = linkedGroup(floor.rooms, floor.links, roomId)
         const moving = floor.rooms.filter((item) => group.has(item.id))
+        const carried = (ramp: ElevationRamp) => moving.some((item) => rectsOverlap(ramp.rect, item.rect))
         const nextFloor = {
           ...floor,
           rooms: floor.rooms.map((item) =>
             group.has(item.id) ? shiftRoom(item, dx, dy) : item,
           ),
-          ramps: (floor.ramps ?? []).map((ramp) =>
-            moving.some((item) => rectsOverlap(ramp.rect, item.rect))
-              ? shiftRamp(ramp, dx, dy)
-              : ramp,
-          ),
+          // Ramps left behind keep their array, so the map repaints only where the rooms went.
+          ramps: floor.ramps?.some(carried)
+            ? floor.ramps.map((ramp) => (carried(ramp) ? shiftRamp(ramp, dx, dy) : ramp))
+            : floor.ramps,
         }
         return {
           ...dungeon,
