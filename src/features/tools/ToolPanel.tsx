@@ -77,6 +77,11 @@ export function ToolPanel() {
 
   return (
     <div className="tool-dock">
+      {active ? (
+        <p className="tool-hint">
+          <strong>{active.label}</strong> · {hint}
+        </p>
+      ) : null}
       <div className="panel tools scroll-h" role="toolbar" aria-label="Tools">
         {TOOLS.map((item) => (
           <Fragment key={item.id}>
@@ -103,11 +108,6 @@ export function ToolPanel() {
         <MovementLock />
         <TilesetSelect />
       </div>
-      {active ? (
-        <p className="tool-hint">
-          <strong>{active.label}</strong> · {hint}
-        </p>
-      ) : null}
     </div>
   )
 }

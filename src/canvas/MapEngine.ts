@@ -367,7 +367,7 @@ export class MapEngine {
     if (this.scene.draw(this.ctx, view, this.dpr, this.sceneKey(floor, dungeon.customObjects, view))) this.dirty = true
     // Overlays have always drawn as the tiles left the canvas: unsmoothed.
     this.ctx.imageSmoothingEnabled = false
-    drawOverlays(this.ctx, view)
+    drawOverlays(this.ctx, view, this.scene.prepFor(view).tokenSolids)
     if (import.meta.env.DEV && this.perf.on) this.drawPerf(started)
   }
 

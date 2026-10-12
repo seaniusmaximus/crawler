@@ -267,11 +267,17 @@ export class SceneCache {
     return pending
   }
 
-  private paintTile(level: Level, i: number, j: number, view: DrawView): void {
-    if (!this.prep) {
+  /** What the scene is painted from, for overlays that must sit among it (see `prepareScene`). */
+  prepFor(view: DrawView): ScenePrep {
+    if (!this.prep || this.prepYaw !== view.camera.yaw) {
       this.prep = prepareScene(view)
       this.prepYaw = view.camera.yaw
     }
+    return this.prep
+  }
+
+  private paintTile(level: Level, i: number, j: number, view: DrawView): void {
+    const prep = this.prepFor(view)
     const key = tileKey(i, j)
     let tile = level.tiles.get(key)
     if (!tile) {
@@ -283,7 +289,7 @@ export class SceneCache {
     }
     tile.ctx.setTransform(level.dpr, 0, 0, level.dpr, 0, 0)
     const side = level.side
-    drawScene(tile.ctx, { ...view, camera: level.tileCamera(i, j), width: side, height: side }, this.prep)
+    drawScene(tile.ctx, { ...view, camera: level.tileCamera(i, j), width: side, height: side }, prep)
     tile.gen = this.generation
     tile.urgent = false
   }

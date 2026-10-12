@@ -175,6 +175,8 @@ export interface ScenePrep {
   top: Map<number, number>
   rampCells: Map<number, RampSlice>
   raised: RaisedCells
+  /** The solids tokens hide behind, which the overlays clip them by. */
+  tokenSolids: TokenSolids
   lights: Map<number, { glow: GlowSource; elevation: number }[]>
   /**
    * How far what's painted for a cell can reach past where its floor would sit
@@ -208,12 +210,15 @@ export function prepareScene(view: DrawView): ScenePrep {
     sink = Math.max(sink, -roomLift(Math.min(ramp.fromElev, ramp.toElev)))
   }
   const painted: DrawView = { ...view, rooms: shown }
+  const shared = sharedWalls(shown)
+  const raised = raisedCells(painted, top, rampCells)
   return {
     shown,
-    shared: sharedWalls(shown),
+    shared,
     top,
     rampCells,
-    raised: raisedCells(painted, top, rampCells),
+    raised,
+    tokenSolids: tokenSolids(painted, shared, top, rampCells, raised),
     lights: floorLights(painted),
     reach: { up: rise + HALO_REACH, down: sink + HALO_REACH, side: HALO_REACH },
   }
@@ -238,8 +243,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, view: DrawView, prep: S
   if (view.viewMode === 'dm') drawLocks(ctx, painted)
 }
 
-/** Everything drawn over the scene each frame: outlines, badges, paths, tokens and previews. */
-export function drawOverlays(ctx: CanvasRenderingContext2D, view: DrawView): void {
+/**
+ * Everything drawn over the scene each frame: outlines, badges, paths, tokens
+ * and previews. `solids` is the scene's raised stone and walls (see
+ * `ScenePrep`), which hide tokens standing behind them.
+ */
+export function drawOverlays(ctx: CanvasRenderingContext2D, view: DrawView, solids: TokenSolids): void {
   const painted: DrawView = { ...view, rooms: view.viewMode === 'player' ? playerRooms(view.rooms) : view.rooms }
   for (const focus of view.objectFocus) drawObjectFocus(ctx, view, focus)
 
@@ -274,7 +283,7 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, view: DrawView): voi
   }
 
   drawMovePath(ctx, view)
-  drawTokens(ctx, view)
+  drawTokens(ctx, view, solids)
 
   if (view.objectDraft) drawObjectDraft(ctx, view, view.objectDraft)
   if (view.feature) drawFeaturePreview(ctx, view, view.feature)
@@ -514,6 +523,13 @@ function layerOf(item: Queued): number {
   return 'piece' in item ? item.layer : 0
 }
 
+/** What a room paints at (x, y): a wall it shares with a neighbour paints as floor, unless one was set there. */
+function cellSprite(room: Room, shared: SharedWalls, x: number, y: number): TileSprite {
+  const opening = openingAt(room, x, y)
+  const planted = opening === 'wall' || opening === 'door' || opening === 'window'
+  return shared.has(room.id, x, y) && !planted ? 'floor' : spriteAt(room, x, y)
+}
+
 function paintOrder(a: Queued, b: Queued): number {
   return a.depth - b.depth || a.elevation - b.elevation || layerOf(a) - layerOf(b) || a.roomIndex - b.roomIndex
 }
@@ -545,8 +561,7 @@ function drawTiles(
         if (top.get(cellId(x, y)) !== roomIndex) continue
         if (rampCells.has(cellId(x, y))) continue
         const opening = openingAt(room, x, y)
-        const planted = opening === 'wall' || opening === 'door' || opening === 'window'
-        const sprite = shared.has(room.id, x, y) && !planted ? 'floor' : spriteAt(room, x, y)
+        const sprite = cellSprite(room, shared, x, y)
         const variant = { x: x - rect.minX, y: y - rect.minY, seed }
         const bitmap = own.tileCache.top(sprite, variant)
         if (!bitmap) continue
@@ -704,6 +719,18 @@ interface RaisedCells {
   highest: number
 }
 
+/** A cell's solid as tokens see it: raised stone, a wall, or both, between two lifts in pixels at zoom 1. */
+interface TokenSolid {
+  bottom: number
+  top: number
+}
+
+/** What can hide a token standing behind it, by `cellId`, and the highest top among them. */
+export interface TokenSolids {
+  cells: Map<number, TokenSolid>
+  highest: number
+}
+
 function raisedCells(view: DrawView, top: Map<number, number>, rampCells: Map<number, RampSlice>): RaisedCells {
   const cells = new Map<number, RaisedCell>()
   let highest = -Infinity
@@ -719,6 +746,38 @@ function raisedCells(view: DrawView, top: Map<number, number>, rampCells: Map<nu
         if (above <= bottom) continue
         cells.set(id, { above, bottom, depth: isoDepth(x, y, yaw) })
         highest = Math.max(highest, above)
+      }
+    }
+  })
+  return { cells, highest }
+}
+
+/**
+ * Every raised cell and every wall, as solids a token behind them hides
+ * under: a wall stands a wall's height over its floor, on raised stone or not.
+ */
+function tokenSolids(
+  view: DrawView,
+  shared: SharedWalls,
+  top: Map<number, number>,
+  rampCells: Map<number, RampSlice>,
+  raised: RaisedCells,
+): TokenSolids {
+  const cells = new Map<number, TokenSolid>()
+  let highest = -Infinity
+  view.rooms.forEach((room, roomIndex) => {
+    const floor = roomLift(room.elevation)
+    const rect = room.rect
+    for (let y = rect.minY; y <= rect.maxY; y++) {
+      for (let x = rect.minX; x <= rect.maxX; x++) {
+        const id = cellId(x, y)
+        if (rampCells.has(id) || top.get(id) !== roomIndex) continue
+        const stone = raised.cells.get(id)
+        const wall = cellSprite(room, shared, x, y) === 'wall'
+        if (!stone && !wall) continue
+        const solid = { bottom: stone ? roomLift(stone.bottom) : floor, top: floor + (wall ? WALL_HEIGHT : 0) }
+        cells.set(id, solid)
+        highest = Math.max(highest, solid.top)
       }
     }
   })
@@ -1686,7 +1745,7 @@ function tokenDrawCell(
   return { x: player.x, y: player.y, tilt: 0 }
 }
 
-function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
+function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView, solids: TokenSolids): void {
   const sorted = [...view.players].sort((a, b) => {
     const aCell = tokenDrawCell(a, view)
     const bCell = tokenDrawCell(b, view)
@@ -1712,38 +1771,40 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
     const air = playerAirFeet(player)
     if (view.unseen.has(player.id)) ctx.globalAlpha = 0.42
     else if (statuses.includes('invisible')) ctx.globalAlpha = 0.38
-    if (air > 0) {
-      const ground = playerGroundCenterAt(player, cell.x, cell.y, view.rooms, view.ramps, view.camera)
-      drawAirShadow(ctx, ground, standee)
-      drawAirColumn(ctx, ground, pos, standee)
-    }
-    const turnWreath =
-      player.id === view.turnPlayerId && (view.viewMode !== 'player' || !view.unseen.has(player.id))
-    if (turnWreath) {
-      ctx.save()
-      ctx.globalAlpha = 1
-      drawTurnWreath(ctx, pos.x, pos.y, standee.rx, standee.ry, 'back')
-      ctx.restore()
-    }
-    drawStandee(
-      ctx,
-      pos,
-      standee,
-      player.color,
-      ring,
-      selected || hover,
-      player.portrait ? view.portraits.get(player.portrait) : undefined,
-      playerInitials(characterNameOf(player)),
-      characterNameOf(player),
-      statuses,
-      cell.tilt,
-    )
-    if (turnWreath) {
-      ctx.save()
-      ctx.globalAlpha = 1
-      drawTurnWreath(ctx, pos.x, pos.y, standee.rx, standee.ry, 'front')
-      ctx.restore()
-    }
+    const ground = playerGroundCenterAt(player, cell.x, cell.y, view.rooms, view.ramps, view.camera)
+    behindSolids(ctx, view, solids, player, cell, pos, ground, standee, () => {
+      if (air > 0) {
+        drawAirShadow(ctx, ground, standee)
+        drawAirColumn(ctx, ground, pos, standee)
+      }
+      const turnWreath =
+        player.id === view.turnPlayerId && (view.viewMode !== 'player' || !view.unseen.has(player.id))
+      if (turnWreath) {
+        ctx.save()
+        ctx.globalAlpha = 1
+        drawTurnWreath(ctx, pos.x, pos.y, standee.rx, standee.ry, 'back')
+        ctx.restore()
+      }
+      drawStandee(
+        ctx,
+        pos,
+        standee,
+        player.color,
+        ring,
+        selected || hover,
+        player.portrait ? view.portraits.get(player.portrait) : undefined,
+        playerInitials(characterNameOf(player)),
+        characterNameOf(player),
+        statuses,
+        cell.tilt,
+      )
+      if (turnWreath) {
+        ctx.save()
+        ctx.globalAlpha = 1
+        drawTurnWreath(ctx, pos.x, pos.y, standee.rx, standee.ry, 'front')
+        ctx.restore()
+      }
+    })
     if (air > 0) {
       drawAirChip(ctx, `${air} ft`, pos.x + standee.width / 2 + 6, pos.y - standee.height * 0.55)
     }
@@ -1761,6 +1822,78 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView): void {
     ctx.globalAlpha = 1
   }
   for (const ghost of view.ghosts) drawGhostToken(ctx, view, ghost)
+}
+
+/**
+ * Paint a token with the solids in front of it kept off it, as the scene
+ * keeps raised stone off the floor behind it (see `Occluders`): a token is
+ * hidden by a higher room's stone, and by any wall rising above its feet, on
+ * its own floor or higher. Only solids whose outline crosses the token are
+ * clipped, one clip each, since overlapping outlines would cancel out in a
+ * single even-odd clip.
+ */
+function behindSolids(
+  ctx: CanvasRenderingContext2D,
+  view: DrawView,
+  solidCells: TokenSolids,
+  player: Player,
+  cell: { x: number; y: number },
+  pos: Point,
+  ground: Point,
+  standee: ReturnType<typeof tokenStandee>,
+  paint: () => void,
+): void {
+  const floor = roomLift(cellElevation(view.rooms, view.ramps, Math.round(cell.x), Math.round(cell.y)))
+  if (floor >= solidCells.highest) {
+    paint()
+    return
+  }
+  const { camera } = view
+  const size = playerSize(player)
+  const mid = playerCenter(cell.x, cell.y, size)
+  const depth = isoDepth(mid.x + 0.5, mid.y + 0.5, camera.yaw)
+  // What the token paints, wreath and all, and a little over.
+  const side = standee.rx + standee.ry * 1.5 + 14
+  const box = {
+    left: pos.x - side,
+    right: pos.x + side,
+    top: pos.y - standee.height * 1.2 - 12,
+    bottom: ground.y + standee.ry * 2 + 12,
+  }
+  // A solid nearer the camera sits lower on screen, so only those near enough to rise into the box matter.
+  const row = (TILE_HEIGHT / 2) * camera.zoom
+  const rise = (solidCells.highest - floor) * camera.zoom + (box.bottom - box.top)
+  const reach = Math.ceil(rise / row) + size + 1
+  const fx = Math.round(cell.x)
+  const fy = Math.round(cell.y)
+  const solids: { ground: IsoCorners; deck: IsoCorners }[] = []
+  for (let cy = fy - reach; cy <= fy + reach; cy++) {
+    for (let cx = fx - reach; cx <= fx + reach; cx++) {
+      const solid = solidCells.cells.get(cellId(cx, cy))
+      if (!solid || solid.top <= floor) continue
+      if (cx >= fx && cx < fx + size && cy >= fy && cy < fy + size) continue
+      // Beside or behind the token, it paints over the solid rather than under it.
+      if (isoDepth(cx + 0.5, cy + 0.5, camera.yaw) <= depth + 0.5) continue
+      const base = screenCorners(cellCorners(cx, cy, camera))
+      const low = liftCorners(base, camera, solid.bottom)
+      const deck = liftCorners(base, camera, solid.top)
+      if (deck.n.y > box.bottom || low.s.y < box.top || low.w.x > box.right || low.e.x < box.left) continue
+      solids.push({ ground: low, deck })
+    }
+  }
+  if (!solids.length) {
+    paint()
+    return
+  }
+  ctx.save()
+  for (const solid of solids) {
+    const clip = new Path2D()
+    clip.rect(0, 0, view.width, view.height)
+    appendCubePath(clip, solid.ground, solid.deck)
+    ctx.clip(clip, 'evenodd')
+  }
+  paint()
+  ctx.restore()
 }
 
 function wreathArcSpan(start: number, end: number, dir: number): number {
