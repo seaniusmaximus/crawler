@@ -2540,6 +2540,37 @@ a:hover {
   color: #f0a29f;
 }
 
+/* An extra damage type or the save, set off from the attack's own damage above. */
+.attack-part {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--gold-line);
+}
+
+.attack-part-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.attack-part-head .kicker {
+  font-size: 10px;
+}
+
+.attack-save-line .kicker {
+  font-size: 10px;
+}
+
+.attack-save-line .spell-dc,
+.attack-save-line .attack-roll {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
 /* ---------- Spells (stat block) ---------- */
 
 .attack-roll.is-healing {

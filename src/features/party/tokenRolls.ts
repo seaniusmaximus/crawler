@@ -1,4 +1,4 @@
-import { attackToHit, damageModifier, type Attack } from '../../model/attacks.ts'
+import { attackToHit, damageModifier, saveLabel, type Attack } from '../../model/attacks.ts'
 import { initiativeLeader } from '../../model/combat.ts'
 import { characterNameOf } from '../../model/players.ts'
 import { normalizeSpellcasting, saveDc, spellAttackBonus, type Spell } from '../../model/spells.ts'
@@ -79,13 +79,39 @@ export function rollSpellDamage(token: Player, spell: Spell): void {
   })
 }
 
-/** An attack's damage, with the ability modifier it names taken from the token's current stats. */
+/**
+ * An attack's damage, with the ability modifier it names taken from the token's
+ * current stats. Each extra damage type is rolled on its own, since a target
+ * can resist one type and not another.
+ */
 export function rollDamage(token: Player, attack: Attack): void {
+  const parts = [
+    { count: attack.count, faces: attack.faces, bonus: damageModifier(attack, normalizeStats(token.stats)), type: attack.type },
+    ...attack.extra,
+  ]
+  for (const part of parts) {
+    requestRoll({
+      count: part.count,
+      faces: part.faces,
+      modifier: part.bonus,
+      title: part.type ? `${attack.name} damage (${part.type})` : `${attack.name} damage`,
+      kind: 'damage',
+      character: characterNameOf(token),
+      characterId: token.characterId ?? undefined,
+      tokenId: token.id,
+    })
+  }
+}
+
+/** The damage of the save a hit forces, titled with what to save against: "Bite poison (DC 11 CON, half)". */
+export function rollSaveDamage(token: Player, attack: Attack): void {
+  const save = attack.save
+  if (!save || save.count === 0) return
   requestRoll({
-    count: attack.count,
-    faces: attack.faces,
-    modifier: damageModifier(attack, normalizeStats(token.stats)),
-    title: attack.type ? `${attack.name} damage (${attack.type})` : `${attack.name} damage`,
+    count: save.count,
+    faces: save.faces,
+    modifier: save.bonus,
+    title: `${attack.name}${save.type ? ` ${save.type}` : ''} (${saveLabel(save)}${save.onSave === 'half' ? ', half' : ''})`,
     kind: 'damage',
     character: characterNameOf(token),
     characterId: token.characterId ?? undefined,

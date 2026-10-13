@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import {
   attackAbilityMod,
   attackToHit,
@@ -7,8 +7,18 @@ import {
   MAX_ATTACK_BONUS,
   MAX_ATTACK_NAME,
   MAX_ATTACKS,
+  MAX_EXTRA_DAMAGE,
+  MAX_SAVE_DC,
+  MAX_SAVE_NOTES,
+  MIN_SAVE_DC,
   newAttack,
+  newAttackSave,
+  newDamagePart,
+  partFormula,
+  saveLabel,
   type Attack,
+  type AttackSave,
+  type DamagePart,
 } from '../../model/attacks.ts'
 import { DamageTypeField, DiePicker } from './DamageFields.tsx'
 import { MAX_DIE_COUNT } from '../../model/dice.ts'
@@ -20,11 +30,12 @@ import {
   type AbilityKey,
   type CharacterStats,
 } from '../../model/stats.ts'
+import { STATUS_EFFECTS, isStatusId, statusEffect, type StatusId } from '../../model/status.ts'
 import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
 import { Stepper } from '../../ui/Stepper.tsx'
-import { rollAttack, rollDamage } from './tokenRolls.ts'
+import { rollAttack, rollDamage, rollSaveDamage } from './tokenRolls.ts'
 
 /**
  * A stat block's attacks. Each rolls to hit and for damage into the shared dice
@@ -101,6 +112,18 @@ export function Attacks({ player, stats, editable }: { player: Player; stats: Ch
   )
 }
 
+/** Every damage the hit deals, as written and as it reads in a tooltip: "1d8+3 piercing, 2d6 poison". */
+function damageSummary(attack: Attack, stats: CharacterStats): { label: string; detail: string } {
+  const parts = [
+    { formula: damageFormula(attack, stats), type: attack.type },
+    ...attack.extra.map((part) => ({ formula: partFormula(part), type: part.type })),
+  ]
+  return {
+    label: parts.map((part) => part.formula).join(' + '),
+    detail: parts.map((part) => [part.formula, part.type].filter(Boolean).join(' ')).join(', '),
+  }
+}
+
 function AttackRow({
   player,
   attack,
@@ -115,12 +138,16 @@ function AttackRow({
   onEdit: () => void
 }) {
   const toHit = attackToHit(attack, stats)
-  const formula = damageFormula(attack, stats)
+  const damage = damageSummary(attack, stats)
   const hitWhy = `d20 ${bonusBreakdown(attack, attack.hitBonus, stats)}`
-  const damageWhy = `${attack.count}d${attack.faces} ${bonusBreakdown(attack, attack.damageBonus, stats)}`
-  const sub = [attack.ability ? ABILITY_LABEL[attack.ability] : '', attack.type].filter(Boolean).join(' · ')
+  const damageWhy = [
+    `${attack.count}d${attack.faces} ${bonusBreakdown(attack, attack.damageBonus, stats)}${attack.type ? ` ${attack.type}` : ''}`,
+    ...attack.extra.map((part) => `${partFormula(part)}${part.type ? ` ${part.type}` : ''}`),
+  ].join(', ')
+  const types = [attack.type, ...attack.extra.map((part) => part.type)].filter(Boolean).join(' + ')
+  const sub = [attack.ability ? ABILITY_LABEL[attack.ability] : '', types].filter(Boolean).join(' · ')
 
-  return (
+  const row = (
     <div className="attack-row">
       <span className="attack-copy">
         <span className="attack-name">{attack.name}</span>
@@ -143,13 +170,56 @@ function AttackRow({
         title={editable ? `Roll ${attack.name} damage: ${damageWhy}` : damageWhy}
         onClick={() => rollDamage(player, attack)}
       >
-        {formula}
+        {damage.label}
       </button>
       {editable ? (
         <button type="button" className="icon-btn" aria-label={`Edit ${attack.name}`} title="Edit attack" onClick={onEdit}>
           <Icon id="pencil" size={14} />
         </button>
       ) : null}
+    </div>
+  )
+
+  if (!attack.save) return row
+  return (
+    <div className="spell-row">
+      {row}
+      <SaveLine player={player} attack={attack} save={attack.save} editable={editable} />
+    </div>
+  )
+}
+
+/** Under an attack: the save its hit forces, with that save's damage to roll and what failing it does. */
+function SaveLine({ player, attack, save, editable }: { player: Player; attack: Attack; save: AttackSave; editable: boolean }) {
+  const condition = save.condition ? statusEffect(save.condition) : null
+  const damage = save.count > 0
+  const damageText = `${partFormula(save)}${save.type ? ` ${save.type}` : ''}`
+
+  return (
+    <div className="spell-extra attack-save-line">
+      <span className="kicker">On hit</span>
+      <span className="spell-dc" title={`The target makes a ${ABILITY_LABEL[save.ability]} saving throw against DC ${save.dc}`}>
+        {saveLabel(save)}
+      </span>
+      {damage ? (
+        <button
+          type="button"
+          className="attack-roll is-damage"
+          disabled={!editable}
+          title={editable ? `Roll ${attack.name} save damage: ${damageText}` : damageText}
+          onClick={() => rollSaveDamage(player, attack)}
+        >
+          {partFormula(save)}
+        </button>
+      ) : null}
+      {damage && save.type ? <span className="spell-type">{save.type}</span> : null}
+      {damage ? <span>{save.onSave === 'half' ? 'half on save' : 'none on save'}</span> : null}
+      {condition ? (
+        <span className="status-chip" style={{ color: condition.color } as CSSProperties}>
+          Fail: {condition.label}
+        </span>
+      ) : null}
+      {save.notes ? <span className="spell-notes">{save.notes}</span> : null}
     </div>
   )
 }
@@ -169,11 +239,22 @@ function AttackForm({
 }) {
   const [draft, setDraft] = useState(attack)
   const change = (fields: Partial<Attack>) => setDraft((now) => ({ ...now, ...fields }))
+  const changePart = (id: string, fields: Partial<DamagePart>) =>
+    setDraft((now) => ({ ...now, extra: now.extra.map((part) => (part.id === id ? { ...part, ...fields } : part)) }))
+  const changeSave = (fields: Partial<AttackSave>) =>
+    setDraft((now) => (now.save ? { ...now, save: { ...now.save, ...fields } } : now))
   const mod = attackAbilityMod(draft, stats)
+  const saveDamage = draft.save != null && draft.save.count > 0
 
   function submit(event: FormEvent): void {
     event.preventDefault()
-    onDone({ ...draft, name: draft.name.trim() || attack.name, type: draft.type.trim() })
+    onDone({
+      ...draft,
+      name: draft.name.trim() || attack.name,
+      type: draft.type.trim(),
+      extra: draft.extra.map((part) => ({ ...part, type: part.type.trim() })),
+      save: draft.save ? { ...draft.save, type: draft.save.type.trim(), notes: draft.save.notes.trim() } : null,
+    })
   }
 
   // The map's shortcuts stay out of the way while typing.
@@ -225,39 +306,153 @@ function AttackForm({
         />
       </div>
 
-      <DiePicker faces={draft.faces} onPick={(faces) => change({ faces })} />
-
-      <div className="attack-line">
-        <Stepper
-          className="is-compact"
-          label="Dice"
-          value={`${draft.count}`}
-          onDown={() => change({ count: draft.count - 1 })}
-          onUp={() => change({ count: draft.count + 1 })}
-          downDisabled={draft.count <= 1}
-          upDisabled={draft.count >= MAX_DIE_COUNT}
-        />
-        <Stepper
-          className="is-compact"
-          label="Extra dmg"
-          value={formatSigned(draft.damageBonus)}
-          onDown={() => change({ damageBonus: draft.damageBonus - 1 })}
-          onUp={() => change({ damageBonus: draft.damageBonus + 1 })}
-          downDisabled={draft.damageBonus <= -MAX_ATTACK_BONUS}
-          upDisabled={draft.damageBonus >= MAX_ATTACK_BONUS}
-        />
-      </div>
+      <DiceFields
+        count={draft.count}
+        faces={draft.faces}
+        bonus={draft.damageBonus}
+        onChange={({ bonus, ...fields }) => change(bonus == null ? fields : { ...fields, damageBonus: bonus })}
+      />
 
       <DamageTypeField value={draft.type} onChange={(type) => change({ type })} />
+
+      {draft.extra.map((part) => (
+        <FormSection
+          key={part.id}
+          title="Plus damage"
+          removeLabel="Remove this damage"
+          onRemove={() => change({ extra: draft.extra.filter((item) => item.id !== part.id) })}
+        >
+          <DiceFields
+            count={part.count}
+            faces={part.faces}
+            bonus={part.bonus}
+            onChange={(fields) => changePart(part.id, fields)}
+          />
+          <DamageTypeField value={part.type} onChange={(type) => changePart(part.id, { type })} />
+        </FormSection>
+      ))}
+
+      {draft.save ? (
+        <FormSection title="Saving throw on hit" removeLabel="Remove saving throw" onRemove={() => change({ save: null })}>
+          <div className="attack-line">
+            <label className="attack-select">
+              <span className="kicker">Target saves with</span>
+              <select
+                className="tileset-select"
+                value={draft.save.ability}
+                onChange={(event) => changeSave({ ability: event.target.value as AbilityKey })}
+              >
+                {ABILITY_KEYS.map((key) => (
+                  <option key={key} value={key}>
+                    {ABILITY_LABEL[key]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Stepper
+              className="is-compact"
+              label="DC"
+              value={`${draft.save.dc}`}
+              onDown={() => changeSave({ dc: draft.save!.dc - 1 })}
+              onUp={() => changeSave({ dc: draft.save!.dc + 1 })}
+              downDisabled={draft.save.dc <= MIN_SAVE_DC}
+              upDisabled={draft.save.dc >= MAX_SAVE_DC}
+            />
+          </div>
+
+          <DiceFields
+            count={draft.save.count}
+            faces={draft.save.faces}
+            bonus={draft.save.bonus}
+            minCount={0}
+            onChange={(fields) => changeSave(fields)}
+          />
+
+          {saveDamage ? <DamageTypeField value={draft.save.type} onChange={(type) => changeSave({ type })} /> : null}
+
+          <div className="attack-line">
+            <label className="attack-select">
+              <span className="kicker">On a success</span>
+              <select
+                className="tileset-select"
+                value={draft.save.onSave}
+                disabled={!saveDamage}
+                onChange={(event) => changeSave({ onSave: event.target.value === 'none' ? 'none' : 'half' })}
+              >
+                <option value="half">Half damage</option>
+                <option value="none">No damage</option>
+              </select>
+            </label>
+            <label className="attack-select">
+              <span className="kicker">On a failure</span>
+              <select
+                className="tileset-select"
+                value={draft.save.condition ?? ''}
+                onChange={(event) =>
+                  changeSave({ condition: isStatusId(event.target.value) ? (event.target.value as StatusId) : null })
+                }
+              >
+                <option value="">No condition</option>
+                {STATUS_EFFECTS.map((effect) => (
+                  <option key={effect.id} value={effect.id}>
+                    {effect.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <input
+            className="stat-input"
+            value={draft.save.notes}
+            maxLength={MAX_SAVE_NOTES}
+            aria-label="Save effect notes"
+            placeholder="Other effects: pushed 10 ft, can't regain HP"
+            onChange={(event) => changeSave({ notes: event.target.value })}
+          />
+        </FormSection>
+      ) : null}
+
+      {draft.extra.length < MAX_EXTRA_DAMAGE || !draft.save ? (
+        <div className="attack-line">
+          {draft.extra.length < MAX_EXTRA_DAMAGE ? (
+            <button
+              type="button"
+              className="dashed-btn attacks-add"
+              onClick={() => change({ extra: [...draft.extra, newDamagePart()] })}
+            >
+              <Icon id="plus" size={15} />
+              Damage type
+            </button>
+          ) : null}
+          {!draft.save ? (
+            <button type="button" className="dashed-btn attacks-add" onClick={() => change({ save: newAttackSave() })}>
+              <Icon id="plus" size={15} />
+              Saving throw
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <p className="attack-preview">
         <span>
           <Icon id="d20" size={12} /> {formatSigned(mod + draft.hitBonus)} to hit
         </span>
-        <span>
-          {damageFormula(draft, stats)} {draft.type}
-        </span>
+        <span>{damageSummary(draft, stats).detail}</span>
       </p>
+      {draft.save ? (
+        <p className="attack-preview">
+          <span>{saveLabel(draft.save)}</span>
+          <span>
+            {[
+              saveDamage ? `${partFormula(draft.save)} ${draft.save.type}`.trim() : '',
+              draft.save.condition ? statusEffect(draft.save.condition).label : '',
+            ]
+              .filter(Boolean)
+              .join(' · ') || '—'}
+          </span>
+        </p>
+      ) : null}
 
       <div className="attack-form-actions">
         <button type="button" className="icon-btn is-danger" aria-label={`Remove ${attack.name}`} title="Remove attack" onClick={onRemove}>
@@ -271,5 +466,72 @@ function AttackForm({
         </button>
       </div>
     </form>
+  )
+}
+
+/** A removable part of the attack form: an extra damage type, or the save. */
+function FormSection({
+  title,
+  removeLabel,
+  onRemove,
+  children,
+}: {
+  title: string
+  removeLabel: string
+  onRemove: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="attack-part">
+      <div className="attack-part-head">
+        <span className="kicker">{title}</span>
+        <button type="button" className="icon-btn is-danger" aria-label={removeLabel} title={removeLabel} onClick={onRemove}>
+          <Icon id="trash" size={14} />
+        </button>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/** Damage dice: the die, how many, and what's added. A `minCount` of 0 lets the dice be None. */
+function DiceFields({
+  count,
+  faces,
+  bonus,
+  minCount = 1,
+  onChange,
+}: {
+  count: number
+  faces: number
+  bonus: number
+  minCount?: number
+  onChange: (fields: { count?: number; faces?: number; bonus?: number }) => void
+}) {
+  const none = count === 0
+  return (
+    <>
+      <DiePicker faces={faces} onPick={(picked) => onChange({ faces: picked, count: Math.max(1, count) })} dim={none} />
+      <div className="attack-line">
+        <Stepper
+          className="is-compact"
+          label="Dice"
+          value={none ? 'None' : `${count}`}
+          onDown={() => onChange({ count: count - 1 })}
+          onUp={() => onChange({ count: count + 1 })}
+          downDisabled={count <= minCount}
+          upDisabled={count >= MAX_DIE_COUNT}
+        />
+        <Stepper
+          className="is-compact"
+          label="Extra dmg"
+          value={formatSigned(bonus)}
+          onDown={() => onChange({ bonus: bonus - 1 })}
+          onUp={() => onChange({ bonus: bonus + 1 })}
+          downDisabled={none || bonus <= -MAX_ATTACK_BONUS}
+          upDisabled={none || bonus >= MAX_ATTACK_BONUS}
+        />
+      </div>
+    </>
   )
 }

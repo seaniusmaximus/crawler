@@ -1602,7 +1602,7 @@ function creatureBlock(from: MonsterTemplate | undefined): Pick<
 > {
   return {
     stats: from ? { ...from.stats } : emptyStats(),
-    attacks: from ? from.attacks.map((attack) => ({ ...attack })) : [],
+    attacks: from ? structuredClone(from.attacks) : [],
     defenses: from ? { ...from.defenses } : {},
     senses: from ? { ...from.senses } : {},
     spellcasting: from ? { ...from.spellcasting } : defaultSpellcasting(),
