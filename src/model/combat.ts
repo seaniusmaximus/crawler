@@ -1,5 +1,5 @@
 import type { DiceRoll } from './dice.ts'
-import { normalizeStats } from './stats.ts'
+import { initiativeBonus, normalizeStats } from './stats.ts'
 import type { Player } from './types.ts'
 
 function nameOf(player: Player): string {
@@ -63,26 +63,66 @@ export function tokenForRoll(
   )
 }
 
-export function sortByInitiative(players: readonly Player[]): Player[] {
-  return [...players].sort((left, right) => {
-    const leftRoll = left.initiativeRoll
-    const rightRoll = right.initiativeRoll
-    if (leftRoll != null && rightRoll != null && leftRoll !== rightRoll) return rightRoll - leftRoll
-    if (leftRoll != null && rightRoll == null) return -1
-    if (leftRoll == null && rightRoll != null) return 1
-    const leftBonus = normalizeStats(left.stats).initiative ?? 0
-    const rightBonus = normalizeStats(right.stats).initiative ?? 0
-    if (leftBonus !== rightBonus) return rightBonus - leftBonus
-    return nameOf(left).localeCompare(nameOf(right))
-  })
+/**
+ * The party member a companion takes its turn with: its owner, while it follows
+ * one still on the map. Undefined for everyone else, who rolls their own.
+ */
+export function initiativeLeader(token: Player, tokens: readonly Player[]): Player | undefined {
+  if (token.kind !== 'companion' || !token.followsOwner || !token.ownerId) return undefined
+  return tokens.find((item) => item.id === token.ownerId && item.kind !== 'monster' && item.kind !== 'companion')
 }
 
+/** The initiative a token goes on: its leader's when it follows one. */
+export function initiativeOf(token: Player, tokens: readonly Player[]): number | null {
+  return (initiativeLeader(token, tokens) ?? token).initiativeRoll
+}
+
+function byInitiative(left: Player, right: Player): number {
+  const leftRoll = left.initiativeRoll
+  const rightRoll = right.initiativeRoll
+  if (leftRoll != null && rightRoll != null && leftRoll !== rightRoll) return rightRoll - leftRoll
+  if (leftRoll != null && rightRoll == null) return -1
+  if (leftRoll == null && rightRoll != null) return 1
+  const leftBonus = initiativeBonus(normalizeStats(left.stats)) ?? 0
+  const rightBonus = initiativeBonus(normalizeStats(right.stats)) ?? 0
+  if (leftBonus !== rightBonus) return rightBonus - leftBonus
+  return nameOf(left).localeCompare(nameOf(right))
+}
+
+/** Highest initiative first; a following companion sits right after its owner. */
+export function sortByInitiative(players: readonly Player[]): Player[] {
+  const followers = players.filter((token) => initiativeLeader(token, players))
+  const ordered = players.filter((token) => !followers.includes(token)).sort(byInitiative)
+  if (followers.length === 0) return ordered
+  return ordered.flatMap((token) => [
+    token,
+    ...followers
+      .filter((follower) => follower.ownerId === token.id)
+      .sort((left, right) => nameOf(left).localeCompare(nameOf(right))),
+  ])
+}
+
+/** Who shares the turn: the token whose turn it is, and any companions that follow it. */
+export function turnTokenIds(players: readonly Player[], turnPlayerId: string | null): Set<string> {
+  const ids = new Set<string>()
+  if (!turnPlayerId) return ids
+  ids.add(turnPlayerId)
+  for (const token of players) {
+    if (initiativeLeader(token, players)?.id === turnPlayerId) ids.add(token.id)
+  }
+  return ids
+}
+
+/** Whose turn is next; following companions never hold the turn themselves. */
 export function nextTurnPlayerId(
   players: readonly Player[],
   currentId: string | null,
 ): string | null {
-  if (players.length === 0) return null
-  const ordered = sortByInitiative(players)
-  const index = ordered.findIndex((player) => player.id === currentId)
+  const ordered = sortByInitiative(players).filter((token) => !initiativeLeader(token, players))
+  if (ordered.length === 0) return null
+  // A companion that just started following hands the turn on from its owner's place.
+  const current = players.find((token) => token.id === currentId)
+  const at = (current && initiativeLeader(current, players)?.id) ?? currentId
+  const index = ordered.findIndex((player) => player.id === at)
   return ordered[(index + 1) % ordered.length]?.id ?? ordered[0]?.id ?? null
 }

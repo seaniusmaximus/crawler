@@ -1,4 +1,5 @@
-/** The DM's Google account, saved campaigns and Custom objects (see worker/index.ts). */
+/** The DM's Google account, saved campaigns, Custom objects and Monster library (see worker/index.ts). */
+import type { MonsterTemplate } from '../model/monsterTemplates.ts'
 import type { ObjectDef } from '../objects/catalog.ts'
 
 
@@ -132,4 +133,17 @@ export async function putCustomObject(def: ObjectDef): Promise<void> {
 
 export async function deleteCustomObject(id: string): Promise<void> {
   await call(`/api/objects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/** The DM's Monster library, as stored; each still needs checking before use. */
+export async function listMonsterTemplates(): Promise<unknown[]> {
+  return (await call<{ monsters: unknown[] }>('/api/monsters')).monsters
+}
+
+export async function putMonsterTemplate(template: MonsterTemplate): Promise<void> {
+  await call(`/api/monsters/${encodeURIComponent(template.id)}`, { method: 'PUT', body: JSON.stringify(template) })
+}
+
+export async function deleteMonsterTemplate(id: string): Promise<void> {
+  await call(`/api/monsters/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }

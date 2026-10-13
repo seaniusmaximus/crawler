@@ -495,7 +495,7 @@ function TokenRing({ menu, player }: { menu: PlayerMenu; player: Player }) {
         spot={spot}
         icon="person"
         label="Sheet"
-        title={player.kind === 'monster' ? 'Open stat block' : 'Open character sheet'}
+        title={player.kind === 'player' ? 'Open character sheet' : 'Open stat block'}
         onClick={() => {
           const editor = useEditorStore.getState()
           editor.openSheet(player.id)

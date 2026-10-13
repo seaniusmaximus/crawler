@@ -9,7 +9,8 @@ export function Avatar({
   turn = false,
   dim = false,
 }: {
-  player: Player
+  /** A token, or anything drawn like one (a Monster library template). */
+  player: Pick<Player, 'name' | 'characterName' | 'portrait' | 'color'>
   size?: number
   turn?: boolean
   dim?: boolean

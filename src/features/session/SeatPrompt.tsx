@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { characterNameOf, isMonster } from '../../model/players.ts'
+import { characterNameOf, isCharacter } from '../../model/players.ts'
 import type { Player } from '../../model/types.ts'
 import { useDiceStore } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -29,7 +29,7 @@ function useHeldTokens(): Set<string> {
 /** Party tokens nobody at the table is holding: the ones a returning player could take back. */
 function useOpenTokens(held: Set<string>): Player[] {
   const players = useDungeonStore((state) => state.dungeon.players)
-  return (players ?? []).filter((player) => !isMonster(player) && !held.has(player.id))
+  return (players ?? []).filter((player) => isCharacter(player) && !held.has(player.id))
 }
 
 /** Asks a joining player whether to bring a D&D Beyond character or play a Crawler one. */

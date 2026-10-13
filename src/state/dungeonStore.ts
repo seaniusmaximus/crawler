@@ -18,16 +18,19 @@ import { mergeRooms, redirectLinks, roomsTouch, splitRoom } from '../model/merge
 import {
   anchorFromGrid,
   canPlacePlayer,
+  isCharacter,
   isMonster,
   MAX_TOKEN_HOVER,
   MAX_TOKEN_SIZE,
   MIN_TOKEN_HOVER,
   MIN_TOKEN_SIZE,
   nextCharacterName,
+  nextCompanionName,
   nextMonsterName,
   nextPlayerColor,
   nextPlayerName,
   normalizePlayer,
+  occupantRoom,
   playerFootprint,
   playerHover,
   playerSize,
@@ -45,6 +48,17 @@ import {
   sortByInitiative,
 } from '../model/combat.ts'
 import type { DiceRoll } from '../model/dice.ts'
+import { normalizeAttacks, type Attack } from '../model/attacks.ts'
+import { normalizeDefenses, type Defenses } from '../model/damage.ts'
+import { normalizeSenses, type Senses } from '../model/senses.ts'
+import {
+  defaultSpellcasting,
+  normalizeSpellcasting,
+  normalizeSpells,
+  type Spell,
+  type Spellcasting,
+} from '../model/spells.ts'
+import { spawnName, type MonsterTemplate } from '../model/monsterTemplates.ts'
 import { normalizeTravel, sameTravel } from '../model/travel.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import { emptyStats, isTextStat, mergeDdbStats, normalizeStats } from '../model/stats.ts'
@@ -344,7 +358,17 @@ interface DungeonState {
   setOpeningLocked: (floorId: string, spots: readonly OpeningSpot[], locked: boolean) => void
   toggleConnectedOpenings: (floorId: string, roomId: string, x: number, y: number) => void
   addPlayer: (floorId: string) => string | null
-  addMonster: (floorId: string) => string | null
+  /** A blank monster, or one of `from`'s, stood on the floor; null when there's nowhere to stand. */
+  addMonster: (floorId: string, from?: MonsterTemplate) => string | null
+  /**
+   * A blank companion, or one of `from`'s, for `ownerId` (null: the DM's alone).
+   * It stands beside its owner when it can, else on `floorId`; null when there's nowhere to stand.
+   */
+  addCompanion: (floorId: string, ownerId: string | null, from?: MonsterTemplate) => string | null
+  /** Who a companion belongs to; an owner of null leaves it to the DM, rolling its own initiative. */
+  setCompanionOwner: (companionId: string, ownerId: string | null) => void
+  /** Act on the owner's turn, or roll its own initiative. */
+  setCompanionFollows: (companionId: string, follows: boolean) => void
   movePlayer: (playerId: string, floorId: string, x: number, y: number) => boolean
   /**
    * Bring a token, from wherever it is, into a room: to the free spot nearest
@@ -378,6 +402,11 @@ interface DungeonState {
   /** Seat a player without D&D Beyond; reuses `playerId` when that token still exists. */
   spawnPlayer: (name: string, playerId: string | null) => string | null
   setPlayerStat: (playerId: string, key: StatKey, value: number | string | null) => void
+  setPlayerAttacks: (playerId: string, attacks: readonly Attack[]) => void
+  setPlayerDefenses: (playerId: string, defenses: Defenses) => void
+  setPlayerSenses: (playerId: string, senses: Senses) => void
+  setPlayerSpellcasting: (playerId: string, spellcasting: Spellcasting) => void
+  setPlayerSpells: (playerId: string, spells: readonly Spell[]) => void
   setInitiativeRoll: (playerId: string, total: number | null) => void
   recordInitiativeRoll: (roll: DiceRoll) => void
   advanceTurn: () => void
@@ -898,15 +927,17 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     return id
   },
 
-  addMonster: (floorId) => {
+  addMonster: (floorId, from) => {
     const dungeon = get().dungeon
     const floor = dungeon.floors.find((item) => item.id === floorId)
     if (!floor) return null
     const tokens = dungeon.players ?? []
-    const spot = standOnFloor(floor, tokens)
+    const size = from?.size ?? 1
+    // A big monster looks for a room it fits in whole; failing that it stands anywhere, as a resized one would.
+    const spot = (size > 1 ? roomSpotFor(floor, tokens, size) : null) ?? standOnFloor(floor, tokens)
     if (!spot) return null
     const id = uid()
-    const name = nextMonsterName(tokens)
+    const name = from ? spawnName(from.name, tokens) : nextMonsterName(tokens)
     set({
       dungeon: {
         ...dungeon,
@@ -916,26 +947,99 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             id,
             name,
             characterName: name,
-            portrait: null,
-            color: nextPlayerColor(tokens),
+            portrait: from?.portrait ?? null,
+            color: from?.color ?? nextPlayerColor(tokens),
             floorId,
             x: spot.x,
             y: spot.y,
             visible: false,
-            size: 1,
+            size,
             hover: 0,
             // Unseen until the DM clears Invisible; then players see it when they can see into its room.
             statuses: ['invisible'],
             characterId: null,
-            stats: emptyStats(),
             statsManual: {},
             initiativeRoll: null,
+            ...creatureBlock(from),
             kind: 'monster',
           },
         ],
       },
     })
     return id
+  },
+
+  addCompanion: (floorId, ownerId, from) => {
+    const dungeon = get().dungeon
+    const tokens = dungeon.players ?? []
+    const owner = tokens.find((token) => token.id === ownerId && isCharacter(token))
+    const size = from?.size ?? 1
+    // Beside its owner, in the room they stand in, when there's space; otherwise anywhere on the floor in view.
+    const ownerFloor = owner ? dungeon.floors.find((item) => item.id === owner.floorId) : undefined
+    const ownerRoom = owner && ownerFloor ? occupantRoom(ownerFloor.rooms, owner.x, owner.y) : undefined
+    const beside =
+      owner && ownerFloor && ownerRoom
+        ? spotInRoom(ownerRoom, ownerFloor.rooms, tokens, ownerFloor.id, size, owner, ownerFloor.ramps ?? [])
+        : null
+    const floor = beside ? ownerFloor : dungeon.floors.find((item) => item.id === floorId)
+    if (!floor) return null
+    const spot = beside ?? (size > 1 ? roomSpotFor(floor, tokens, size) : null) ?? standOnFloor(floor, tokens)
+    if (!spot) return null
+    const id = uid()
+    const name = from ? spawnName(from.name, tokens) : nextCompanionName(tokens, owner)
+    set({
+      dungeon: exploreDungeon({
+        ...dungeon,
+        players: [
+          ...tokens,
+          {
+            id,
+            name,
+            characterName: name,
+            portrait: from?.portrait ?? null,
+            color: owner?.color ?? from?.color ?? nextPlayerColor(tokens),
+            floorId: floor.id,
+            x: spot.x,
+            y: spot.y,
+            visible: true,
+            size,
+            hover: 0,
+            statuses: [],
+            characterId: null,
+            statsManual: {},
+            initiativeRoll: null,
+            ...creatureBlock(from),
+            kind: 'companion',
+            ownerId: owner?.id ?? null,
+            // Most companions act on their owner's turn; one without an owner rolls its own.
+            followsOwner: owner !== undefined,
+          },
+        ],
+      }),
+    })
+    return id
+  },
+
+  setCompanionOwner: (companionId, ownerId) => {
+    const dungeon = get().dungeon
+    const tokens = dungeon.players ?? []
+    const owner = tokens.find((token) => token.id === ownerId && isCharacter(token))
+    const players = tokens.map((token) =>
+      token.id === companionId && token.kind === 'companion'
+        ? { ...token, ownerId: owner?.id ?? null, followsOwner: owner ? token.followsOwner === true : false }
+        : token,
+    )
+    set({ dungeon: { ...dungeon, players: sortByInitiative(players) } })
+  },
+
+  setCompanionFollows: (companionId, follows) => {
+    const dungeon = get().dungeon
+    const players = (dungeon.players ?? []).map((token) =>
+      token.id === companionId && token.kind === 'companion' && token.ownerId
+        ? { ...token, followsOwner: follows }
+        : token,
+    )
+    set({ dungeon: { ...dungeon, players: sortByInitiative(players) } })
   },
 
   movePlayer: (playerId, floorId, x, y) => {
@@ -1089,7 +1193,10 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
 
   deletePlayer: (playerId) => {
     const dungeon = get().dungeon
-    const players = (dungeon.players ?? []).filter((player) => player.id !== playerId)
+    // Its companions stay on the map, the DM's alone now.
+    const players = (dungeon.players ?? [])
+      .filter((player) => player.id !== playerId)
+      .map((player) => (player.ownerId === playerId ? { ...player, ownerId: null, followsOwner: false } : player))
     const turnPlayerId =
       dungeon.combat?.turnPlayerId === playerId
         ? nextTurnPlayerId(players, null)
@@ -1172,10 +1279,10 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     const characterId = info.characterId.trim()
     const name = info.name.trim()
     const match =
-      players.find((player) => !isMonster(player) && characterId && player.characterId === characterId) ??
+      players.find((player) => isCharacter(player) && characterId && player.characterId === characterId) ??
       players.find(
         (player) =>
-          !isMonster(player) && name && player.characterName.toLowerCase() === name.toLowerCase(),
+          isCharacter(player) && name && player.characterName.toLowerCase() === name.toLowerCase(),
       )
     if (match) {
       const claimedName = name || match.characterName
@@ -1214,7 +1321,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
   spawnPlayer: (name, playerId) => {
     const dungeon = get().dungeon
     const players = dungeon.players ?? []
-    const existing = playerId ? players.find((player) => player.id === playerId && !isMonster(player)) : null
+    const existing = playerId ? players.find((player) => player.id === playerId && isCharacter(player)) : null
     if (existing) return existing.id
     const token = newPartyToken(dungeon, { characterId: '', name: name.trim(), portrait: null })
     if (!token) return null
@@ -1240,6 +1347,66 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
             statsManual: { ...player.statsManual, [key]: true },
           }
         }),
+      },
+    })
+  },
+
+  setPlayerAttacks: (playerId, attacks) => {
+    const clean = normalizeAttacks(attacks)
+    set({
+      dungeon: {
+        ...get().dungeon,
+        players: (get().dungeon.players ?? []).map((player) =>
+          player.id === playerId ? { ...player, attacks: clean } : player,
+        ),
+      },
+    })
+  },
+
+  setPlayerDefenses: (playerId, defenses) => {
+    const clean = normalizeDefenses(defenses)
+    set({
+      dungeon: {
+        ...get().dungeon,
+        players: (get().dungeon.players ?? []).map((player) =>
+          player.id === playerId ? { ...player, defenses: clean } : player,
+        ),
+      },
+    })
+  },
+
+  setPlayerSenses: (playerId, senses) => {
+    const clean = normalizeSenses(senses)
+    set({
+      dungeon: {
+        ...get().dungeon,
+        players: (get().dungeon.players ?? []).map((player) =>
+          player.id === playerId ? { ...player, senses: clean } : player,
+        ),
+      },
+    })
+  },
+
+  setPlayerSpellcasting: (playerId, spellcasting) => {
+    const clean = normalizeSpellcasting(spellcasting)
+    set({
+      dungeon: {
+        ...get().dungeon,
+        players: (get().dungeon.players ?? []).map((player) =>
+          player.id === playerId ? { ...player, spellcasting: clean } : player,
+        ),
+      },
+    })
+  },
+
+  setPlayerSpells: (playerId, spells) => {
+    const clean = normalizeSpells(spells)
+    set({
+      dungeon: {
+        ...get().dungeon,
+        players: (get().dungeon.players ?? []).map((player) =>
+          player.id === playerId ? { ...player, spells: clean } : player,
+        ),
       },
     })
   },
@@ -1426,6 +1593,31 @@ function newPartyToken(
     initiativeRoll: null,
     kind: 'player',
   }
+}
+
+/** A stat block's worth of fields: a template's, copied so tokens never share them, or a blank one. */
+function creatureBlock(from: MonsterTemplate | undefined): Pick<
+  Player,
+  'stats' | 'attacks' | 'defenses' | 'senses' | 'spellcasting' | 'spells'
+> {
+  return {
+    stats: from ? { ...from.stats } : emptyStats(),
+    attacks: from ? from.attacks.map((attack) => ({ ...attack })) : [],
+    defenses: from ? { ...from.defenses } : {},
+    senses: from ? { ...from.senses } : {},
+    spellcasting: from ? { ...from.spellcasting } : defaultSpellcasting(),
+    spells: from ? from.spells.map((spell) => ({ ...spell, used: 0 })) : [],
+  }
+}
+
+/** The first free spot, room by room, where a token `size` tiles across fits whole. */
+function roomSpotFor(floor: Floor, tokens: readonly Player[], size: number): Cell | null {
+  for (const room of floor.rooms) {
+    const near = { x: room.rect.minX, y: room.rect.minY }
+    const spot = spotInRoom(room, floor.rooms, tokens, floor.id, size, near, floor.ramps ?? [])
+    if (spot) return spot
+  }
+  return null
 }
 
 function getActiveFloorId(dungeon: Dungeon): string | null {

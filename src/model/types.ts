@@ -1,4 +1,8 @@
 import type { ObjectDef } from '../objects/catalog.ts'
+import type { Attack } from './attacks.ts'
+import type { Defenses } from './damage.ts'
+import type { Senses } from './senses.ts'
+import type { Spell, Spellcasting } from './spells.ts'
 import type { Combat } from './combat.ts'
 import type { CharacterStats, StatsManual } from './stats.ts'
 import type { TokenTravel } from './travel.ts'
@@ -188,9 +192,29 @@ export interface Player {
   statsManual: StatsManual
   /** Latest initiative check total (d20 + bonus). Null until they roll. */
   initiativeRoll: number | null
-  /** Monsters share the token and initiative pool but are DM-owned. */
-  kind: 'player' | 'monster'
+  /** Attacks rolled from the stat block; missing means none. */
+  attacks?: Attack[]
+  /** Damage types it resists, ignores or takes double from; missing means none. */
+  defenses?: Defenses
+  /** Darkvision and the like, in feet; missing means none. */
+  senses?: Senses
+  /** The ability and bonus its spells use for save DC and spell attacks. */
+  spellcasting?: Spellcasting
+  /** Spells cast from the stat block; missing means none. */
+  spells?: Spell[]
+  /**
+   * Monsters share the token and initiative pool but are DM-owned. Companions
+   * (a familiar, a beast, a steel defender) fight on the party's side with a
+   * monster-style stat block; their owner and the DM both run them.
+   */
+  kind: TokenKind
+  /** A companion's party member, who runs it alongside the DM; null (or not a companion) means the DM alone. */
+  ownerId?: string | null
+  /** A companion that acts on its owner's turn instead of rolling its own initiative. */
+  followsOwner?: boolean
 }
+
+export type TokenKind = 'player' | 'monster' | 'companion'
 
 /** Quarter-turns clockwise of a 2:1 iso view. Continuous yaw would stop being isometric. */
 export type IsoYaw = 0 | 1 | 2 | 3

@@ -1,3 +1,7 @@
+import { normalizeAttacks } from './attacks.ts'
+import { normalizeDefenses } from './damage.ts'
+import { normalizeSenses } from './senses.ts'
+import { normalizeSpellcasting, normalizeSpells } from './spells.ts'
 import { rampAt } from './ramps.ts'
 import { roomContains, roomFloorBounds } from './rect.ts'
 import { FEET_PER_TILE } from './scale.ts'
@@ -7,7 +11,7 @@ import { cellKey } from './tiles.ts'
 import { showsWall } from './walls.ts'
 import { normalizeInitiativeRoll } from './combat.ts'
 import { normalizeStats } from './stats.ts'
-import type { Cell, ElevationRamp, Floor, Player, Room } from './types.ts'
+import type { Cell, ElevationRamp, Floor, Player, Room, TokenKind } from './types.ts'
 
 export const MIN_TOKEN_SIZE = 1
 export const MAX_TOKEN_SIZE = 8
@@ -69,14 +73,24 @@ export function playerStatuses(player: Pick<Player, 'statuses'>): StatusId[] {
   return uniqueStatuses(player.statuses)
 }
 
-export function tokenKind(player: Pick<Player, 'kind'>): 'player' | 'monster' {
-  return player.kind === 'monster' ? 'monster' : 'player'
+export function tokenKind(player: Pick<Player, 'kind'>): TokenKind {
+  return player.kind === 'monster' || player.kind === 'companion' ? player.kind : 'player'
 }
 
 export function isMonster(player: Pick<Player, 'kind'>): boolean {
   return tokenKind(player) === 'monster'
 }
 
+export function isCompanion(player: Pick<Player, 'kind'>): boolean {
+  return tokenKind(player) === 'companion'
+}
+
+/** A person's own character: neither a monster nor a companion. */
+export function isCharacter(player: Pick<Player, 'kind'>): boolean {
+  return tokenKind(player) === 'player'
+}
+
+/** Everyone on the party's side: characters and their companions. */
 export function partyMembers(tokens: readonly Player[]): Player[] {
   return tokens.filter((token) => !isMonster(token))
 }
@@ -85,13 +99,22 @@ export function monsterMembers(tokens: readonly Player[]): Player[] {
   return tokens.filter(isMonster)
 }
 
+/** The party member a companion belongs to, while that token is still on the map. */
+export function companionOwner(companion: Player, tokens: readonly Player[]): Player | undefined {
+  if (!isCompanion(companion) || !companion.ownerId) return undefined
+  return tokens.find((token) => token.id === companion.ownerId && isCharacter(token))
+}
+
 export function normalizePlayer(player: Player): Player {
   const kind = tokenKind(player)
-  const fallback = kind === 'monster' ? 'Monster' : 'Player'
-  const characterFallback = kind === 'monster' ? fallback : 'Character'
+  const fallback = kind === 'monster' ? 'Monster' : kind === 'companion' ? 'Companion' : 'Player'
+  const characterFallback = kind === 'player' ? 'Character' : fallback
   return {
     ...player,
     kind,
+    // Always present, so clearing an owner or unfollowing still reaches other screens.
+    ownerId: kind === 'companion' && typeof player.ownerId === 'string' && player.ownerId ? player.ownerId : null,
+    followsOwner: kind === 'companion' && player.followsOwner === true,
     name: player.name || fallback,
     characterName: player.characterName || player.name || characterFallback,
     portrait: player.portrait ?? null,
@@ -103,6 +126,12 @@ export function normalizePlayer(player: Player): Player {
     stats: normalizeStats(player.stats),
     statsManual: player.statsManual ?? {},
     initiativeRoll: normalizeInitiativeRoll(player.initiativeRoll),
+    // Always present, even empty, so clearing the last one still reaches other screens.
+    attacks: normalizeAttacks(player.attacks),
+    defenses: normalizeDefenses(player.defenses),
+    senses: normalizeSenses(player.senses),
+    spellcasting: normalizeSpellcasting(player.spellcasting),
+    spells: normalizeSpells(player.spells),
   }
 }
 
@@ -210,14 +239,14 @@ export function findStandable(
 }
 
 export function nextPlayerName(players: readonly Player[]): string {
-  const used = new Set(partyMembers(players).map((player) => player.name))
+  const used = new Set(players.filter(isCharacter).map((player) => player.name))
   let n = 1
   while (used.has(`Player ${n}`)) n++
   return `Player ${n}`
 }
 
 export function nextCharacterName(players: readonly Player[]): string {
-  const used = new Set(partyMembers(players).map((player) => player.characterName))
+  const used = new Set(players.filter(isCharacter).map((player) => player.characterName))
   let n = 1
   while (used.has(`Character ${n}`)) n++
   return `Character ${n}`
@@ -230,7 +259,17 @@ export function nextMonsterName(tokens: readonly Player[]): string {
   return `Monster ${n}`
 }
 
-export function characterNameOf(player: Player): string {
+/** "Aria's companion", then "Aria's companion 2"; plain "Companion 1" when it has no owner. */
+export function nextCompanionName(tokens: readonly Player[], owner: Player | undefined): string {
+  const used = new Set(tokens.map((token) => characterNameOf(token).toLowerCase()))
+  const base = owner ? `${characterNameOf(owner)}'s companion` : 'Companion'
+  if (owner && !used.has(base.toLowerCase())) return base
+  let n = owner ? 2 : 1
+  while (used.has(`${base} ${n}`.toLowerCase())) n++
+  return `${base} ${n}`
+}
+
+export function characterNameOf(player: Pick<Player, 'name' | 'characterName'>): string {
   const named = player.characterName?.trim()
   return named ? named : player.name
 }

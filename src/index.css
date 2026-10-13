@@ -1717,6 +1717,17 @@ a:hover {
   opacity: 1;
 }
 
+/* A companion acting on its owner's turn: tucked under them, a link where its roll would be. */
+.token-row.is-follower {
+  margin-left: 14px;
+}
+
+.token-init.is-linked {
+  display: inline-flex;
+  justify-content: flex-end;
+  opacity: 0.8;
+}
+
 .token-copy {
   flex: 1;
   min-width: 0;
@@ -1907,7 +1918,8 @@ a:hover {
   border-color: rgba(217, 98, 94, 0.22);
 }
 
-.sheet.is-foe .sheet-body {
+.sheet.is-foe .sheet-body,
+.sheet.is-companion .sheet-body {
   gap: 14px;
 }
 
@@ -1917,7 +1929,8 @@ a:hover {
   gap: 14px;
 }
 
-.sheet.is-foe .sheet-head {
+.sheet.is-foe .sheet-head,
+.sheet.is-companion .sheet-head {
   align-items: flex-start;
 }
 
@@ -1964,6 +1977,11 @@ a:hover {
 .sheet.is-foe .sheet-name {
   font-size: 21px;
   color: var(--foe);
+}
+
+.sheet.is-companion .sheet-name {
+  font-size: 21px;
+  color: var(--gold);
 }
 
 .sheet-sub {
@@ -2077,6 +2095,11 @@ a:hover {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+}
+
+/* A monster's AC, Init and Speed: no Level tile. */
+.stat-tiles.is-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .stat-tile {
@@ -2291,6 +2314,20 @@ a:hover {
   color: var(--text-dim);
 }
 
+/* The DM picks whose companion it is, right in the bar. */
+.companion-of {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-dim);
+}
+
+.companion-of .tileset-select {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .block-lines {
   display: flex;
   flex-direction: column;
@@ -2303,14 +2340,769 @@ a:hover {
   color: var(--foe);
 }
 
-.block-hp {
+/* ---------- Attacks (stat block) ---------- */
+
+.attacks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attacks-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.attacks-add {
+  justify-content: center;
+  height: 32px;
+}
+
+.attack-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 6px 10px;
+  border-radius: 10px;
+  background: var(--wash);
+}
+
+.attack-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.attack-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attack-sub {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attack-roll {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.attack-roll.is-damage {
+  color: #f0a29f;
+}
+
+.attack-roll:hover:not(:disabled) {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+  color: var(--gold);
+}
+
+.attack-roll:disabled {
+  cursor: default;
+}
+
+.attack-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
+  background: var(--gold-wash);
+}
+
+.attack-form .stat-input {
+  height: 34px;
+  padding: 0 10px;
+  border-color: var(--line-strong);
+  font-family: var(--font-body);
+  font-size: 13px;
+  text-align: left;
+}
+
+.attack-form .stat-input:focus {
+  border-color: var(--gold-line);
+  outline: none;
+}
+
+.attack-name-input {
+  width: 100%;
+}
+
+/* Two controls sharing a row evenly. */
+.attack-line {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.attack-line > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.attack-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attack-select .kicker {
+  font-size: 10px;
+}
+
+.attack-select .tileset-select {
+  width: 100%;
+}
+
+.stepper.is-compact {
+  height: 34px;
+  padding-left: 10px;
+  background: var(--wash);
+}
+
+.stepper.is-compact .stepper-label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.stepper.is-compact .stepper-value {
+  min-width: 26px;
+  font-size: 13px;
+}
+
+.stepper.is-compact button {
+  width: 24px;
+}
+
+.attack-dice {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.attack-dice .die-pick {
+  gap: 3px;
+  padding: 6px 0;
+  border-radius: 9px;
+}
+
+.attack-dice .die-pick span {
+  font-size: 10px;
+}
+
+.attack-custom-type {
+  align-self: stretch;
+  margin-top: auto;
+}
+
+.attack-preview {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.attack-preview span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.attack-preview span:last-child {
+  color: #f0a29f;
+}
+
+/* ---------- Spells (stat block) ---------- */
+
+.attack-roll.is-healing {
+  color: #a6ddb8;
+}
+
+.attack-dice.is-dim .die-pick:not(.is-active) {
+  opacity: 0.45;
+}
+
+.casting-line {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.casting-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.spell-row {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: var(--wash);
+}
+
+.spell-row .attack-row {
+  background: transparent;
+}
+
+/* Every cast spent for the day: still readable, clearly used up. */
+.spell-row.is-spent .attack-name,
+.spell-row.is-spent .attack-roll {
+  opacity: 0.5;
+}
+
+.spell-dc {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.spell-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.spell-type {
+  color: #f0a29f;
+}
+
+.spell-notes {
+  flex-basis: 100%;
+  line-height: 1.4;
+}
+
+.use-pips {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.use-pip {
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 1.5px solid var(--gold-line);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.use-pip.is-on {
+  border-color: var(--gold);
+  background: var(--gold);
+}
+
+.use-pip:hover:not(:disabled) {
+  box-shadow: 0 0 0 2px var(--gold-wash);
+}
+
+.use-pip:disabled {
+  cursor: default;
+}
+
+.use-count {
+  margin-left: 3px;
+  font-family: var(--font-mono);
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.segment {
+  height: 30px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segment:hover {
+  color: var(--text);
+}
+
+.segment.is-on {
+  background: var(--gold-wash);
+  color: var(--gold);
+  font-weight: 600;
+}
+
+/* ---------- Senses and defenses (stat block) ---------- */
+
+.trait-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px;
+  margin: 0 -6px;
+  width: calc(100% + 12px);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trait-line .icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-faint);
+  opacity: 0;
+}
+
+.trait-line:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.trait-line:hover .icon,
+.trait-line.is-open .icon {
+  opacity: 1;
+}
+
+.trait-none {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.trait-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 6px;
+  padding: 10px;
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
+  background: var(--gold-wash);
+}
+
+.sense-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sense-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sense-presets {
+  display: flex;
+  gap: 3px;
+}
+
+.sense-chip {
+  width: 36px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sense-chip:hover {
+  color: var(--text);
+}
+
+.sense-chip.is-on {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+  color: var(--gold);
+}
+
+.feet-input {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.feet-input .stat-input {
+  width: 46px;
+  height: 26px;
+  border-color: var(--line-strong);
+  font-size: 12px;
+}
+
+.feet-input .stat-input:focus {
+  border-color: var(--gold-line);
+  outline: none;
+}
+
+.defense-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.defense-key {
+  font-weight: 600;
+}
+
+.defense-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.defense-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.defense-chip:hover {
+  color: var(--text);
+}
+
+.defense-mark {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.defense-key.is-resistant,
+.defense-chip.is-resistant {
+  --defense: #6bb0d6;
+}
+
+.defense-key.is-immune,
+.defense-chip.is-immune {
+  --defense: var(--good);
+}
+
+.defense-key.is-vulnerable,
+.defense-chip.is-vulnerable {
+  --defense: var(--low);
+}
+
+.defense-key {
+  color: var(--defense);
+}
+
+.defense-chip[class*='is-'] {
+  border-color: color-mix(in srgb, var(--defense) 45%, transparent);
+  background: color-mix(in srgb, var(--defense) 14%, transparent);
+  color: var(--defense);
+}
+
+.attack-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.attack-form-actions .icon-btn {
+  margin-right: auto;
+}
+
+.chip-btn.is-primary {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+  color: var(--gold);
+}
+
+.chip-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- Add monster dialog ---------- */
+
+.dialog.monster-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(560px, calc(100% - 32px));
+  max-height: min(640px, calc(100% - 64px));
+}
+
+.monster-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dialog.monster-dialog h2 {
+  margin: 0;
+  color: var(--foe);
+}
+
+.dialog.monster-dialog.is-companion h2 {
+  color: var(--gold);
+}
+
+/* Whose companion it will be, above the search. */
+.companion-owner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.companion-owner .kicker {
+  font-size: 10px;
+}
+
+.companion-owner .tileset-select {
+  width: 100%;
+}
+
+.companion-owner-note {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.monster-search {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  user-select: text;
+}
+
+.monster-search:focus {
+  border-color: var(--gold-line);
+  outline: none;
+}
+
+/* Two columns of cards, scrolling inside the dialog. */
+.monster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.monster-cell {
+  position: relative;
+}
+
+.monster-card {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  height: 58px;
+  padding: 0 40px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--wash);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
 }
 
-.block-hp .hp-bar {
+.monster-card:hover,
+.monster-card:focus-visible {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+  outline: none;
+}
+
+.monster-card.is-blank {
+  padding-right: 10px;
+  border-style: dashed;
+  background: transparent;
+}
+
+.monster-blank-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 50%;
+  color: var(--text-dim);
+}
+
+.monster-card.is-blank:hover .monster-blank-icon {
+  border-color: var(--gold-line);
+  color: var(--gold);
+}
+
+.monster-copy {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.monster-name {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monster-sub {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Over the card's right edge; shows on hover so the cards stay calm. */
+.monster-delete {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+
+.monster-cell:hover .monster-delete,
+.monster-delete:focus-visible,
+.monster-delete.is-confirm {
+  opacity: 1;
+}
+
+.monster-delete:hover,
+.monster-delete.is-confirm {
+  background: rgba(217, 98, 94, 0.14);
+  color: var(--low);
+}
+
+.dialog p.monster-none,
+.dialog p.monster-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.dialog .panel-note {
+  margin: 0;
+}
+
+.monster-placed {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--gold-wash);
+  color: var(--gold);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.monster-dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.monster-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.monster-status span {
+  color: var(--text-faint);
 }
 
 /* ---------- Floors ---------- */

@@ -1,6 +1,6 @@
 import { FOCUS_INSET } from '../../app/layout.ts'
-import { sortByInitiative } from '../../model/combat.ts'
-import { characterNameOf, monsterMembers, partyMembers, playerStatuses } from '../../model/players.ts'
+import { initiativeLeader, initiativeOf, sortByInitiative, turnTokenIds } from '../../model/combat.ts'
+import { characterNameOf, companionOwner, monsterMembers, partyMembers, playerStatuses } from '../../model/players.ts'
 import { hpRatio, normalizeStats } from '../../model/stats.ts'
 import { STATUS_EFFECTS } from '../../model/status.ts'
 import type { Player } from '../../model/types.ts'
@@ -10,6 +10,7 @@ import { useSessionStore } from '../../state/sessionStore.ts'
 import { getActiveFloor } from '../../state/selectors.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
+import { addCompanion, addMonster } from './addMonster.ts'
 import { rollInitiativeFor } from './tokenRolls.ts'
 import { FOE_SIGHT_LABEL, foeSight, hpTone, revealTitle, tokenPlace, tokenShown, woundLabel } from './tokenInfo.ts'
 
@@ -37,6 +38,7 @@ export function PartyCard() {
   const role = useSessionStore((state) => state.role)
   const party = partyMembers(useOrderedTokens())
   const canRun = role !== 'guest' && viewMode !== 'player'
+  const onTurn = turnTokenIds(tokens, turnPlayerId)
 
   function addPlayer(): void {
     const id = useDungeonStore.getState().addPlayer(getActiveFloor().id)
@@ -60,17 +62,24 @@ export function PartyCard() {
             {viewMode === 'player' ? 'No visible players' : 'Add a player, then drag their token onto a floor tile'}
           </p>
         ) : (
-          party.map((player) => (
-            <TokenRow key={player.id} player={player} turn={turnPlayerId === player.id} />
-          ))
+          party.map((player) => <TokenRow key={player.id} player={player} turn={onTurn.has(player.id)} />)
         )}
       </div>
 
       {canRun ? (
-        <div className="panel-foot">
+        <div className="panel-foot is-pair">
           <button type="button" className="dashed-btn" onClick={addPlayer}>
             <Icon id="plus" size={15} />
-            Add player
+            <span className="btn-label">Add player</span>
+          </button>
+          <button
+            type="button"
+            className="dashed-btn"
+            onClick={addCompanion}
+            title="A familiar, beast or other ally with its own stat block; its owner can run it too"
+          >
+            <Icon id="plus" size={15} />
+            <span className="btn-label">Add companion</span>
           </button>
         </div>
       ) : null}
@@ -84,8 +93,10 @@ export function PartyCard() {
  */
 function InitiativeBar({ tokens, turnPlayerId }: { tokens: readonly Player[]; turnPlayerId: string | null }) {
   const current = tokens.find((token) => token.id === turnPlayerId)
-  const rolled = tokens.filter((token) => token.initiativeRoll != null).length
-  const unrolled = tokens.length - rolled
+  // Companions that follow their owner go on the owner's roll, so they don't count here.
+  const rolling = tokens.filter((token) => !initiativeLeader(token, tokens))
+  const rolled = rolling.filter((token) => token.initiativeRoll != null).length
+  const unrolled = rolling.length - rolled
   const store = useDungeonStore.getState()
 
   if (rolled === 0) {
@@ -168,11 +179,6 @@ export function FoesCard() {
 
   if (!dm && foes.length === 0) return null
 
-  function addMonster(): void {
-    const id = useDungeonStore.getState().addMonster(getActiveFloor().id)
-    if (id) useEditorStore.getState().selectPlayer(id)
-  }
-
   return (
     <section className="panel token-card is-foes scroll-v" aria-label="Foes">
       <header className="panel-head">
@@ -229,9 +235,17 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
   const floors = useDungeonStore((state) => state.dungeon.floors)
   const tokens = useDungeonStore((state) => state.dungeon.players)
   const mine = useSessionStore((state) => state.myPlayerId === player.id)
+  // A player's companion is marked theirs too.
+  const myCompanion = useSessionStore(
+    (state) => player.kind === 'companion' && state.myPlayerId != null && state.myPlayerId === player.ownerId,
+  )
   const stats = normalizeStats(player.stats)
   const name = characterNameOf(player)
   const monster = player.kind === 'monster'
+  const companion = player.kind === 'companion'
+  const owner = companion ? companionOwner(player, tokens ?? []) : undefined
+  const leader = initiativeLeader(player, tokens ?? [])
+  const initiative = initiativeOf(player, tokens ?? [])
   const visible = player.visible === true
   const dm = viewMode !== 'player'
   // A monster reads as dim to the DM while players can't see it; a party member while the DM hides it.
@@ -244,7 +258,7 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
 
   return (
     <div
-      className={`token-row${open ? ' is-open' : ''}${hovered ? ' is-hovered' : ''}${mine ? ' is-mine' : ''}`}
+      className={`token-row${open ? ' is-open' : ''}${hovered ? ' is-hovered' : ''}${mine || myCompanion ? ' is-mine' : ''}${leader ? ' is-follower' : ''}`}
       onPointerEnter={() => useEditorStore.getState().setHoverPlayer(player.id)}
       onPointerLeave={() => useEditorStore.getState().setHoverPlayer(null)}
     >
@@ -252,11 +266,14 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
         type="button"
         className="token-row-main"
         aria-expanded={open}
-        aria-label={monster ? `Open ${name} stat block` : `Open ${name}'s sheet`}
+        aria-label={monster || companion ? `Open ${name} stat block` : `Open ${name}'s sheet`}
         onClick={() => toggleSheet(player)}
       >
-        <span className={`token-init${turn ? ' is-turn' : ''}${player.initiativeRoll == null ? ' is-empty' : ''}`}>
-          {player.initiativeRoll ?? '—'}
+        <span
+          className={`token-init${turn ? ' is-turn' : ''}${initiative == null ? ' is-empty' : ''}${leader ? ' is-linked' : ''}`}
+          title={leader ? `Acts on ${characterNameOf(leader)}'s turn` : undefined}
+        >
+          {leader ? <Icon id="link" size={12} /> : (initiative ?? '—')}
         </span>
         <Avatar player={player} turn={turn} dim={dm && faded} />
         <span className={`token-copy${dm && faded ? ' is-dim' : ''}`}>
@@ -290,6 +307,11 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
               {stats.ac != null && room ? <span>·</span> : null}
               {room ? <span>{room.name}</span> : null}
               {sight && sight !== 'seen' ? <span className="hidden-chip">{FOE_SIGHT_LABEL[sight]}</span> : null}
+            </span>
+          ) : companion ? (
+            <span className="token-sub">
+              <span>{owner ? `${characterNameOf(owner)}'s companion` : 'Companion · DM runs it'}</span>
+              {owner && !leader ? <span>· own initiative</span> : null}
             </span>
           ) : null}
         </span>

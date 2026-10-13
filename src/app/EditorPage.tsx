@@ -18,6 +18,7 @@ import { StairUsePrompt } from '../features/stairs/StairUsePrompt.tsx'
 import { StairsPrompt } from '../features/stairs/StairsPrompt.tsx'
 import { CameraControls } from '../features/tools/CameraControls.tsx'
 import { TilesetPrompt } from '../features/tools/TilesetPrompt.tsx'
+import { MonsterPicker } from '../features/party/MonsterPicker.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
 import { ViewToggle } from '../features/view/ViewToggle.tsx'
 import { useEditorStore } from '../state/editorStore.ts'
@@ -88,6 +89,7 @@ export function EditorPage() {
       <StairsPrompt />
       <StairUsePrompt />
       <TilesetPrompt />
+      <MonsterPicker />
       <ObjectEditor />
       <SeatPrompt />
     </div>

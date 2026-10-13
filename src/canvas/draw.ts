@@ -103,7 +103,8 @@ export interface DrawView {
   movePaths: readonly { playerId: string; cells: readonly Cell[]; feet: number }[]
   ghosts: readonly { player: Player; x: number; y: number }[]
   tokenPoses: readonly { playerId: string; x: number; y: number; tilt: number }[]
-  turnPlayerId: string | null
+  /** Whose turn it is, with any companions acting on it. */
+  turnIds: ReadonlySet<string>
   viewMode: ViewMode
   /** Explored rooms the party can see into now; the rest of the explored ones draw greyed out for players. */
   sight: ReadonlySet<string>
@@ -1778,7 +1779,7 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView, solids: Token
         drawAirColumn(ctx, ground, pos, standee)
       }
       const turnWreath =
-        player.id === view.turnPlayerId && (view.viewMode !== 'player' || !view.unseen.has(player.id))
+        view.turnIds.has(player.id) && (view.viewMode !== 'player' || !view.unseen.has(player.id))
       if (turnWreath) {
         ctx.save()
         ctx.globalAlpha = 1

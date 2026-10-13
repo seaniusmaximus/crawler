@@ -1,5 +1,6 @@
 import { configured, currentUser, finishSignIn, signOut, startSignIn, type AuthEnv, type User } from './auth.ts'
 import { MAX_LIBRARY_OBJECTS, parseObject } from '../src/objects/custom.ts'
+import { MAX_LIBRARY_MONSTERS, MAX_TEMPLATE_BYTES, parseTemplate } from '../src/model/monsterTemplates.ts'
 import { DmLibrary } from './library.ts'
 import { TableRoom, USER_HEADER } from './room.ts'
 
@@ -133,6 +134,13 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   const objectMatch = /^\/api\/objects\/([^/]+)$/.exec(path)
   if (objectMatch) return customObject(request, library, decodeURIComponent(objectMatch[1]))
 
+  if (path === '/api/monsters') {
+    if (request.method === 'GET') return Response.json({ monsters: await library.listMonsters() })
+    return new Response(null, { status: 405 })
+  }
+  const monsterMatch = /^\/api\/monsters\/([^/]+)$/.exec(path)
+  if (monsterMatch) return monsterTemplate(request, library, decodeURIComponent(monsterMatch[1]))
+
   const match = /^\/api\/campaigns\/([a-z0-9]{4,32})(\/.*)?$/.exec(path)
   if (match) {
     const id = match[1]
@@ -207,6 +215,33 @@ async function customObject(request: Request, library: DurableObjectStub<DmLibra
   }
   await library.putObject(id, def)
   return Response.json({ object: def })
+}
+
+/** /api/monsters/:id — one monster or companion in the DM's libraries, put whole or deleted. */
+async function monsterTemplate(request: Request, library: DurableObjectStub<DmLibrary>, id: string): Promise<Response> {
+  if (request.method === 'DELETE') {
+    await library.removeMonster(id)
+    return new Response(null, { status: 204 })
+  }
+  if (request.method !== 'PUT') return new Response(null, { status: 405 })
+  const text = await request.text()
+  if (text.length > MAX_TEMPLATE_BYTES) return Response.json({ error: 'That monster is too big' }, { status: 413 })
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = null
+  }
+  const template = parseTemplate(body)
+  if (!template || template.id !== id) return Response.json({ error: "That isn't a monster" }, { status: 400 })
+  if (!(await library.hasMonster(id)) && (await library.monsterCount()) >= MAX_LIBRARY_MONSTERS) {
+    return Response.json(
+      { error: `Your libraries hold at most ${MAX_LIBRARY_MONSTERS} monsters and companions between them` },
+      { status: 400 },
+    )
+  }
+  await library.putMonster(id, template)
+  return Response.json({ monster: template })
 }
 
 /** /api/campaigns/:id/saves[/:saveId[/restore]] — the campaign's save points. */

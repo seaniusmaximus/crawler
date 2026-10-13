@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { rotateAt, zoomAt } from '../canvas/camera.ts'
+import type { TemplateKind } from '../model/monsterTemplates.ts'
 import { nextTurn } from '../model/objects.ts'
 import type { DoorStyle, Tool } from '../model/tools.ts'
 import type { StairLanding, StairUsePrompt } from '../model/stairs.ts'
@@ -50,6 +51,11 @@ export interface PlayerMenu {
 export type Menu = RoomMenu | OpeningMenu | ObjectMenu | PlayerMenu
 
 /** `leftInset` keeps the room centred in the area a docked panel is not covering. */
+export interface CreaturePicker {
+  kind: TemplateKind
+  ownerId: string | null
+}
+
 export interface FocusRequest {
   roomId?: string
   playerId?: string
@@ -93,6 +99,11 @@ interface EditorState {
   stairUse: StairUsePrompt | null
   /** A map tileset waiting on whether rooms with their own tileset keep it. */
   tilesetPrompt: string | null
+  /**
+   * The open Add monster or Add companion picker (saved ones, or a blank one);
+   * `ownerId` is who a companion is for when it opens. Null when closed.
+   */
+  creaturePicker: CreaturePicker | null
   /** The object open in the object editor, as it was when opened; null when the editor is closed. */
   objectEditor: ObjectDef | null
   viewMode: ViewMode
@@ -133,6 +144,7 @@ interface EditorState {
   closeStairUse: () => void
   promptTileset: (id: string) => void
   closeTilesetPrompt: () => void
+  setCreaturePicker: (picker: CreaturePicker | null) => void
   openObjectEditor: (def: ObjectDef) => void
   closeObjectEditor: () => void
   setViewMode: (mode: ViewMode) => void
@@ -174,6 +186,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   stairsPrompt: null,
   stairUse: null,
   tilesetPrompt: null,
+  creaturePicker: null,
   objectEditor: null,
   viewMode: 'dm',
   sheetPlayerId: null,
@@ -289,6 +302,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   closeStairUse: () => set({ stairUse: null }),
   promptTileset: (tilesetPrompt) => set({ tilesetPrompt }),
   closeTilesetPrompt: () => set({ tilesetPrompt: null }),
+  setCreaturePicker: (creaturePicker) => set({ creaturePicker }),
   openObjectEditor: (objectEditor) => set({ objectEditor, menu: null }),
   closeObjectEditor: () => set({ objectEditor: null }),
   setViewMode: (viewMode) =>

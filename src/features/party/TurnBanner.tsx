@@ -14,7 +14,12 @@ export function TurnBanner() {
     turnPlayerId ? (state.dungeon.players ?? []).find((item) => item.id === turnPlayerId) : undefined,
   )
   const viewMode = useEditorStore((state) => state.viewMode)
-  const mine = useSessionStore((state) => state.myPlayerId != null && state.myPlayerId === turnPlayerId)
+  // A companion of theirs taking its own turn is theirs to play too.
+  const mine = useSessionStore(
+    (state) =>
+      state.myPlayerId != null &&
+      (state.myPlayerId === turnPlayerId || (player?.kind === 'companion' && player.ownerId === state.myPlayerId)),
+  )
 
   if (!player || !tokenShown(player, floors, tokens ?? [], viewMode)) return null
 

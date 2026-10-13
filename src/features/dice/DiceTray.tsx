@@ -16,6 +16,7 @@ import { useEditorStore } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
 import { bridgeIcon } from '../../ui/brand.ts'
+import { Stepper } from '../../ui/Stepper.tsx'
 import { tokenShown } from '../party/tokenInfo.ts'
 import { EXTENSION_URL, startDiceBridge } from './bridge.ts'
 import { RollResult } from './RollResult.tsx'
@@ -165,37 +166,6 @@ export function DiceTray() {
         {viewMode === 'player' || guest ? <span>Roll</span> : null}
         {!open && latest ? <RollResult roll={latest} className="dice-fab-total" compact /> : null}
       </button>
-    </div>
-  )
-}
-
-function Stepper({
-  label,
-  value,
-  onDown,
-  onUp,
-  downDisabled,
-  upDisabled,
-}: {
-  label: string
-  value: string
-  onDown: () => void
-  onUp: () => void
-  downDisabled?: boolean
-  upDisabled?: boolean
-}) {
-  return (
-    <div className="stepper">
-      <span className="stepper-label">{label}</span>
-      <div className="stepper-controls">
-        <button type="button" aria-label={`Decrease ${label}`} onClick={onDown} disabled={downDisabled}>
-          <Icon id="minus" size={13} />
-        </button>
-        <span className="stepper-value">{value}</span>
-        <button type="button" aria-label={`Increase ${label}`} onClick={onUp} disabled={upDisabled}>
-          <Icon id="plus" size={13} />
-        </button>
-      </div>
     </div>
   )
 }

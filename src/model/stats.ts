@@ -153,6 +153,15 @@ export function displayedAbilityMod(stats: CharacterStats, key: AbilityKey): num
   return abilityMod(stats[key])
 }
 
+/**
+ * What's added to an initiative roll: the sheet's own bonus when it has one
+ * (D&D Beyond's, which counts feats and the like), else the DEX modifier, as
+ * the rules have it. Null when neither is known.
+ */
+export function initiativeBonus(stats: CharacterStats): number | null {
+  return stats.initiative ?? displayedAbilityMod(stats, 'dex')
+}
+
 export function repairAbility(score: number | null, mod: number | null): {
   score: number | null
   mod: number | null

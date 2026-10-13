@@ -17,7 +17,7 @@ import { isMonster } from '../model/players.ts'
 import { connectedOpenings, withinReach } from '../model/openings.ts'
 import { openingIsLocked } from '../model/tiles.ts'
 import type { TokenTravel } from '../model/travel.ts'
-import type { Dungeon } from '../model/types.ts'
+import type { Dungeon, Player } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
 import { setTableRoller, useDiceStore } from './diceStore.ts'
 import { useDungeonStore } from './dungeonStore.ts'
@@ -863,9 +863,13 @@ function wireSync(): void {
     const session = useSessionStore.getState()
     if (session.role === 'host') scheduleSync()
     if (session.role === 'guest' && session.myPlayerId) {
-      const player = state.dungeon.players.find((item) => item.id === session.myPlayerId)
-      const before = prev.dungeon.players.find((item) => item.id === session.myPlayerId)
-      if (player && player !== before) send({ type: 'player', player })
+      // Their own character and any companions they run.
+      const before = new Map(prev.dungeon.players.map((item) => [item.id, item]))
+      for (const player of state.dungeon.players) {
+        if (player !== before.get(player.id) && guestControls(player, session.myPlayerId)) {
+          send({ type: 'player', player })
+        }
+      }
     }
   })
   useDiceStore.subscribe((state) => {
@@ -888,7 +892,7 @@ export type OpeningRefusal = 'locked' | 'far'
 
 /**
  * Why a player may not open or close this door or window, or null when they may.
- * `reach` names whose tokens must stand beside it: one token, any of the party,
+ * `reach` names whose tokens must stand beside it: these tokens, any of the party,
  * or null to skip that check (the DM previewing player view).
  */
 export function openingRefusal(
@@ -896,7 +900,7 @@ export function openingRefusal(
   roomId: string,
   x: number,
   y: number,
-  reach: 'party' | string | null,
+  reach: 'party' | readonly string[] | null,
 ): OpeningRefusal | null {
   const dungeon = useDungeonStore.getState().dungeon
   const floor = dungeon.floors.find((item) => item.id === floorId)
@@ -910,17 +914,38 @@ export function openingRefusal(
   if (locked) return 'locked'
   if (reach === null) return null
   const tokens = (dungeon.players ?? []).filter((player) =>
-    reach === 'party' ? !isMonster(player) : player.id === reach,
+    reach === 'party' ? !isMonster(player) : reach.includes(player.id),
   )
   return withinReach(floor.rooms, tokens, floorId, spots) ? null : 'far'
 }
 
+/** A player at the table runs their own character and the companions they own. */
+function guestControls(token: Player, myPlayerId: string | null): boolean {
+  if (!myPlayerId) return false
+  if (token.kind === 'companion') return token.ownerId === myPlayerId
+  return token.kind !== 'monster' && token.id === myPlayerId
+}
+
+/** Whether this tab may move and edit the token: the DM any, a player their own (see guestControls). */
 export function canControlPlayer(playerId: string): boolean {
   const session = useSessionStore.getState()
-  const token = useDungeonStore.getState().dungeon.players.find((player) => player.id === playerId)
-  if (token?.kind === 'monster') return session.role !== 'guest'
   if (session.role !== 'guest') return true
-  return session.myPlayerId === playerId
+  const token = useDungeonStore.getState().dungeon.players.find((player) => player.id === playerId)
+  return token ? guestControls(token, session.myPlayerId) : false
+}
+
+/** The tokens this player runs: their character and its companions. */
+function myTokenIds(myPlayerId: string | null): string[] {
+  if (!myPlayerId) return []
+  return useDungeonStore
+    .getState()
+    .dungeon.players.filter((token) => guestControls(token, myPlayerId))
+    .map((token) => token.id)
+}
+
+/** Reactive canControlPlayer, for components. */
+export function useCanControl(token: Player): boolean {
+  return useSessionStore((state) => state.role !== 'guest' || guestControls(token, state.myPlayerId))
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -1088,8 +1113,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   reportOpening: (floorId, roomId, x, y) => {
     const guest = get().role === 'guest'
-    // The DM needs no token beside it; a player must stand beside it with their own.
-    const refusal = openingRefusal(floorId, roomId, x, y, guest ? (get().myPlayerId ?? '') : null)
+    // The DM needs no token beside it; a player must stand beside it with their own, or a companion of theirs.
+    const refusal = openingRefusal(floorId, roomId, x, y, guest ? myTokenIds(get().myPlayerId) : null)
     if (refusal) return refusal
     if (!guest) {
       useDungeonStore.getState().toggleConnectedOpenings(floorId, roomId, x, y)

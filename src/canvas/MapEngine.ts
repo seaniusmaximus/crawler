@@ -1,3 +1,4 @@
+import { turnTokenIds } from '../model/combat.ts'
 import { sameLink } from '../model/links.ts'
 import { normalizeRect, rectContains, resizeRect, topmostRoomAt, translateRect } from '../model/rect.ts'
 import { featureAt, isFeatureTool, pendingFeature, stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
@@ -349,7 +350,7 @@ export class MapEngine {
       movePaths: this.liveMovePaths(players),
       ghosts: this.ghostTokens(players),
       tokenPoses: this.liveTokenPoses(dungeon.travel, players),
-      turnPlayerId: dungeon.combat?.turnPlayerId ?? null,
+      turnIds: turnTokenIds(dungeon.players ?? [], dungeon.combat?.turnPlayerId ?? null),
       badges: this.badges(),
       hoverLink: this.hoverLink,
       viewMode: editor.viewMode,
