@@ -3,6 +3,7 @@ import type { Attack } from './attacks.ts'
 import type { Defenses } from './damage.ts'
 import type { Senses } from './senses.ts'
 import type { Spell, Spellcasting } from './spells.ts'
+import type { Trait } from './traits.ts'
 import type { Combat } from './combat.ts'
 import type { CharacterStats, StatsManual } from './stats.ts'
 import type { TokenTravel } from './travel.ts'
@@ -202,6 +203,8 @@ export interface Player {
   spellcasting?: Spellcasting
   /** Spells cast from the stat block; missing means none. */
   spells?: Spell[]
+  /** Notes on what it is and can do (Pack Tactics, Keen Smell); missing means none. */
+  traits?: Trait[]
   /**
    * Monsters share the token and initiative pool but are DM-owned. Companions
    * (a familiar, a beast, a steel defender) fight on the party's side with a

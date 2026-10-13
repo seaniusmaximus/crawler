@@ -58,6 +58,7 @@ import {
   type Spell,
   type Spellcasting,
 } from '../model/spells.ts'
+import { normalizeTraits, type Trait } from '../model/traits.ts'
 import { spawnName, type MonsterTemplate } from '../model/monsterTemplates.ts'
 import { normalizeTravel, sameTravel } from '../model/travel.ts'
 import type { TokenTravel } from '../model/travel.ts'
@@ -407,6 +408,7 @@ interface DungeonState {
   setPlayerSenses: (playerId: string, senses: Senses) => void
   setPlayerSpellcasting: (playerId: string, spellcasting: Spellcasting) => void
   setPlayerSpells: (playerId: string, spells: readonly Spell[]) => void
+  setPlayerTraits: (playerId: string, traits: readonly Trait[]) => void
   setInitiativeRoll: (playerId: string, total: number | null) => void
   recordInitiativeRoll: (roll: DiceRoll) => void
   advanceTurn: () => void
@@ -1411,6 +1413,18 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     })
   },
 
+  setPlayerTraits: (playerId, traits) => {
+    const clean = normalizeTraits(traits)
+    set({
+      dungeon: {
+        ...get().dungeon,
+        players: (get().dungeon.players ?? []).map((player) =>
+          player.id === playerId ? { ...player, traits: clean } : player,
+        ),
+      },
+    })
+  },
+
   setInitiativeRoll: (playerId, total) => {
     const dungeon = get().dungeon
     const players = (dungeon.players ?? []).map((player) =>
@@ -1598,7 +1612,7 @@ function newPartyToken(
 /** A stat block's worth of fields: a template's, copied so tokens never share them, or a blank one. */
 function creatureBlock(from: MonsterTemplate | undefined): Pick<
   Player,
-  'stats' | 'attacks' | 'defenses' | 'senses' | 'spellcasting' | 'spells'
+  'stats' | 'attacks' | 'defenses' | 'senses' | 'spellcasting' | 'spells' | 'traits'
 > {
   return {
     stats: from ? { ...from.stats } : emptyStats(),
@@ -1607,6 +1621,7 @@ function creatureBlock(from: MonsterTemplate | undefined): Pick<
     senses: from ? { ...from.senses } : {},
     spellcasting: from ? { ...from.spellcasting } : defaultSpellcasting(),
     spells: from ? from.spells.map((spell) => ({ ...spell, used: 0 })) : [],
+    traits: from ? from.traits.map((trait) => ({ ...trait })) : [],
   }
 }
 

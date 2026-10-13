@@ -4,11 +4,12 @@ import { normalizeSenses, type Senses } from './senses.ts'
 import { normalizeSpellcasting, normalizeSpells, type Spell, type Spellcasting } from './spells.ts'
 import { characterNameOf, MAX_TOKEN_SIZE, MIN_TOKEN_SIZE, PLAYER_COLORS } from './players.ts'
 import { normalizeStats, type CharacterStats } from './stats.ts'
+import { normalizeTraits, type Trait } from './traits.ts'
 import type { Player } from './types.ts'
 
 /**
  * A monster (or companion) the DM saved from a stat block, ready to drop onto any map: its
- * name, standee, footprint, stats, attacks, spells, defenses and senses. Kept in the DM's Monster
+ * name, standee, footprint, stats, traits, attacks, spells, defenses and senses. Kept in the DM's Monster
  * or Companion library, with their account when signed in and in this browser otherwise.
  * Both libraries are one store underneath, told apart by `kind`.
  *
@@ -30,6 +31,7 @@ export interface MonsterTemplate {
   senses: Senses
   spellcasting: Spellcasting
   spells: Spell[]
+  traits: Trait[]
 }
 
 export type TemplateKind = 'monster' | 'companion'
@@ -49,7 +51,7 @@ export const MAX_TEMPLATE_NAME = 40
  */
 export const MAX_TEMPLATE_PORTRAIT = 400_000
 /** A template with the largest standee allowed and every field filled in fits under this. */
-export const MAX_TEMPLATE_BYTES = MAX_TEMPLATE_PORTRAIT + 40_000
+export const MAX_TEMPLATE_BYTES = MAX_TEMPLATE_PORTRAIT + 60_000
 
 const TEMPLATE_ID = new RegExp(`^${TEMPLATE_PREFIX}[0-9a-f-]{36}$`)
 const INLINE_IMAGE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/
@@ -88,6 +90,7 @@ export function templateFromToken(token: Player, portrait: string | null, id = n
     spellcasting: normalizeSpellcasting(token.spellcasting),
     // Saved rested: every spell's uses back.
     spells: normalizeSpells(token.spells).map((spell) => ({ ...spell, used: 0 })),
+    traits: normalizeTraits(token.traits),
   })
 }
 
@@ -110,6 +113,7 @@ export function parseTemplate(value: unknown): MonsterTemplate | null {
     senses: normalizeSenses(raw.senses),
     spellcasting: normalizeSpellcasting(raw.spellcasting),
     spells: normalizeSpells(raw.spells),
+    traits: normalizeTraits(raw.traits),
   })
 }
 
@@ -128,6 +132,7 @@ function cleanTemplate(template: MonsterTemplate): MonsterTemplate {
     senses: template.senses,
     spellcasting: template.spellcasting,
     spells: template.spells,
+    traits: template.traits,
   }
 }
 

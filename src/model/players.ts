@@ -1,5 +1,6 @@
 import { normalizeAttacks } from './attacks.ts'
 import { normalizeDefenses } from './damage.ts'
+import { normalizeTraits } from './traits.ts'
 import { normalizeSenses } from './senses.ts'
 import { normalizeSpellcasting, normalizeSpells } from './spells.ts'
 import { rampAt } from './ramps.ts'
@@ -132,6 +133,7 @@ export function normalizePlayer(player: Player): Player {
     senses: normalizeSenses(player.senses),
     spellcasting: normalizeSpellcasting(player.spellcasting),
     spells: normalizeSpells(player.spells),
+    traits: normalizeTraits(player.traits),
   }
 }
 

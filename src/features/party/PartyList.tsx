@@ -310,8 +310,12 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
             </span>
           ) : companion ? (
             <span className="token-sub">
-              <span>{owner ? `${characterNameOf(owner)}'s companion` : 'Companion · DM runs it'}</span>
-              {owner && !leader ? <span>· own initiative</span> : null}
+              <span className="token-sub-clip">{owner ? `${characterNameOf(owner)}'s companion` : 'Companion · DM runs it'}</span>
+              {owner && !leader ? (
+                <span className="token-sub-icon" title="Rolls its own initiative" aria-label="Rolls its own initiative">
+                  <Icon id="d20" size={12} />
+                </span>
+              ) : null}
             </span>
           ) : null}
         </span>

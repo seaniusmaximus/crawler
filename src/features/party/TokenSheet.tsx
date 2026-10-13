@@ -14,6 +14,7 @@ import { Divider, Icon } from '../../ui/Icon.tsx'
 import { Attacks } from './Attacks.tsx'
 import { CreatureTraits } from './CreatureTraits.tsx'
 import { Spells } from './Spells.tsx'
+import { Traits } from './Traits.tsx'
 import { rollInitiativeFor } from './tokenRolls.ts'
 import { AbilityGrid, EditableValue, HpAdjust, HpBlock, Passives } from './PlayerStats.tsx'
 import { useStatEditing } from './useStatEditing.ts'
@@ -265,6 +266,8 @@ function StatBlock({ player }: { player: Player }) {
 
         <CreatureTraits player={player} stats={stats} editable={editable} />
 
+        <Traits player={player} editable={editable} />
+
         <Attacks player={player} stats={stats} editable={editable} />
 
         <Spells player={player} stats={stats} editable={editable} />
@@ -364,10 +367,12 @@ function CompanionBar({ player, editable, dm }: { player: Player; editable: bool
         </span>
       )}
       {owner ? (
+        // A link while it shares its owner's turn, a d20 while it rolls its own.
         <button
           type="button"
-          className={`chip-btn${follows ? ' is-primary' : ''}`}
+          className="icon-btn is-boxed"
           aria-pressed={follows}
+          aria-label={follows ? `Acts on ${characterNameOf(owner)}'s turn` : 'Rolls its own initiative'}
           disabled={!editable}
           title={
             follows
@@ -376,7 +381,7 @@ function CompanionBar({ player, editable, dm }: { player: Player; editable: bool
           }
           onClick={() => store.setCompanionFollows(player.id, !follows)}
         >
-          {follows ? 'On their turn' : 'Own initiative'}
+          <Icon id={follows ? 'link' : 'd20'} size={16} />
         </button>
       ) : null}
     </div>

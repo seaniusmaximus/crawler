@@ -1827,12 +1827,25 @@ a:hover {
 }
 
 .token-sub {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
   color: var(--text-faint);
   white-space: nowrap;
+}
+
+/* A long owner's name gives way with an ellipsis rather than widening the row. */
+.token-sub-clip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.token-sub-icon {
+  flex: none;
+  display: inline-flex;
 }
 
 .hidden-chip {
@@ -2538,6 +2551,30 @@ a:hover {
 
 .attack-preview span:last-child {
   color: #f0a29f;
+}
+
+/* ---------- Traits (stat block) ---------- */
+
+.trait-note {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Notes keep the DM's own line breaks. */
+.trait-note-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.attack-form textarea.trait-text-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 90px;
+  padding: 8px 10px;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 /* An extra damage type or the save, set off from the attack's own damage above. */
