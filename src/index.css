@@ -900,6 +900,11 @@ a:hover {
   flex: 1;
 }
 
+.monster-search.object-search {
+  height: 32px;
+  font-size: 13px;
+}
+
 .object-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2714,7 +2719,7 @@ a:hover {
   font-family: var(--font-mono);
 }
 
-.segmented {
+.segment-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 2px;

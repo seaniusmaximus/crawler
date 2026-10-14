@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef } from 'react'
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { drawObjectThumb } from '../../canvas/objects.ts'
 import { OBJECTS, objectDef, type ObjectDef } from '../../objects/catalog.ts'
 import { blankObject, copyObject } from '../../objects/custom.ts'
@@ -271,8 +271,22 @@ function ObjectOptions() {
       : group === CUSTOM_OBJECTS
         ? customs
         : tilesetById(group).objects.map(objectDef)
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const shown = needle ? listed.filter((def) => def.name.toLowerCase().includes(needle)) : listed
   const custom = customs.find((def) => def.id === kind)
   const builtIn = OBJECTS.find((def) => def.id === kind)
+
+  function searchKeys(event: KeyboardEvent<HTMLInputElement>): void {
+    // The map's shortcuts stay out of the way while typing.
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      setQuery('')
+      event.currentTarget.blur()
+    }
+    // Enter picks the best match, so "barr⏎" is all it takes.
+    if (event.key === 'Enter' && shown.length > 0) setObjectKind(shown[0].id)
+  }
 
   return (
     <div className="tool-options object-picker" aria-label="Objects">
@@ -292,9 +306,19 @@ function ObjectOptions() {
           <option value={ALL_OBJECTS}>All objects</option>
         </select>
       </div>
+      <input
+        className="monster-search object-search"
+        type="search"
+        value={query}
+        placeholder={`Search ${listed.length} object${listed.length === 1 ? '' : 's'}`}
+        aria-label="Search objects"
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={searchKeys}
+      />
       {listed.length === 0 && <p className="object-picker-empty">No custom objects yet. Make one with New object.</p>}
+      {listed.length > 0 && shown.length === 0 && <p className="object-picker-empty">No object matches “{query.trim()}”</p>}
       <ul className="object-grid">
-        {listed.map((def) => {
+        {shown.map((def) => {
           const active = tool === 'objects' && def.id === kind
           return (
             <li key={def.id}>

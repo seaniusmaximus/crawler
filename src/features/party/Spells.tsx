@@ -373,7 +373,7 @@ function SpellForm({
         </label>
       </div>
 
-      <div className="segmented" role="radiogroup" aria-label="How it lands">
+      <div className="segment-grid" role="radiogroup" aria-label="How it lands">
         {RESOLVES.map((resolve) => (
           <button
             key={resolve}
