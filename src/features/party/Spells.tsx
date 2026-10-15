@@ -458,10 +458,11 @@ function SpellForm({
         </label>
       </div>
 
-      <input
-        className="stat-input"
+      <textarea
+        className="stat-input trait-text-input"
         value={draft.notes}
         maxLength={MAX_SPELL_NOTES}
+        rows={3}
         aria-label="Notes"
         placeholder="Notes: 20-ft radius, concentration, 1 minute"
         onChange={(event) => change({ notes: event.target.value })}

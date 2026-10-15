@@ -2682,7 +2682,10 @@ a:hover {
 
 .spell-notes {
   flex-basis: 100%;
+  min-width: 0;
   line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .use-pips {

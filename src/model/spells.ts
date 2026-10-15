@@ -50,7 +50,7 @@ export interface Spell {
 
 export const MAX_SPELLS = 20
 export const MAX_SPELL_NAME = 40
-export const MAX_SPELL_NOTES = 120
+export const MAX_SPELL_NOTES = 1000
 export const MAX_SPELL_TYPE = 24
 export const MAX_PER_DAY = 9
 const MAX_BONUS = 50
