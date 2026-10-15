@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react'
+import { Fragment, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { MAX_DIE_COUNT } from '../../model/dice.ts'
 import {
   castingMod,
@@ -26,6 +26,7 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
 import { Stepper } from '../../ui/Stepper.tsx'
 import { DamageTypeField, DiePicker } from './DamageFields.tsx'
+import { NotesToggle, RowNotes } from './RowNotes.tsx'
 import { rollSpellAttack, rollSpellDamage } from './tokenRolls.ts'
 
 const LEVELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -199,22 +200,35 @@ function SpellRow({
 }) {
   const against = resolveLabel(spell, casting, stats)
   const healing = spell.type.toLowerCase() === 'healing'
-  const sub = [
-    levelLabel(spell.level),
-    spell.perDay == null ? 'at will' : `${spell.perDay}/day`,
-    spell.resolve === 'save' && hasDamage(spell) ? (spell.onSave === 'half' ? 'half on save' : 'none on save') : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
   const spent = spell.perDay != null && spell.used >= spell.perDay
   const condition = spell.condition ? statusEffect(spell.condition) : null
+  const [notesOpen, setNotesOpen] = useState(false)
+  // Everything about the spell but its notes fits on the one line under its name.
+  const sub: ReactNode[] = [
+    levelLabel(spell.level),
+    spell.type && hasDamage(spell) ? <span key="type" className="spell-type">{spell.type}</span> : null,
+    spell.perDay == null ? 'at will' : <UsePips key="uses" spell={spell} editable={editable} onUse={onUse} />,
+    spell.resolve === 'save' && hasDamage(spell) ? (spell.onSave === 'half' ? 'half on save' : 'none on save') : null,
+    condition ? (
+      <span key="condition" className="status-chip" style={{ color: condition.color } as CSSProperties}>
+        {spell.resolve === 'save' ? `Fail: ${condition.label}` : condition.label}
+      </span>
+    ) : null,
+  ].filter((part) => part != null)
 
   return (
     <div className={`spell-row${spent ? ' is-spent' : ''}`}>
       <div className="attack-row">
         <span className="attack-copy">
           <span className="attack-name">{spell.name}</span>
-          <span className="attack-sub">{sub}</span>
+          <span className="attack-sub spell-sub">
+            {sub.map((part, index) => (
+              <Fragment key={index}>
+                {index > 0 ? <span aria-hidden="true">·</span> : null}
+                {part}
+              </Fragment>
+            ))}
+          </span>
         </span>
         {spell.resolve === 'attack' ? (
           <button
@@ -243,24 +257,14 @@ function SpellRow({
             {spellDamageFormula(spell)}
           </button>
         ) : null}
+        {spell.notes ? <NotesToggle open={notesOpen} name={spell.name} onToggle={() => setNotesOpen((open) => !open)} /> : null}
         {editable ? (
           <button type="button" className="icon-btn" aria-label={`Edit ${spell.name}`} title="Edit spell" onClick={onEdit}>
             <Icon id="pencil" size={14} />
           </button>
         ) : null}
       </div>
-      {spell.perDay != null || condition || spell.notes || spell.type ? (
-        <div className="spell-extra">
-          {spell.perDay != null ? <UsePips spell={spell} editable={editable} onUse={onUse} /> : null}
-          {spell.type && hasDamage(spell) ? <span className="spell-type">{spell.type}</span> : null}
-          {condition ? (
-            <span className="status-chip" style={{ color: condition.color } as CSSProperties}>
-              {spell.resolve === 'save' ? `Fail: ${condition.label}` : condition.label}
-            </span>
-          ) : null}
-          {spell.notes ? <span className="spell-notes">{spell.notes}</span> : null}
-        </div>
-      ) : null}
+      {spell.notes && notesOpen ? <RowNotes text={spell.notes} /> : null}
     </div>
   )
 }
@@ -400,22 +404,23 @@ function SpellForm({
               ))}
             </select>
           </label>
-          <label className="attack-select">
-            <span className="kicker">On a success</span>
-            <select
-              className="tileset-select"
-              value={draft.onSave}
-              disabled={!damage}
-              onChange={(event) => change({ onSave: event.target.value === 'none' ? 'none' : 'half' })}
-            >
-              <option value="half">Half damage</option>
-              <option value="none">No damage</option>
-            </select>
-          </label>
+          {damage ? (
+            <label className="attack-select">
+              <span className="kicker">On a success</span>
+              <select
+                className="tileset-select"
+                value={draft.onSave}
+                onChange={(event) => change({ onSave: event.target.value === 'none' ? 'none' : 'half' })}
+              >
+                <option value="half">Half damage</option>
+                <option value="none">No damage</option>
+              </select>
+            </label>
+          ) : null}
         </div>
       ) : null}
 
-      <DiePicker faces={draft.faces} onPick={(faces) => change({ faces, count: Math.max(1, draft.count) })} dim={!damage} />
+      {damage ? <DiePicker faces={draft.faces} onPick={(faces) => change({ faces })} /> : null}
 
       <div className="attack-line">
         <Stepper
@@ -427,15 +432,15 @@ function SpellForm({
           downDisabled={draft.count <= 0}
           upDisabled={draft.count >= MAX_DIE_COUNT}
         />
-        <Stepper
-          className="is-compact"
-          label="Extra"
-          value={formatSigned(draft.damageBonus)}
-          onDown={() => change({ damageBonus: draft.damageBonus - 1 })}
-          onUp={() => change({ damageBonus: draft.damageBonus + 1 })}
-          downDisabled={!damage}
-          upDisabled={!damage}
-        />
+        {damage ? (
+          <Stepper
+            className="is-compact"
+            label="Extra"
+            value={formatSigned(draft.damageBonus)}
+            onDown={() => change({ damageBonus: draft.damageBonus - 1 })}
+            onUp={() => change({ damageBonus: draft.damageBonus + 1 })}
+          />
+        ) : null}
       </div>
 
       {damage ? <DamageTypeField value={draft.type} extra={['healing']} onChange={(type) => change({ type })} /> : null}

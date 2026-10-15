@@ -21,6 +21,7 @@ import {
   type DamagePart,
 } from '../../model/attacks.ts'
 import { DamageTypeField, DiePicker } from './DamageFields.tsx'
+import { NotesToggle, RowNotes } from './RowNotes.tsx'
 import { MAX_DIE_COUNT } from '../../model/dice.ts'
 import {
   ABILITY_KEYS,
@@ -146,6 +147,8 @@ function AttackRow({
   ].join(', ')
   const types = [attack.type, ...attack.extra.map((part) => part.type)].filter(Boolean).join(' + ')
   const sub = [attack.ability ? ABILITY_LABEL[attack.ability] : '', types].filter(Boolean).join(' · ')
+  const notes = attack.save?.notes ?? ''
+  const [notesOpen, setNotesOpen] = useState(false)
 
   const row = (
     <div className="attack-row">
@@ -172,6 +175,7 @@ function AttackRow({
       >
         {damage.label}
       </button>
+      {notes ? <NotesToggle open={notesOpen} name={attack.name} onToggle={() => setNotesOpen((open) => !open)} /> : null}
       {editable ? (
         <button type="button" className="icon-btn" aria-label={`Edit ${attack.name}`} title="Edit attack" onClick={onEdit}>
           <Icon id="pencil" size={14} />
@@ -185,6 +189,7 @@ function AttackRow({
     <div className="spell-row">
       {row}
       <SaveLine player={player} attack={attack} save={attack.save} editable={editable} />
+      {notes && notesOpen ? <RowNotes text={notes} /> : null}
     </div>
   )
 }
@@ -219,7 +224,6 @@ function SaveLine({ player, attack, save, editable }: { player: Player; attack: 
           Fail: {condition.label}
         </span>
       ) : null}
-      {save.notes ? <span className="spell-notes">{save.notes}</span> : null}
     </div>
   )
 }
@@ -371,18 +375,19 @@ function AttackForm({
           {saveDamage ? <DamageTypeField value={draft.save.type} onChange={(type) => changeSave({ type })} /> : null}
 
           <div className="attack-line">
-            <label className="attack-select">
-              <span className="kicker">On a success</span>
-              <select
-                className="tileset-select"
-                value={draft.save.onSave}
-                disabled={!saveDamage}
-                onChange={(event) => changeSave({ onSave: event.target.value === 'none' ? 'none' : 'half' })}
-              >
-                <option value="half">Half damage</option>
-                <option value="none">No damage</option>
-              </select>
-            </label>
+            {saveDamage ? (
+              <label className="attack-select">
+                <span className="kicker">On a success</span>
+                <select
+                  className="tileset-select"
+                  value={draft.save.onSave}
+                  onChange={(event) => changeSave({ onSave: event.target.value === 'none' ? 'none' : 'half' })}
+                >
+                  <option value="half">Half damage</option>
+                  <option value="none">No damage</option>
+                </select>
+              </label>
+            ) : null}
             <label className="attack-select">
               <span className="kicker">On a failure</span>
               <select
@@ -402,10 +407,11 @@ function AttackForm({
             </label>
           </div>
 
-          <input
-            className="stat-input"
+          <textarea
+            className="stat-input trait-text-input"
             value={draft.save.notes}
             maxLength={MAX_SAVE_NOTES}
+            rows={3}
             aria-label="Save effect notes"
             placeholder="Other effects: pushed 10 ft, can't regain HP"
             onChange={(event) => changeSave({ notes: event.target.value })}
@@ -511,7 +517,7 @@ function DiceFields({
   const none = count === 0
   return (
     <>
-      <DiePicker faces={faces} onPick={(picked) => onChange({ faces: picked, count: Math.max(1, count) })} dim={none} />
+      {none ? null : <DiePicker faces={faces} onPick={(picked) => onChange({ faces: picked })} />}
       <div className="attack-line">
         <Stepper
           className="is-compact"
@@ -522,15 +528,17 @@ function DiceFields({
           downDisabled={count <= minCount}
           upDisabled={count >= MAX_DIE_COUNT}
         />
-        <Stepper
-          className="is-compact"
-          label="Extra dmg"
-          value={formatSigned(bonus)}
-          onDown={() => onChange({ bonus: bonus - 1 })}
-          onUp={() => onChange({ bonus: bonus + 1 })}
-          downDisabled={none || bonus <= -MAX_ATTACK_BONUS}
-          upDisabled={none || bonus >= MAX_ATTACK_BONUS}
-        />
+        {none ? null : (
+          <Stepper
+            className="is-compact"
+            label="Extra dmg"
+            value={formatSigned(bonus)}
+            onDown={() => onChange({ bonus: bonus - 1 })}
+            onUp={() => onChange({ bonus: bonus + 1 })}
+            downDisabled={bonus <= -MAX_ATTACK_BONUS}
+            upDisabled={bonus >= MAX_ATTACK_BONUS}
+          />
+        )}
       </div>
     </>
   )

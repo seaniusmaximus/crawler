@@ -67,7 +67,7 @@ export const MAX_ATTACK_BONUS = 50
 export const MAX_EXTRA_DAMAGE = 3
 export const MIN_SAVE_DC = 1
 export const MAX_SAVE_DC = 30
-export const MAX_SAVE_NOTES = 120
+export const MAX_SAVE_NOTES = 1000
 
 /** A fresh attack: a STR weapon doing 1d6, the most common shape there is. */
 export function newAttack(): Attack {

@@ -4,9 +4,9 @@ import { capitalize, DAMAGE_TYPES } from '../../model/damage.ts'
 import { Icon } from '../../ui/Icon.tsx'
 
 /** The damage die, picked from icons as on the dice tray. */
-export function DiePicker({ faces, onPick, dim = false }: { faces: number; onPick: (faces: number) => void; dim?: boolean }) {
+export function DiePicker({ faces, onPick }: { faces: number; onPick: (faces: number) => void }) {
   return (
-    <div className={`attack-dice${dim ? ' is-dim' : ''}`} role="group" aria-label="Damage die">
+    <div className="attack-dice" role="group" aria-label="Damage die">
       {DAMAGE_FACES.map((face) => (
         <button
           key={face}

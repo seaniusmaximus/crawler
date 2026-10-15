@@ -1,8 +1,9 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MAX_TRAIT_NAME, MAX_TRAIT_TEXT, MAX_TRAITS, newTrait, type Trait } from '../../model/traits.ts'
 import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
+import { NotesToggle, RowNotes } from './RowNotes.tsx'
 
 /**
  * A stat block's traits, written as a stat block does ("Pack Tactics. The wolf
@@ -63,20 +64,45 @@ export function Traits({ player, editable }: { player: Player; editable: boolean
   )
 }
 
+/**
+ * A trait kept to one row: its name over the start of its text. The chevron
+ * opens the whole text, and only shows when the text runs past the row.
+ */
 function TraitNote({ trait, editable, onEdit }: { trait: Trait; editable: boolean; onEdit: () => void }) {
-  const body = (
-    <span className="trait-note-text">
-      {trait.name ? <span className="block-label">{trait.name}.</span> : null}
-      {trait.name && trait.text ? ' ' : null}
-      {trait.text}
-    </span>
-  )
-  if (!editable) return <div className="trait-note">{body}</div>
+  const [open, setOpen] = useState(false)
+  const [clipped, setClipped] = useState(false)
+  const preview = useRef<HTMLSpanElement>(null)
+
+  useLayoutEffect(() => {
+    const element = preview.current
+    if (!element) return
+    const check = () => setClipped(element.scrollWidth > element.clientWidth || trait.text.includes('\n'))
+    check()
+    const observer = new ResizeObserver(check)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [trait.text, open])
+
   return (
-    <button type="button" className="trait-line trait-note" title="Edit trait" onClick={onEdit}>
-      {body}
-      <Icon id="pencil" size={13} />
-    </button>
+    <div className="spell-row">
+      <div className="attack-row">
+        <span className="attack-copy">
+          {trait.name ? <span className="attack-name">{trait.name}</span> : null}
+          {trait.text && !open ? (
+            <span ref={preview} className="attack-sub">
+              {trait.text}
+            </span>
+          ) : null}
+        </span>
+        {trait.text && (clipped || open) ? <NotesToggle open={open} name={trait.name} onToggle={() => setOpen(!open)} /> : null}
+        {editable ? (
+          <button type="button" className="icon-btn" aria-label={`Edit ${trait.name || 'trait'}`} title="Edit trait" onClick={onEdit}>
+            <Icon id="pencil" size={14} />
+          </button>
+        ) : null}
+      </div>
+      {trait.text && open ? <RowNotes text={trait.text} /> : null}
+    </div>
   )
 }
 

@@ -2560,14 +2560,13 @@ a:hover {
 
 /* ---------- Traits (stat block) ---------- */
 
-.trait-note {
-  font-size: 13px;
+/* A row's notes, opened under it; they keep the DM's own line breaks. */
+.row-notes {
+  margin: 0;
+  padding: 0 10px 8px;
+  font-size: 12px;
   line-height: 1.45;
-}
-
-/* Notes keep the DM's own line breaks. */
-.trait-note-text {
-  min-width: 0;
+  color: var(--text-dim);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2617,10 +2616,6 @@ a:hover {
 
 .attack-roll.is-healing {
   color: #a6ddb8;
-}
-
-.attack-dice.is-dim .die-pick:not(.is-active) {
-  opacity: 0.45;
 }
 
 .casting-line {
@@ -2680,12 +2675,21 @@ a:hover {
   color: #f0a29f;
 }
 
-.spell-notes {
-  flex-basis: 100%;
-  min-width: 0;
-  line-height: 1.4;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+/* Uses, type and condition share the line under the spell's name. */
+.spell-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.spell-sub > * {
+  flex: none;
+}
+
+.spell-sub .status-chip {
+  flex: 0 1 auto;
+  padding: 0 6px;
+  font-size: 10px;
 }
 
 .use-pips {
