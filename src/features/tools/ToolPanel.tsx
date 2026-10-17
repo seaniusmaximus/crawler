@@ -1,27 +1,57 @@
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { drawObjectThumb } from '../../canvas/objects.ts'
 import { OBJECTS, objectDef, type ObjectDef } from '../../objects/catalog.ts'
 import { blankObject, copyObject } from '../../objects/custom.ts'
 import { CUSTOM_OBJECTS } from '../objectEditor/ObjectEditor.tsx'
-import type { DoorStyle, Tool } from '../../model/tools.ts'
+import { AREA_COLORS, AREA_MIN_FEET, AREA_SHAPES, canIncludeCaster, LINE_MAX_WIDTH, type AreaShape } from '../../model/marks.ts'
+import { FEET_PER_TILE } from '../../model/scale.ts'
+import { isTableTool, type DoorStyle, type Tool } from '../../model/tools.ts'
 import type { StairsDir } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import { useObjectLibraryStore } from '../../state/objectLibraryStore.ts'
+import { areaOwner, useSessionStore } from '../../state/sessionStore.ts'
 import { roomsWithOwnTileset, TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Icon } from '../../ui/Icon.tsx'
+import { Stepper } from '../../ui/Stepper.tsx'
 
 interface ToolDef {
   id: Tool
   label: string
   shortcut: string
   hint: string
-  options?: 'doors' | 'stairs' | 'link' | 'objects'
+  options?: 'doors' | 'stairs' | 'link' | 'objects' | 'aoe'
   /** Starts a new group, drawn with a rule before it. */
   group?: boolean
 }
 
-const TOOLS: readonly ToolDef[] = [
+/** Tools everyone at the table has, players included. */
+const TABLE_TOOLS: readonly ToolDef[] = [
+  {
+    id: 'measure',
+    label: 'Measure',
+    shortcut: 'M',
+    hint: 'Drag to measure · Right-click while dragging to add a turn · Everyone sees it',
+    group: true,
+  },
+  {
+    id: 'aoe',
+    label: 'Area of effect',
+    shortcut: 'B',
+    hint: 'Drag out a spell area: circles from a grid corner, cubes from the square you press, emanations from a creature (and move with it), cones and lines out of the caster · Right-click an area for its duration, terrain and damage',
+    options: 'aoe',
+  },
+]
+
+/** In player view, Select is just moving tokens and looking around. */
+const PLAYER_SELECT: ToolDef = {
+  id: 'select',
+  label: 'Move',
+  shortcut: 'H',
+  hint: 'Drag a token you control to move it · Drag the map to look around',
+}
+
+const DM_TOOLS: readonly ToolDef[] = [
   { id: 'select', label: 'Select', shortcut: 'H', hint: 'Move rooms and tokens without drawing' },
   { id: 'rooms', label: 'Rooms', shortcut: 'R', hint: 'Drag to paint a room', group: true },
   { id: 'walls', label: 'Walls', shortcut: 'A', hint: 'Drag to add or erase walls' },
@@ -37,7 +67,10 @@ const TOOLS: readonly ToolDef[] = [
     options: 'objects',
     group: true,
   },
+  ...TABLE_TOOLS,
 ]
+
+const PLAYER_TOOLS: readonly ToolDef[] = [PLAYER_SELECT, ...TABLE_TOOLS]
 
 const DOOR_STYLES: ReadonlyArray<{ id: DoorStyle; label: string }> = [
   { id: 'door', label: 'Door' },
@@ -61,19 +94,27 @@ export function ToolPanel() {
   const tool = useEditorStore((state) => state.tool)
   const setTool = useEditorStore((state) => state.setTool)
   const roomsLocked = useEditorStore((state) => state.roomsLocked)
+  const cast = useEditorStore((state) => state.aoeCast)
+  const aoeShape = useEditorStore((state) => state.aoeShape)
 
-  if (viewMode === 'player') return null
+  // Players (and the DM looking as one) get only the tools the whole table has.
+  const playerView = viewMode === 'player'
+  const tools = playerView ? PLAYER_TOOLS : DM_TOOLS
   // "Between rooms" is a setting of the Stairs button; "Merge" one of the Link button.
-  const shown = tool === 'ramp' ? 'stairs' : tool === 'merge' ? 'link' : tool
-  const active = TOOLS.find((item) => item.id === shown)
+  // A DM tool left in hand does nothing in player view, where it is plain moving.
+  const shown =
+    playerView && !isTableTool(tool) ? 'select' : tool === 'ramp' ? 'stairs' : tool === 'merge' ? 'link' : tool
+  const active = tools.find((item) => item.id === shown)
   const hint =
     tool === 'ramp'
       ? BETWEEN_HINT
       : tool === 'merge'
         ? MERGE_HINT
-        : tool === 'select' && roomsLocked
+        : shown === 'select' && roomsLocked && !playerView
           ? 'Move tokens without drawing · rooms are locked in place'
-          : active?.hint
+          : tool === 'aoe' && cast
+            ? `Casting ${cast.name}: ${aoeShape === 'circle' ? 'click where it centres' : 'point the way it goes, then click'} · Esc cancels`
+            : active?.hint
 
   return (
     <div className="tool-dock">
@@ -83,7 +124,7 @@ export function ToolPanel() {
         </p>
       ) : null}
       <div className="panel tools scroll-h" role="toolbar" aria-label="Tools">
-        {TOOLS.map((item) => (
+        {tools.map((item) => (
           <Fragment key={item.id}>
             {item.group ? <span className="tool-rule" aria-hidden /> : null}
             <div className="tool-block">
@@ -101,12 +142,17 @@ export function ToolPanel() {
               {item.options === 'stairs' ? <StairsOptions /> : null}
               {item.options === 'link' ? <LinkOptions /> : null}
               {item.options === 'objects' ? <ObjectOptions /> : null}
+              {item.options === 'aoe' ? <AreaOptions /> : null}
             </div>
           </Fragment>
         ))}
-        <span className="tool-rule" aria-hidden />
-        <MovementLock />
-        <TilesetSelect />
+        {playerView ? null : (
+          <>
+            <span className="tool-rule" aria-hidden />
+            <MovementLock />
+            <TilesetSelect />
+          </>
+        )}
       </div>
     </div>
   )
@@ -246,6 +292,135 @@ function LinkOptions() {
         </li>
       ))}
     </ul>
+  )
+}
+
+/** The little picture under each shape's name. */
+const AREA_ICONS: Record<AreaShape, string> = {
+  circle: 'areaCircle',
+  emanation: 'areaEmanation',
+  cone: 'areaCone',
+  line: 'areaLine',
+  square: 'areaCube',
+}
+
+/**
+ * How the next spell area is laid down: its shape, a line's width, whether a
+ * cube or emanation takes in its caster, and its colour; dragging on the map
+ * sizes it. Areas already down stay as they are, until taken away here or with a
+ * right-click on them.
+ */
+function AreaOptions() {
+  const shape = useEditorStore((state) => state.aoeShape)
+  const width = useEditorStore((state) => state.aoeWidth)
+  const includeSelf = useEditorStore((state) => state.aoeIncludeSelf)
+  const color = useEditorStore((state) => state.aoeColor)
+  const tool = useEditorStore((state) => state.tool)
+  const hidden = useEditorStore((state) => state.aoeHidden)
+  const { setAoeShape, setAoeWidth, setAoeIncludeSelf, setAoeColor, setAoeHidden } = useEditorStore.getState()
+  const areas = useDungeonStore((state) => state.dungeon.areas)
+  // Whose areas are whose follows the seat, so this redraws when that changes.
+  const dm = useSessionStore((state) => state.role !== 'guest')
+  useSessionStore((state) => state.myPlayerId)
+  const owner = areaOwner()
+  const mine = (areas ?? []).filter((area) => area.owner === owner).map((area) => area.id)
+  const all = (areas ?? []).map((area) => area.id)
+
+  return (
+    <div className="tool-options area-picker" aria-label="Area of effect">
+      <ul className="area-shapes" aria-label="Shape">
+        {AREA_SHAPES.map((option) => {
+          const active = tool === 'aoe' && option.id === shape
+          return (
+            <li key={option.id}>
+              <button
+                type="button"
+                className={`tool-option area-shape${active ? ' is-active' : ''}`}
+                onClick={() => setAoeShape(option.id)}
+                aria-pressed={active}
+                title={option.title}
+              >
+                <span>{option.label}</span>
+                <Icon id={AREA_ICONS[option.id]} size={18} />
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      {shape === 'line' ? (
+        <Stepper
+          className="is-compact"
+          label="Width"
+          value={`${width} ft`}
+          onDown={() => setAoeWidth(width - 2 * FEET_PER_TILE)}
+          onUp={() => setAoeWidth(width + 2 * FEET_PER_TILE)}
+          downDisabled={width <= AREA_MIN_FEET}
+          upDisabled={width >= LINE_MAX_WIDTH}
+        />
+      ) : null}
+      {canIncludeCaster(shape) ? (
+        <button
+          type="button"
+          className={`tool-option area-self${includeSelf ? ' is-active' : ''}`}
+          onClick={() => setAoeIncludeSelf(!includeSelf)}
+          aria-pressed={includeSelf}
+          title={
+            shape === 'emanation'
+              ? 'Whether the creature it comes from is in its own emanation'
+              : "Whether the cube is drawn back over the caster's own square"
+          }
+        >
+          {includeSelf ? 'Includes caster' : 'Leaves out caster'}
+        </button>
+      ) : null}
+      <ul className="area-colors" aria-label="Colour">
+        {AREA_COLORS.map((option) => (
+          <li key={option.id}>
+            <button
+              type="button"
+              className={`area-color${option.id === color ? ' is-active' : ''}`}
+              style={{ '--swatch': `rgb(${option.rgb})` } as CSSProperties}
+              onClick={() => setAoeColor(option.id)}
+              aria-pressed={option.id === color}
+              aria-label={option.label}
+              title={option.label}
+            />
+          </li>
+        ))}
+      </ul>
+      {dm ? (
+        <button
+          type="button"
+          className={`tool-option area-self${hidden ? ' is-active' : ''}`}
+          onClick={() => setAoeHidden(!hidden)}
+          aria-pressed={hidden}
+          title="Lay areas down hidden from players (traps): only you see them, and they still go off"
+        >
+          <Icon id={hidden ? 'eyeOff' : 'eye'} size={14} />
+          {hidden ? 'Hidden' : 'Shown'}
+        </button>
+      ) : null}
+      {mine.length > 0 ? (
+        <button
+          type="button"
+          className="gold-btn"
+          onClick={() => useSessionStore.getState().removeAreas(mine)}
+          title="Take every area you laid down off the map · Right-click one to take just that one"
+        >
+          Clear mine ({mine.length})
+        </button>
+      ) : null}
+      {dm && all.length > mine.length ? (
+        <button
+          type="button"
+          className="gold-btn"
+          onClick={() => useSessionStore.getState().removeAreas(all)}
+          title="Take every area off the map, the players' too"
+        >
+          Clear all ({all.length})
+        </button>
+      ) : null}
+    </div>
   )
 }
 

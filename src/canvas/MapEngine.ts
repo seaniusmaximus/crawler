@@ -1,8 +1,23 @@
-import { turnTokenIds } from '../model/combat.ts'
+import { moveBudget, turnTokenIds, type MoveBudget } from '../model/combat.ts'
+import { reachableCells } from '../model/reach.ts'
+import { areaSide, stepCost } from '../model/areaEffects.ts'
+import { dashPillAt, hitDashPill, type DashPill } from './dashPill.ts'
+import { INSTANT_AREA_MS, rollCast } from '../features/areas/castRolls.ts'
 import { sameLink } from '../model/links.ts'
 import { normalizeRect, rectContains, resizeRect, topmostRoomAt, translateRect } from '../model/rect.ts'
-import { featureAt, isFeatureTool, pendingFeature, stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
+import { featureAt, isFeatureTool, isTableTool, pendingFeature, stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import type { FeatureDraft, FeatureTool, Tool } from '../model/tools.ts'
+import {
+  areaCells,
+  emanationFromDrag,
+  PING_MS,
+  placedArea,
+  sizeFromDrag,
+  snapAreaOrigin,
+  type AreaMark,
+  type AreaSide,
+  type PlacedArea,
+} from '../model/marks.ts'
 import { pathFeet, tokenTrail } from '../model/movement.ts'
 import { stairsEnteredOnPath, stairExits } from '../model/stairs.ts'
 import { travelPose } from '../model/travel.ts'
@@ -19,7 +34,8 @@ import { floorSight, nextShownFloor, realOpening, shownRooms, tokenSeen, unseenT
 import type { Cell, CellRect, Edge, Floor, Link, Player, Room } from '../model/types.ts'
 import { useDungeonStore } from '../state/dungeonStore.ts'
 import { useEditorStore } from '../state/editorStore.ts'
-import { canControlPlayer, useSessionStore } from '../state/sessionStore.ts'
+import { floorMarks, useMarkStore } from '../state/markStore.ts'
+import { areaOwner, canControlPlayer, canRemoveArea, useSessionStore } from '../state/sessionStore.ts'
 import { remoteTravelAnimating, useTravelStore, type RemoteTravel } from '../state/travelStore.ts'
 import type { FocusRequest, ObjectRef } from '../state/editorStore.ts'
 import { canPlaceObject, liesOnFloor, objectFootprint, objectHover, turnedSize } from '../model/objects.ts'
@@ -38,6 +54,7 @@ import {
   panBy,
   screenToCell,
   screenToCellAt,
+  screenToGridAt,
   zoomAt,
 } from './camera.ts'
 import { drawOverlays, type DrawView } from './draw.ts'
@@ -53,6 +70,8 @@ import {
   hitRoom,
   hitToken,
   pickTokenAnchor,
+  playerTokenCenterAt,
+  tokenStandee,
 } from './pick.ts'
 
 const DRAG_THRESHOLD = 4
@@ -70,9 +89,44 @@ const TOOL_KEYS: Record<string, Tool> = {
   KeyA: 'walls',
   KeyL: 'link',
   KeyO: 'objects',
+  KeyM: 'measure',
+  KeyB: 'aoe',
 }
 
-type PointerMode = 'paint' | 'pan' | 'move' | 'resize' | 'feature' | 'link' | 'pick' | 'ramp' | 'token' | 'object'
+type PointerMode =
+  | 'paint'
+  | 'pan'
+  | 'move'
+  | 'resize'
+  | 'feature'
+  | 'link'
+  | 'pick'
+  | 'ramp'
+  | 'token'
+  | 'object'
+  | 'measure'
+  | 'area'
+
+/** A ruler being dragged: where it started, the turns pinned on the way, and where the pointer is. */
+interface RulerDrag {
+  floorId: string
+  pins: Cell[]
+  live: Cell
+}
+
+/** A spell area being laid down: pressed at its origin, dragged to aim. */
+interface AreaDrag {
+  origin: { x: number; y: number }
+  elevation: number
+  /** An emanation's creature. */
+  token: AreaToken | null
+}
+
+/** The creature an emanation comes from: its token, and its squares a side. */
+interface AreaToken {
+  id: string
+  size: number
+}
 
 /** A placed object being dragged, and where in its footprint it was grabbed. */
 interface ObjectDrag {
@@ -116,7 +170,12 @@ interface PointerSession {
   startRect: CellRect | null
   edge: Edge | null
   moved: boolean
+  /** Held long enough to ping: letting go does nothing else. */
+  pinged?: boolean
 }
+
+/** How long a press must be held still to ping the square under it. */
+const PING_HOLD_MS = 500
 
 function singleCell(x: number, y: number): CellRect {
   return { minX: x, minY: y, maxX: x, maxY: y }
@@ -170,6 +229,18 @@ export class MapEngine {
   private objectSpot: { roomId: string; x: number; y: number } | null = null
   /** With the Objects tool: the placed object under the pointer. */
   private hoverObject: ObjectRef | null = null
+  private rulerDrag: RulerDrag | null = null
+  private areaDrag: AreaDrag | null = null
+  /** With the area tool: where the area would go, under the pointer, before pressing. */
+  private areaHover: AreaMark | null = null
+  /** Which way the last area was aimed, so the next one starts the same way. */
+  private areaAngle = 0
+  /** Dash buttons beside tokens out of movement this turn, as last drawn. */
+  private dashes: DashPill[] = []
+  /** Waits out a held press, to ping when it is held long enough. */
+  private pingTimer = 0
+  /** The squares last worked out as in reach, kept while nothing they depend on changes. */
+  private reachCache: { key: string; rooms: readonly Room[]; areas: unknown; cells: Cell[] } | null = null
   private travelFinishing = false
   private portraits = new Map<string, HTMLImageElement>()
   private hoverLink: Link | null = null
@@ -242,10 +313,24 @@ export class MapEngine {
         this.syncTileset(state.dungeon.tileset)
         this.syncRoomTilesets(state.dungeon.floors)
         this.markDirty()
+        // A player's area just laid down: once the DM's map has it, its live copy steps aside.
+        const live = useMarkStore.getState().mine.area
+        if (live?.id && state.dungeon.areas?.some((area) => area.id === live.id)) {
+          useSessionStore.getState().reportMark('area', null)
+        }
       }),
       useTravelStore.subscribe(() => this.markDirty()),
+      useMarkStore.subscribe(() => this.markDirty()),
       useEditorStore.subscribe((state, prev) => {
         this.markDirty()
+        // A ruler is only out while the Measure tool is in hand.
+        if (prev.tool === 'measure' && state.tool !== 'measure') this.dropRuler()
+        if (state.tool !== 'aoe') this.areaHover = null
+        else if (this.areaHover) {
+          const hover = this.areaHover
+          const token = hover.playerId ? { id: hover.playerId, size: hover.tokenSize ?? 1 } : null
+          this.areaHover = this.areaMark(hover.origin, hover.floorId, token)
+        }
         if (state.viewMode !== prev.viewMode && !this.session) this.applyCursor(null)
         if (state.focus && state.focus.nonce !== this.lastFocusNonce) {
           this.lastFocusNonce = state.focus.nonce
@@ -321,6 +406,12 @@ export class MapEngine {
     const remote = useTravelStore.getState().remote
     const now = Date.now()
     if (remoteTravelAnimating(remote, now)) this.dirty = true
+    // Pings pulse until they fade, then go.
+    const marks = useMarkStore.getState()
+    if (marks.pings.length) {
+      marks.prunePings(performance.now())
+      this.dirty = true
+    }
     if (Object.values(remote).some((item) => item.endedAt !== null)) {
       useTravelStore.getState().settle(dungeon.players ?? [], now)
     }
@@ -351,6 +442,13 @@ export class MapEngine {
       ghosts: this.ghostTokens(players),
       tokenPoses: this.liveTokenPoses(dungeon.travel, players),
       turnIds: turnTokenIds(dungeon.players ?? [], dungeon.combat?.turnPlayerId ?? null),
+      moveBudgets: this.moveBudgets(players),
+      dashPills: (this.dashes = this.dashPills(players)),
+      reach: this.reach(players),
+      pings: useMarkStore
+        .getState()
+        .pings.filter((ping) => ping.floorId === floor.id)
+        .map((ping) => ({ ...ping, age: (performance.now() - ping.at) / PING_MS })),
       badges: this.badges(),
       hoverLink: this.hoverLink,
       viewMode: editor.viewMode,
@@ -360,6 +458,15 @@ export class MapEngine {
       notice: this.notice?.floorId === floor.id ? this.notice : null,
       objectDraft: editor.tool === 'objects' && editor.viewMode !== 'player' ? this.objectDraft() : null,
       objectFocus: editor.viewMode === 'player' ? [] : this.objectFocus(floor.rooms),
+      marks: floorMarks(floor.id),
+      // Emanations go wherever their creature is; the drawing finds it.
+      // Players never see the DM's hidden areas.
+      placedAreas: (dungeon.areas ?? []).filter(
+        (area) =>
+          (area.floorId === floor.id || area.shape === 'emanation') && !(area.hidden && editor.viewMode === 'player'),
+      ),
+      round: dungeon.combat?.round,
+      areaPreview: this.session ? null : this.areaHover,
       tileCache: this.tiles,
       tilesFor: this.tilesFor,
     }
@@ -601,9 +708,21 @@ export class MapEngine {
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0 && event.button !== 1 && event.button !== 2) return
 
-    // Right-click while dragging a token pins a turn without ending the drag.
-    if (event.button === 2 && this.session?.mode === 'token') {
-      this.pinTokenWaypoint()
+    // A Dash button beside a token out of movement takes the action, and the press goes no further.
+    if (event.button === 0 && !this.session) {
+      const at = this.eventPoint(event)
+      const pill = hitDashPill(this.dashes, at.x, at.y)
+      if (pill) {
+        useSessionStore.getState().reportDash(pill.playerId, true)
+        useEditorStore.getState().closeMenu()
+        event.preventDefault()
+        return
+      }
+    }
+
+    // Right-click while dragging a token or a ruler pins a turn without ending the drag.
+    if (event.button === 2 && (this.session?.mode === 'token' || this.session?.mode === 'measure')) {
+      this.pinWaypoint()
       event.preventDefault()
       return
     }
@@ -624,8 +743,11 @@ export class MapEngine {
     const cell = this.cellAt(point.x, point.y, hit ?? null)
     const tool = editor.tool
     const playerView = editor.viewMode === 'player'
+    // The ruler and area tools work the same in either view, and win over tokens: measuring starts on them.
+    const marking =
+      event.button === 0 && !this.spaceDown && !event.altKey && (tool === 'measure' || tool === 'aoe')
     const pan =
-      playerView ||
+      (playerView && !marking) ||
       event.button === 1 ||
       event.button === 2 ||
       (event.button === 0 && (this.spaceDown || event.altKey))
@@ -636,18 +758,19 @@ export class MapEngine {
     let edge: Edge | null = null
 
     // Tokens sit on the map; grabbing one wins over drawing tools.
-    const badge = pan || playerView ? null : hitLinkBadge(this.badges(), point.x, point.y)
+    const badge = pan || playerView || marking ? null : hitLinkBadge(this.badges(), point.x, point.y)
     const floor = getActiveFloor()
     const dungeon = useDungeonStore.getState().dungeon
     const travel = dungeon.travel
     const players = this.visiblePlayers(dungeon.players ?? [], floor.id)
     let token =
-      event.button !== 0 || badge || this.spaceDown || event.altKey || travel?.phase === 'playing'
+      marking || event.button !== 0 || badge || this.spaceDown || event.altKey || travel?.phase === 'playing'
         ? undefined
         : hitToken(players, floor.id, rooms, floor.ramps ?? [], point.x, point.y, editor.camera)
     let fromGhost = false
     if (
       !token &&
+      !marking &&
       travel?.phase === 'preview' &&
       travel.floorId === floor.id &&
       event.button === 0 &&
@@ -674,7 +797,33 @@ export class MapEngine {
         fromGhost = true
       }
     }
-    if (badge) {
+    if (marking && tool === 'measure') {
+      mode = 'measure'
+      const start = this.rulerCell(point.x, point.y)
+      this.rulerDrag = { floorId: floor.id, pins: [start], live: start }
+      this.publishRuler()
+    } else if (marking) {
+      const at = this.gridPoint(point.x, point.y)
+      // A spell cast from a sheet comes out of its caster, wherever the press lands; it only aims.
+      const cast = this.castOrigin()
+      if (cast) this.aimFrom(cast.origin, at)
+      // An emanation comes from a creature: pressed anywhere else, the drag just pans.
+      const caster = editor.aoeShape === 'emanation' ? this.tokenUnder(point.x, point.y) : null
+      const area = cast
+        ? this.areaMark(cast.origin, floor.id)
+        : editor.aoeShape === 'emanation'
+          ? caster && this.areaMark({ x: caster.x, y: caster.y }, floor.id, { id: caster.id, size: playerSize(caster) })
+          : this.areaMark(at, floor.id)
+      if (area) {
+        mode = 'area'
+        const token = caster ? { id: caster.id, size: playerSize(caster) } : null
+        this.areaDrag = { origin: area.origin, elevation: cast?.elevation ?? at.elevation, token }
+        this.areaHover = null
+        useSessionStore.getState().reportMark('area', area)
+      } else {
+        mode = 'pan'
+      }
+    } else if (badge) {
       mode = 'link'
     } else if (token && canControlPlayer(token.id)) {
       mode = 'token'
@@ -770,6 +919,12 @@ export class MapEngine {
       edge,
       moved: false,
     }
+    // Held still for a moment, a press pings the square instead: anywhere a click would pan, move or pick up.
+    window.clearTimeout(this.pingTimer)
+    if (event.button === 0 && (mode === 'pan' || mode === 'move' || mode === 'token')) {
+      const pointerId = event.pointerId
+      this.pingTimer = window.setTimeout(() => this.holdPing(pointerId), PING_HOLD_MS)
+    }
     try {
       this.canvas.setPointerCapture(event.pointerId)
     } catch {
@@ -795,6 +950,30 @@ export class MapEngine {
     if (session.mode === 'pan' && session.moved) {
       const store = useEditorStore.getState()
       store.setCamera(panBy(store.camera, point.x - session.lastX, point.y - session.lastY))
+    }
+
+    if (session.mode === 'measure' && this.rulerDrag) {
+      const cell = this.rulerCell(point.x, point.y)
+      if (cell.x !== this.rulerDrag.live.x || cell.y !== this.rulerDrag.live.y) {
+        this.rulerDrag = { ...this.rulerDrag, live: cell }
+        this.publishRuler()
+      }
+    }
+
+    if (session.mode === 'area' && this.areaDrag && session.moved) {
+      // The drag sizes the area: out from its centre, or along the way a cone or line points.
+      const drag = this.areaDrag
+      const editor = useEditorStore.getState()
+      const at = screenToGridAt(point.x, point.y, editor.camera, drag.elevation)
+      const size = drag.token
+        ? { feet: emanationFromDrag(drag.origin, drag.token.size, at), angle: null }
+        : sizeFromDrag(editor.aoeShape, drag.origin, at)
+      // Too near the origin to say which way it points: keep the last aim.
+      if (size.angle !== null) this.areaAngle = size.angle
+      // Remembered, so a plain click next time lays down the same size. A spell's own size stays put.
+      if (size.feet !== editor.aoeFeet && !editor.aoeCast) editor.setAoeFeet(size.feet)
+      const area = this.areaMark(drag.origin, getActiveFloor().id, drag.token)
+      if (area) useSessionStore.getState().reportMark('area', area)
     }
 
     if (session.mode === 'pick' && session.moved) {
@@ -899,21 +1078,34 @@ export class MapEngine {
   private onPointerUp = (event: PointerEvent): void => {
     const session = this.session
     if (!session || session.id !== event.pointerId) return
-    if (session.mode === 'token' && event.button === 2) {
+    if ((session.mode === 'token' || session.mode === 'measure') && event.button === 2) {
       event.preventDefault()
       return
     }
     this.session = null
+    window.clearTimeout(this.pingTimer)
     try {
       this.canvas.releasePointerCapture(event.pointerId)
     } catch {
       // capture already released
+    }
+    if (session.pinged) {
+      // The press was a ping; nothing it began (a door, a walk) goes ahead.
+      endGesture()
+      this.updateHover(session.lastX, session.lastY)
+      this.markDirty()
+      return
     }
 
     if (session.mode === 'paint') this.finishPaint(session)
     if (session.mode === 'feature') this.commitFeature()
     if (session.mode === 'ramp') this.commitRamp()
     if (session.mode === 'token') this.commitToken(session.moved)
+    // The ruler stays out after letting go; a click without a drag puts it away.
+    if (session.mode === 'measure' && !session.moved && this.rulerDrag?.pins.length === 1) this.dropRuler()
+    if (session.mode === 'area') this.commitArea()
+    this.rulerDrag = null
+    this.areaDrag = null
     if (session.mode === 'object') this.finishObject(session)
     if (session.mode === 'link' && session.link && !session.moved) {
       useDungeonStore.getState().unlinkRooms(getActiveFloor().id, session.link)
@@ -926,7 +1118,10 @@ export class MapEngine {
       }
     }
     if (session.mode === 'pan' && !session.moved && event.button === 2) {
-      this.openContextMenu(session, event)
+      // With the area tool, a right-click on an area opens its settings; anywhere else it is the usual menu.
+      const area = useEditorStore.getState().tool === 'aoe' ? this.areaAt(session.startX, session.startY) : undefined
+      if (area) useEditorStore.getState().openMenu({ kind: 'area', areaId: area.id, x: event.clientX, y: event.clientY })
+      else this.openContextMenu(session, event)
     }
     if (event.button === 2) event.preventDefault()
     endGesture()
@@ -940,6 +1135,7 @@ export class MapEngine {
     if (this.session) return
     this.objectSpot = null
     this.hoverObject = null
+    this.areaHover = null
     this.hoverCell = null
     this.hoverFeature = null
     this.hoverRamp = null
@@ -1043,6 +1239,19 @@ export class MapEngine {
     if (travel?.phase === 'preview' && travel.playerId === drag.id) this.playCurrentTravel()
   }
 
+  /** Right-click mid-drag: a turn in the token's path or in the ruler. */
+  private pinWaypoint(): void {
+    const ruler = this.rulerDrag
+    if (this.session?.mode === 'measure' && ruler) {
+      const last = ruler.pins[ruler.pins.length - 1]
+      if (last && last.x === ruler.live.x && last.y === ruler.live.y) return
+      this.rulerDrag = { ...ruler, pins: [...ruler.pins, ruler.live] }
+      this.publishRuler()
+      return
+    }
+    this.pinTokenWaypoint()
+  }
+
   private pinTokenWaypoint(): void {
     const drag = this.tokenDrag
     if (!drag) return
@@ -1066,7 +1275,7 @@ export class MapEngine {
       cells,
       ghostX: drag.x,
       ghostY: drag.y,
-      feet: pathFeet(cells),
+      feet: pathFeet(cells, this.stepCost(drag.id, drag.floorId)),
       phase: 'preview',
       playAt: null,
       seq: 0,
@@ -1097,7 +1306,7 @@ export class MapEngine {
     this.travelFinishing = true
     if (!canControlPlayer(travel.playerId)) return
     useDungeonStore.getState().finishTravel()
-    useSessionStore.getState().reportMove(travel.playerId, travel.floorId, travel.ghostX, travel.ghostY)
+    useSessionStore.getState().reportMove(travel.playerId, travel.floorId, travel.ghostX, travel.ghostY, travel.feet)
     useSessionStore.getState().reportTravel(null)
     this.offerStairs(travel)
   }
@@ -1124,7 +1333,7 @@ export class MapEngine {
     if (drag) {
       const cells = tokenTrail(drag.origin, drag.waypoints, { x: drag.x, y: drag.y })
       if (cells.length >= 2) {
-        return { playerId: drag.id, cells, feet: pathFeet(cells) }
+        return { playerId: drag.id, cells, feet: pathFeet(cells, this.stepCost(drag.id, drag.floorId)) }
       }
     }
     const travel = useDungeonStore.getState().dungeon.travel
@@ -1235,6 +1444,272 @@ export class MapEngine {
       img.src = player.portrait
       this.portraits.set(player.portrait, img)
     }
+  }
+
+  /**
+   * The cell a ruler end sits on: a token's own square when pointing at one (its
+   * standee rises above it), else the floor under the pointer.
+   */
+  private rulerCell(sx: number, sy: number): Cell {
+    const floor = getActiveFloor()
+    const token = hitToken(
+      this.visiblePlayers(useDungeonStore.getState().dungeon.players ?? [], floor.id),
+      floor.id,
+      this.viewRooms(),
+      floor.ramps ?? [],
+      sx,
+      sy,
+      useEditorStore.getState().camera,
+    )
+    if (token) {
+      const mid = playerCenter(token.x, token.y, playerSize(token))
+      return { x: Math.round(mid.x), y: Math.round(mid.y) }
+    }
+    const cell = this.cellAt(sx, sy, this.roomAt(sx, sy) ?? null)
+    return { x: cell.x, y: cell.y }
+  }
+
+  private publishRuler(): void {
+    const drag = this.rulerDrag
+    if (!drag) return
+    const points = tokenTrail(drag.pins[0] ?? drag.live, drag.pins.slice(1), drag.live)
+    useSessionStore.getState().reportMark('ruler', { kind: 'ruler', floorId: drag.floorId, points })
+  }
+
+  private dropRuler(): void {
+    this.rulerDrag = null
+    if (useMarkStore.getState().mine.ruler) useSessionStore.getState().reportMark('ruler', null)
+  }
+
+  /** The grid point under the pointer, read on the floor of the room it is over. */
+  private gridPoint(sx: number, sy: number): { x: number; y: number; elevation: number } {
+    const elevation = this.roomAt(sx, sy)?.elevation ?? 0
+    const at = screenToGridAt(sx, sy, useEditorStore.getState().camera, elevation)
+    return { ...at, elevation }
+  }
+
+  /**
+   * The area the tool lays down at `origin`, in its current shape, size and aim.
+   * An emanation needs its creature (`origin` is then its top-left square), and
+   * without one there is nothing to lay down.
+   */
+  private areaMark(origin: { x: number; y: number }, floorId: string, token: AreaToken | null = null): AreaMark | null {
+    const editor = useEditorStore.getState()
+    const area: AreaMark = {
+      kind: 'area',
+      floorId,
+      shape: editor.aoeShape,
+      feet: editor.aoeFeet,
+      width: editor.aoeWidth,
+      origin: snapAreaOrigin(editor.aoeShape, origin),
+      angle: this.areaAngle,
+      color: editor.aoeColor,
+      ...editor.aoeCast?.effects,
+      // A spell cast from a sheet is on its caster's side.
+      ...(editor.aoeCast ? { side: this.castSide(editor.aoeCast.playerId) } : {}),
+      // Only the DM hides areas.
+      ...(editor.aoeHidden && useSessionStore.getState().role !== 'guest' ? { hidden: true } : {}),
+    }
+    // A cube out of its caster leaves them out; one laid down anywhere takes in the square it starts on.
+    if (editor.aoeShape === 'square') return { ...area, includeSelf: !this.castOrigin() }
+    if (editor.aoeShape !== 'emanation') return area
+    if (!token) return null
+    return { ...area, playerId: token.id, tokenSize: token.size, includeSelf: editor.aoeIncludeSelf }
+  }
+
+  /** Where the area would land if the pointer pressed here: an emanation only shows over a creature. */
+  private hoverArea(sx: number, sy: number): AreaMark | null {
+    const floorId = getActiveFloor().id
+    // A spell cast from a sheet shows coming out of its caster, aimed at the pointer.
+    const cast = this.castOrigin()
+    if (cast) {
+      this.aimFrom(cast.origin, this.gridPoint(sx, sy))
+      return this.areaMark(cast.origin, floorId)
+    }
+    if (useEditorStore.getState().aoeShape !== 'emanation') return this.areaMark(this.gridPoint(sx, sy), floorId)
+    const caster = this.tokenUnder(sx, sy)
+    return caster ? this.areaMark({ x: caster.x, y: caster.y }, floorId, { id: caster.id, size: playerSize(caster) }) : null
+  }
+
+  /**
+   * Letting go of an area lays it down on the map for good. The DM's lands at
+   * once; a player's live copy keeps showing until the DM's map sends it back.
+   */
+  private commitArea(): void {
+    const live = useMarkStore.getState().mine.area
+    if (!live) return
+    const id = crypto.randomUUID()
+    const session = useSessionStore.getState()
+    const cast = useEditorStore.getState().aoeCast
+    session.placeArea({ ...live, id })
+    session.reportMark('area', session.role === 'guest' ? { ...live, id } : null)
+    if (cast) {
+      // The spell goes off on whoever it catches that the caster can see.
+      if (cast.onCast) {
+        const floor = getActiveFloor()
+        const seen = this.visiblePlayers(useDungeonStore.getState().dungeon.players ?? [], floor.id)
+        rollCast({ ...live, id }, cast.onCast, seen)
+      }
+      if (cast.instant) window.setTimeout(() => useSessionStore.getState().removeAreas([id]), INSTANT_AREA_MS)
+      // A spell cast from a sheet is cast once; the area tool is put down again.
+      useEditorStore.getState().setTool('select')
+    }
+  }
+
+  /**
+   * Where a spell cast from a sheet starts: the middle of its caster's square
+   * (a big creature's middle square), for the shapes that come out of the caster.
+   * Null when nothing is being cast that way, or the caster isn't on this floor.
+   */
+  private castOrigin(): { origin: { x: number; y: number }; elevation: number } | null {
+    const editor = useEditorStore.getState()
+    const cast = editor.aoeCast
+    // Cones and lines come out of the caster; a cube only when its spell says so, else it lands in range.
+    const fromCaster =
+      editor.aoeShape === 'cone' || editor.aoeShape === 'line' || (editor.aoeShape === 'square' && cast?.fromCaster)
+    if (!cast || !fromCaster) return null
+    const floor = getActiveFloor()
+    const caster = this.visiblePlayers(useDungeonStore.getState().dungeon.players ?? [], floor.id).find(
+      (player) => player.id === cast.playerId,
+    )
+    if (!caster) return null
+    const middle = Math.floor((playerSize(caster) - 1) / 2)
+    const x = caster.x + middle
+    const y = caster.y + middle
+    return { origin: { x: x + 0.5, y: y + 0.5 }, elevation: cellElevation(floor.rooms, floor.ramps ?? [], x, y) }
+  }
+
+  /** The side of a spell cast from a sheet: the monsters' for a monster's, else the party's. */
+  private castSide(playerId: string): AreaSide {
+    const caster = (useDungeonStore.getState().dungeon.players ?? []).find((player) => player.id === playerId)
+    return areaSide(caster, areaOwner())
+  }
+
+  /** Aim the area from `origin` toward grid point `at` (a cone only straight or diagonally). */
+  private aimFrom(origin: { x: number; y: number }, at: { x: number; y: number }): void {
+    const aim = sizeFromDrag(useEditorStore.getState().aoeShape, origin, at).angle
+    if (aim !== null) this.areaAngle = aim
+  }
+
+  /**
+   * A press held still long enough pings the square under it (a token's own
+   * square when it was on one), and what the press began is let go.
+   */
+  private holdPing(pointerId: number): void {
+    const session = this.session
+    if (!session || session.id !== pointerId || session.moved) return
+    const drag = this.tokenDrag
+    const cell = drag
+      ? { x: drag.x, y: drag.y }
+      : this.cellAt(session.startX, session.startY, this.roomAt(session.startX, session.startY) ?? null)
+    useSessionStore.getState().reportPing(getActiveFloor().id, cell.x, cell.y)
+    session.pinged = true
+    // Dragging on from here just looks around.
+    session.mode = 'pan'
+    this.tokenDrag = null
+    this.applyCursor('grabbing')
+  }
+
+  /**
+   * A Dash button beside each token acting this turn that this tab runs (its
+   * player, or the DM), once it has used all its movement and hasn't dashed yet.
+   * Not while it walks.
+   */
+  private dashPills(players: readonly Player[]): DashPill[] {
+    const dungeon = useDungeonStore.getState().dungeon
+    const { camera } = useEditorStore.getState()
+    const floor = getActiveFloor()
+    const walking = new Set(this.liveTokenPoses(dungeon.travel, players).map((pose) => pose.playerId))
+    const pills: DashPill[] = []
+    for (const player of players) {
+      if (walking.has(player.id) || !canControlPlayer(player.id)) continue
+      const budget = moveBudget(player, dungeon.players ?? [], dungeon.combat)
+      if (!budget || budget.dashed || budget.used < budget.total) continue
+      const at = playerTokenCenterAt(player, player.x, player.y, floor.rooms, floor.ramps ?? [], camera)
+      pills.push(dashPillAt(player.id, at.x, at.y, tokenStandee(camera, playerSize(player)).rx))
+    }
+    return pills
+  }
+
+  /**
+   * What a step onto each square costs a token on `floorId`: double in difficult
+   * terrain players can see, unless it flies. Undefined when every step is plain.
+   */
+  private stepCost(playerId: string, floorId: string): ((cell: Cell) => number) | undefined {
+    const dungeon = useDungeonStore.getState().dungeon
+    const players = dungeon.players ?? []
+    return stepCost(dungeon.areas ?? [], players, floorId, players.find((player) => player.id === playerId))
+  }
+
+  /**
+   * How far each token acting this turn may still move, for the feet on its path.
+   * Only tokens this view shows.
+   */
+  private moveBudgets(players: readonly Player[]): Map<string, MoveBudget> {
+    const dungeon = useDungeonStore.getState().dungeon
+    const budgets = new Map<string, MoveBudget>()
+    for (const player of players) {
+      const budget = moveBudget(player, dungeon.players ?? [], dungeon.combat)
+      if (budget) budgets.set(player.id, budget)
+    }
+    return budgets
+  }
+
+  /**
+   * The squares the token in hand (picked up, or selected) can still reach this
+   * turn: only on its turn, only for whoever runs it, and not while it walks.
+   */
+  private reach(players: readonly Player[]): Cell[] | null {
+    const editor = useEditorStore.getState()
+    const dungeon = useDungeonStore.getState().dungeon
+    const id = this.tokenDrag?.id ?? editor.selectedPlayerId
+    const token = id ? players.find((player) => player.id === id) : undefined
+    if (!token || !canControlPlayer(token.id) || dungeon.travel?.phase === 'playing') return null
+    const budget = moveBudget(token, dungeon.players ?? [], dungeon.combat)
+    const left = budget ? budget.total - budget.used : 0
+    if (!budget || left < 5) return null
+    const rooms = this.viewRooms()
+    const ramps = getActiveFloor().ramps ?? []
+    const key = [token.id, token.x, token.y, playerSize(token), playerHover(token), left, editor.viewMode].join('|')
+    const cached = this.reachCache
+    if (cached && cached.key === key && cached.rooms === getActiveFloor().rooms && cached.areas === dungeon.areas) {
+      return cached.cells
+    }
+    const cost = this.stepCost(token.id, token.floorId)
+    const cells = reachableCells(rooms, ramps, { x: token.x, y: token.y }, playerSize(token), left, cost)
+    this.reachCache = { key, rooms: getActiveFloor().rooms, areas: dungeon.areas, cells }
+    return cells
+  }
+
+  /**
+   * The topmost area under a screen point that this view shows, preferring one
+   * this tab may change; undefined if there is none.
+   */
+  private areaAt(sx: number, sy: number): PlacedArea | undefined {
+    const floor = getActiveFloor()
+    const cell = this.cellAt(sx, sy, this.roomAt(sx, sy) ?? null)
+    const players = this.visiblePlayers(useDungeonStore.getState().dungeon.players ?? [], floor.id)
+    const playerView = useEditorStore.getState().viewMode === 'player'
+    const under = (useDungeonStore.getState().dungeon.areas ?? []).filter((area) => {
+      if (area.hidden && playerView) return false
+      const here = placedArea(area, players)
+      return here?.floorId === floor.id && areaCells(here).some((item) => item.x === cell.x && item.y === cell.y)
+    })
+    return under.reverse().find(canRemoveArea) ?? under[0]
+  }
+
+  /** The token under a screen point, of those this view shows. */
+  private tokenUnder(sx: number, sy: number): Player | undefined {
+    const floor = getActiveFloor()
+    return hitToken(
+      this.visiblePlayers(useDungeonStore.getState().dungeon.players ?? [], floor.id),
+      floor.id,
+      this.viewRooms(),
+      floor.ramps ?? [],
+      sx,
+      sy,
+      useEditorStore.getState().camera,
+    )
   }
 
   private finishLinkPick(session: PointerSession): void {
@@ -1364,8 +1839,14 @@ export class MapEngine {
       this.session?.mode === 'feature' ||
       this.session?.mode === 'ramp' ||
       this.session?.mode === 'token' ||
-      this.session?.mode === 'object'
+      this.session?.mode === 'object' ||
+      this.session?.mode === 'measure' ||
+      this.session?.mode === 'area'
     ) {
+      return
+    }
+    if (!this.session && hitDashPill(this.dashes, sx, sy)) {
+      this.applyCursor('pointer')
       return
     }
     const editor = useEditorStore.getState()
@@ -1375,6 +1856,21 @@ export class MapEngine {
     if (cell.x !== this.hoverCell?.x || cell.y !== this.hoverCell?.y) {
       this.hoverCell = cell
       this.markDirty()
+    }
+
+    // The ruler and area tools point at the floor, in either view; the area shows where it would land.
+    if (editor.tool === 'measure' || editor.tool === 'aoe') {
+      this.hoverFeature = null
+      this.hoverRamp = null
+      this.objectSpot = null
+      this.hoverObject = null
+      this.setHoverLink(null)
+      if (editor.hoverPlayerId) editor.setHoverPlayer(null)
+      if (editor.hoverRoomId) editor.setHoverRoom(null)
+      this.areaHover = editor.tool === 'aoe' && !this.session ? this.hoverArea(sx, sy) : null
+      this.applyCursor('crosshair')
+      this.markDirty()
+      return
     }
 
     const badge = hitLinkBadge(this.badges(), sx, sy)
@@ -1504,14 +2000,15 @@ export class MapEngine {
       return
     }
     const editor = useEditorStore.getState()
+    const marking = editor.tool === 'measure' || editor.tool === 'aoe'
     this.canvas.style.cursor =
-      editor.viewMode === 'player' || editor.tool === 'select' ? 'grab' : 'crosshair'
+      !marking && (editor.viewMode === 'player' || editor.tool === 'select') ? 'grab' : 'crosshair'
   }
 
   private onContextMenu = (event: Event): void => {
     event.preventDefault()
     event.stopPropagation()
-    if (this.session?.mode === 'token') this.pinTokenWaypoint()
+    if (this.session?.mode === 'token' || this.session?.mode === 'measure') this.pinWaypoint()
   }
 
   private onWheel = (event: WheelEvent): void => {
@@ -1546,6 +2043,8 @@ export class MapEngine {
       this.hoverRamp = null
       this.tokenDrag = null
       this.objectDrag = null
+      this.rulerDrag = null
+      this.areaDrag = null
       this.session = null
       endGesture()
       const travel = useDungeonStore.getState().dungeon.travel
@@ -1560,7 +2059,9 @@ export class MapEngine {
       editor.selectObject(null)
       editor.closeStairsPrompt()
       editor.closeStairUse()
-      if (editor.viewMode !== 'player') editor.setTool('select')
+      // An area half dragged out is dropped; ones already laid down stay.
+      if (useMarkStore.getState().mine.area) useSessionStore.getState().reportMark('area', null)
+      if (editor.viewMode !== 'player' || isTableTool(editor.tool)) editor.setTool('select')
       this.markDirty()
     }
     // Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes. Text boxes keep their own undo.
@@ -1586,7 +2087,7 @@ export class MapEngine {
     const tool = TOOL_KEYS[event.code]
     if (
       tool &&
-      useEditorStore.getState().viewMode !== 'player' &&
+      (useEditorStore.getState().viewMode !== 'player' || isTableTool(tool)) &&
       !isTyping(event.target) &&
       !event.ctrlKey &&
       !event.metaKey &&

@@ -1,4 +1,4 @@
-import { Fragment, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { Fragment, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { MAX_DIE_COUNT } from '../../model/dice.ts'
 import {
   castingMod,
@@ -13,27 +13,126 @@ import {
   resolveLabel,
   saveDc,
   SPELL_RESOLVE_LABEL,
+  spellAffects,
+  spellArea,
+  spellAreaEffects,
+  spellAreaLabel,
+  spellTrigger,
   spellAttackBonus,
   spellDamageFormula,
   type Spell,
+  type SpellArea,
   type Spellcasting,
   type SpellResolve,
 } from '../../model/spells.ts'
-import { ABILITY_KEYS, ABILITY_LABEL, displayedAbilityMod, formatSigned, type AbilityKey, type CharacterStats } from '../../model/stats.ts'
-import { STATUS_EFFECTS, isStatusId, statusEffect, type StatusId } from '../../model/status.ts'
+import {
+  AREA_MAX_FEET,
+  AREA_MIN_FEET,
+  AREA_SHAPES,
+  LINE_MAX_WIDTH,
+  type AreaAffects,
+  type AreaMark,
+  type AreaShape,
+  type AreaTrigger,
+} from '../../model/marks.ts'
+import { readSpellNotes, type NotesFields } from '../../model/spellNotes.ts'
+import { playerSize } from '../../model/players.ts'
+import { FEET_PER_TILE } from '../../model/scale.ts'
+import { useEditorStore } from '../../state/editorStore.ts'
+import { useSessionStore } from '../../state/sessionStore.ts'
+import {
+  ABILITY_KEYS,
+  ABILITY_LABEL,
+  classCastingAbility,
+  displayedAbilityMod,
+  formatSigned,
+  normalizeStats,
+  proficiencyBonus,
+  type AbilityKey,
+  type CharacterStats,
+} from '../../model/stats.ts'
+import { CONDITION_EFFECTS, isStatusId, statusEffect, type StatusId } from '../../model/status.ts'
 import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
 import { Stepper } from '../../ui/Stepper.tsx'
+import { INSTANT_AREA_MS, rollCast, type CastRoll } from '../areas/castRolls.ts'
 import { DamageTypeField, DiePicker } from './DamageFields.tsx'
 import { NotesToggle, RowNotes } from './RowNotes.tsx'
+import { tokenShown } from './tokenInfo.ts'
 import { rollSpellAttack, rollSpellDamage } from './tokenRolls.ts'
 
 const LEVELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+/**
+ * Lay a spell's area on the map. An emanation lands on the caster at once;
+ * anything else takes up the area tool at the spell's shape and size, coming
+ * out of the caster (a circle goes wherever it is clicked).
+ */
+function placeSpellArea(player: Player, spell: Spell, area: SpellArea): void {
+  const editor = useEditorStore.getState()
+  const effects = spellAreaEffects(spell, player.id, normalizeSpellcasting(player.spellcasting), normalizeStats(player.stats))
+  const onCast = castRollFor(player, spell)
+  // Over once it has gone off: no lingering damage, and nothing to last.
+  const instant = spellTrigger(spell) == null && !effects.duration
+  // The caster's floor, so the area lands where they are.
+  if (editor.activeFloorId !== player.floorId) editor.setActiveFloor(player.floorId)
+  if (area.shape === 'emanation') {
+    const placed: AreaMark = {
+      kind: 'area',
+      id: crypto.randomUUID(),
+      floorId: player.floorId,
+      shape: 'emanation',
+      feet: area.feet,
+      width: area.width,
+      origin: { x: player.x, y: player.y },
+      angle: 0,
+      playerId: player.id,
+      tokenSize: playerSize(player),
+      includeSelf: editor.aoeIncludeSelf,
+      color: editor.aoeColor,
+      side: player.kind === 'monster' ? 'foes' : 'party',
+      ...effects,
+    }
+    useSessionStore.getState().placeArea(placed)
+    if (onCast) rollCast(placed, onCast, shownOn(player.floorId))
+    if (instant && placed.id) {
+      const id = placed.id
+      window.setTimeout(() => useSessionStore.getState().removeAreas([id]), INSTANT_AREA_MS)
+    }
+    return
+  }
+  editor.castArea({ playerId: player.id, name: spell.name, effects, onCast, instant, fromCaster: area.fromCaster === true }, area)
+}
+
+/**
+ * What a spell does to the creatures in its area as it is cast: their saves and
+ * its damage or healing. None for a spell that hurts only as creatures enter or
+ * start their turn in it (that is the area's own doing), or one with nothing to roll.
+ */
+function castRollFor(player: Player, spell: Spell): CastRoll | undefined {
+  if (spellTrigger(spell) != null) return undefined
+  const stats = normalizeStats(player.stats)
+  const casting = normalizeSpellcasting(player.spellcasting)
+  const save = spell.resolve === 'save' ? { ability: spell.save, dc: saveDc(casting, stats), onSave: spell.onSave } : null
+  const dice = hasDamage(spell)
+    ? { count: spell.count, faces: spell.faces, bonus: spell.damageBonus, type: spell.type }
+    : null
+  if (!save && !dice) return undefined
+  return { spell: spell.name, casterId: player.id, affects: spellAffects(spell), save, dice, condition: spell.condition }
+}
+
+/** The tokens on a floor this viewer can see: a spell cast here goes off only on those. */
+function shownOn(floorId: string): Player[] {
+  const dungeon = useDungeonStore.getState().dungeon
+  const viewMode = useEditorStore.getState().viewMode
+  const tokens = dungeon.players ?? []
+  return tokens.filter((token) => token.floorId === floorId && tokenShown(token, dungeon.floors, tokens, viewMode))
+}
 const RESOLVES: readonly SpellResolve[] = ['save', 'attack', 'auto']
 
 /**
- * A stat block's spells, under its Spellcasting line (ability, save DC, spell
+ * A token's spells (character sheet or stat block), under its Spellcasting line (ability, save DC, spell
  * attack bonus). Save spells show the DC to call out; attack spells roll to
  * hit; either rolls damage or healing, and limited ones track uses per day.
  */
@@ -53,6 +152,13 @@ export function Spells({ player, stats, editable }: { player: Player; stats: Cha
 
   function add(): void {
     const spell = newSpell()
+    // A character's first spell sets them casting as their class does, proficient at their level.
+    if (player.kind === 'player' && spells.length === 0) {
+      useDungeonStore.getState().setPlayerSpellcasting(player.id, {
+        ability: classCastingAbility(stats.klass) ?? casting.ability,
+        bonus: proficiencyBonus(stats.level),
+      })
+    }
     save([...spells, spell])
     setEditingId(spell.id)
     setFreshId(spell.id)
@@ -202,6 +308,7 @@ function SpellRow({
   const healing = spell.type.toLowerCase() === 'healing'
   const spent = spell.perDay != null && spell.used >= spell.perDay
   const condition = spell.condition ? statusEffect(spell.condition) : null
+  const area = spellArea(spell)
   const [notesOpen, setNotesOpen] = useState(false)
   // Everything about the spell but its notes fits on the one line under its name.
   const sub: ReactNode[] = [
@@ -209,6 +316,8 @@ function SpellRow({
     spell.type && hasDamage(spell) ? <span key="type" className="spell-type">{spell.type}</span> : null,
     spell.perDay == null ? 'at will' : <UsePips key="uses" spell={spell} editable={editable} onUse={onUse} />,
     spell.resolve === 'save' && hasDamage(spell) ? (spell.onSave === 'half' ? 'half on save' : 'none on save') : null,
+    area ? spellAreaLabel(area) : null,
+    area && spellAffects(spell) !== 'all' ? `${spellAffects(spell)} only` : null,
     condition ? (
       <span key="condition" className="status-chip" style={{ color: condition.color } as CSSProperties}>
         {spell.resolve === 'save' ? `Fail: ${condition.label}` : condition.label}
@@ -255,6 +364,21 @@ function SpellRow({
             onClick={() => rollSpellDamage(player, spell)}
           >
             {spellDamageFormula(spell)}
+          </button>
+        ) : null}
+        {area && editable ? (
+          <button
+            type="button"
+            className="attack-roll spell-place"
+            title={
+              area.shape === 'emanation'
+                ? `Place ${spell.name}'s ${spellAreaLabel(area)} around ${player.characterName || player.name}`
+                : `Place ${spell.name}'s ${spellAreaLabel(area)} on the map: aim it, then click`
+            }
+            aria-label={`Place ${spell.name} on the map`}
+            onClick={() => placeSpellArea(player, spell, area)}
+          >
+            <Icon id="aoe" size={14} />
           </button>
         ) : null}
         {spell.notes ? <NotesToggle open={notesOpen} name={spell.name} onToggle={() => setNotesOpen((open) => !open)} /> : null}
@@ -314,18 +438,63 @@ function SpellForm({
   onCancel: () => void
   onRemove: () => void
 }) {
-  const [draft, setDraft] = useState(spell)
-  const change = (fields: Partial<Spell>) => setDraft((now) => ({ ...now, ...fields }))
+  const [draft, setDraft] = useState<Spell>(() => ({
+    ...spell,
+    area: spellArea(spell),
+    trigger: spellTrigger(spell),
+    affects: spellAffects(spell),
+  }))
+  /** Fields set by hand: the notes leave them alone from then on. */
+  const touched = useRef(new Set<string>())
+  /** What the notes last filled in, so newer notes can change those fields again. */
+  const filled = useRef<NotesFields>(readSpellNotes(spell.notes))
+  /** The fields the notes filled in on their latest change, to say so under them. */
+  const [fromNotes, setFromNotes] = useState<string[]>([])
+  const change = (fields: Partial<Spell>) => {
+    for (const key of Object.keys(fields)) touched.current.add(key)
+    setDraft((now) => ({ ...now, ...fields }))
+  }
   const damage = hasDamage(draft)
   const against = resolveLabel(draft, casting, stats)
 
+  /**
+   * New notes fill in whatever they now say, for every field not set by hand
+   * that still holds a default or what earlier notes put there; a field earlier
+   * notes filled that these no longer mention goes back to its default.
+   */
+  function changeNotes(notes: string): void {
+    const read = readSpellNotes(notes)
+    const before = filled.current
+    const next: Spell = { ...draft, notes }
+    const applied: string[] = []
+    const keys = new Set([...Object.keys(read), ...Object.keys(before)]) as Set<keyof NotesFields>
+    for (const key of keys) {
+      if (touched.current.has(key)) continue
+      const current = draft[key]
+      const free = sameValue(current, before[key]) || sameValue(current, BLANK[key])
+      if (!free) continue
+      const value = key in read ? read[key] : BLANK[key]
+      if (sameValue(current, value)) continue
+      ;(next as unknown as Record<string, unknown>)[key] = value
+      if (key in read) applied.push(NOTES_LABEL[key])
+    }
+    filled.current = read
+    setFromNotes([...new Set(applied)])
+    setDraft(next)
+  }
+
   function submit(event: FormEvent): void {
     event.preventDefault()
+    const notes = draft.notes.trim()
     onDone({
       ...draft,
+      // Set for good now, so the spell does what the form showed.
+      area: draft.area ?? null,
+      trigger: draft.trigger ?? null,
+      affects: draft.affects ?? 'all',
       name: draft.name.trim() || spell.name,
       type: draft.type.trim(),
-      notes: draft.notes.trim(),
+      notes,
       used: draft.perDay == null ? 0 : Math.min(draft.used, draft.perDay),
     })
   }
@@ -454,7 +623,7 @@ function SpellForm({
             onChange={(event) => change({ condition: isStatusId(event.target.value) ? (event.target.value as StatusId) : null })}
           >
             <option value="">No condition</option>
-            {STATUS_EFFECTS.map((effect) => (
+            {CONDITION_EFFECTS.map((effect) => (
               <option key={effect.id} value={effect.id}>
                 {effect.label}
               </option>
@@ -463,15 +632,24 @@ function SpellForm({
         </label>
       </div>
 
+      <AreaFields
+        area={draft.area ?? null}
+        trigger={draft.trigger ?? null}
+        affects={draft.affects ?? 'all'}
+        lingers={damage && draft.type.toLowerCase() !== 'healing'}
+        onChange={change}
+      />
+
       <textarea
         className="stat-input trait-text-input"
         value={draft.notes}
         maxLength={MAX_SPELL_NOTES}
         rows={3}
         aria-label="Notes"
-        placeholder="Notes: 20-ft radius, concentration, 1 minute"
-        onChange={(event) => change({ notes: event.target.value })}
+        placeholder="Type or paste the spell's description: its save, damage, area and the rest fill in from it"
+        onChange={(event) => changeNotes(event.target.value)}
       />
+      {fromNotes.length ? <p className="notes-filled">Filled in from the notes: {fromNotes.join(', ')}</p> : null}
 
       <p className="attack-preview">
         <span>{against ?? 'No roll'}</span>
@@ -490,6 +668,162 @@ function SpellForm({
         </button>
       </div>
     </form>
+  )
+}
+
+/** A spell's form, blank: what a field goes back to when notes that filled it stop saying so. */
+const BLANK: NotesFields = { ...newSpell(), area: null, trigger: null, affects: 'all' }
+
+/** How the line under the notes names each field they filled. */
+const NOTES_LABEL: Record<keyof NotesFields, string> = {
+  level: 'level',
+  perDay: 'uses',
+  resolve: 'how it lands',
+  save: 'save',
+  onSave: 'on a success',
+  count: 'damage',
+  faces: 'damage',
+  damageBonus: 'damage',
+  type: 'damage type',
+  condition: 'condition',
+  area: 'area',
+  trigger: 'when its area hurts',
+  affects: 'who it affects',
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+}
+
+const AFFECTS_CHOICES: ReadonlyArray<{ id: AreaAffects; label: string; title: string }> = [
+  { id: 'all', label: 'All creatures', title: 'Every creature in it, friend or foe' },
+  { id: 'enemies', label: 'Enemies only', title: "Only the caster's enemies in it" },
+  { id: 'allies', label: 'Allies only', title: "Only the caster's allies in it (healing, blessings)" },
+]
+
+const TRIGGER_CHOICES: ReadonlyArray<{ id: AreaTrigger | null; label: string; title: string }> = [
+  { id: null, label: 'When cast', title: 'Only hurts when it is cast (Fireball)' },
+  { id: 'enter', label: 'Entering', title: 'Also hurts a creature that enters it (once a turn)' },
+  { id: 'start', label: 'Turn start', title: 'Also hurts a creature that starts its turn in it' },
+  { id: 'both', label: 'Both', title: 'Hurts a creature entering it or starting its turn there' },
+]
+
+/**
+ * The spell's area for the map: a shape (or none) and its size (a line its
+ * width too); and, for a damaging spell, whether the area keeps hurting once
+ * down, and whether it spares the caster's allies.
+ */
+function AreaFields({
+  area,
+  trigger,
+  affects,
+  lingers,
+  onChange,
+}: {
+  area: SpellArea | null
+  trigger: AreaTrigger | null
+  affects: AreaAffects
+  lingers: boolean
+  onChange: (fields: Partial<Spell>) => void
+}) {
+  const update = (fields: Partial<SpellArea>) => area && onChange({ area: { ...area, ...fields } })
+  return (
+    <>
+      <div className="attack-line">
+        <label className="attack-select">
+          <span className="kicker">Area</span>
+          <select
+            className="tileset-select"
+            value={area?.shape ?? ''}
+            onChange={(event) => {
+              const shape = AREA_SHAPES.find((item) => item.id === event.target.value)?.id as AreaShape | undefined
+              onChange({ area: shape ? { shape, feet: area?.feet ?? 20, width: area?.width ?? 5, ...(shape === 'square' && area?.fromCaster ? { fromCaster: true } : {}) } : null })
+            }}
+          >
+            <option value="">No area</option>
+            {AREA_SHAPES.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {area ? (
+          <Stepper
+            className="is-compact"
+            label={area.shape === 'circle' || area.shape === 'emanation' ? 'Radius' : area.shape === 'square' ? 'Side' : 'Length'}
+            value={`${area.feet} ft`}
+            onDown={() => update({ feet: Math.max(AREA_MIN_FEET, area.feet - FEET_PER_TILE) })}
+            onUp={() => update({ feet: Math.min(AREA_MAX_FEET, area.feet + FEET_PER_TILE) })}
+            downDisabled={area.feet <= AREA_MIN_FEET}
+            upDisabled={area.feet >= AREA_MAX_FEET}
+          />
+        ) : null}
+        {area?.shape === 'line' ? (
+          <Stepper
+            className="is-compact"
+            label="Width"
+            value={`${area.width} ft`}
+            onDown={() => update({ width: Math.max(AREA_MIN_FEET, area.width - 2 * FEET_PER_TILE) })}
+            onUp={() => update({ width: Math.min(LINE_MAX_WIDTH, area.width + 2 * FEET_PER_TILE) })}
+            downDisabled={area.width <= AREA_MIN_FEET}
+            upDisabled={area.width >= LINE_MAX_WIDTH}
+          />
+        ) : null}
+      </div>
+      {area?.shape === 'square' ? (
+        <div className="segment-grid is-two" role="radiogroup" aria-label="Where the cube goes">
+          {([false, true] as const).map((fromCaster) => (
+            <button
+              key={String(fromCaster)}
+              type="button"
+              role="radio"
+              aria-checked={(area.fromCaster === true) === fromCaster}
+              className={`segment${(area.fromCaster === true) === fromCaster ? ' is-on' : ''}`}
+              title={fromCaster ? 'It comes out of the caster, on the side it is aimed (Thunderwave)' : 'It lands anywhere in range (Cloud of Daggers)'}
+              onClick={() => onChange({ area: { ...area, fromCaster: fromCaster || undefined } })}
+            >
+              {fromCaster ? 'From caster' : 'At range'}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {area && lingers ? (
+        <div className="segment-grid is-four" role="radiogroup" aria-label="When its area hurts">
+          {TRIGGER_CHOICES.map((choice) => (
+            <button
+              key={choice.label}
+              type="button"
+              role="radio"
+              aria-checked={trigger === choice.id}
+              className={`segment${trigger === choice.id ? ' is-on' : ''}`}
+              title={choice.title}
+              onClick={() => onChange({ trigger: choice.id })}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {/* Who it takes in, whenever it has an area: a blast as cast, a zone after, or healing for friends. */}
+      {area ? (
+        <div className="segment-grid" role="radiogroup" aria-label="Who its area affects">
+          {AFFECTS_CHOICES.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              role="radio"
+              aria-checked={affects === choice.id}
+              className={`segment${affects === choice.id ? ' is-on' : ''}`}
+              title={choice.title}
+              onClick={() => onChange({ affects: choice.id })}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </>
   )
 }
 

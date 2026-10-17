@@ -7,7 +7,8 @@ import type { Cell, CellRect, Opening, Room, StairsDir } from './types.ts'
  * `stairs` lays stairs to other floors; `ramp` is the same Stairs button set to
  * "Between rooms", joining rooms of different heights on this floor. `merge` is the
  * Link button set to "Merge", folding two rooms into one. `objects` dresses rooms
- * with furniture from the catalog.
+ * with furniture from the catalog. `measure` and `aoe` are table tools: players
+ * have them too, for a ruler and for a spell's area of effect.
  */
 export type Tool =
   | 'select'
@@ -20,9 +21,18 @@ export type Tool =
   | 'merge'
   | 'ramp'
   | 'objects'
+  | 'measure'
+  | 'aoe'
+
+/** Tools players have as well as the DM; `select` is their ordinary moving and panning. */
+export type TableTool = Extract<Tool, 'select' | 'measure' | 'aoe'>
+
+export function isTableTool(tool: Tool): tool is TableTool {
+  return tool === 'select' || tool === 'measure' || tool === 'aoe'
+}
 
 /** Tools that stamp a feature onto tiles of an existing room. */
-export type FeatureTool = Exclude<Tool, 'select' | 'rooms' | 'link' | 'merge' | 'ramp' | 'objects'>
+export type FeatureTool = Exclude<Tool, 'select' | 'rooms' | 'link' | 'merge' | 'ramp' | 'objects' | 'measure' | 'aoe'>
 
 /** A plain door leaf, or an open archway with no leaf at all. */
 export type DoorStyle = 'door' | 'open'
@@ -37,7 +47,14 @@ export interface FeatureDraft {
 
 export function isFeatureTool(tool: Tool): tool is FeatureTool {
   return (
-    tool !== 'select' && tool !== 'rooms' && tool !== 'link' && tool !== 'merge' && tool !== 'ramp' && tool !== 'objects'
+    tool !== 'select' &&
+    tool !== 'rooms' &&
+    tool !== 'link' &&
+    tool !== 'merge' &&
+    tool !== 'ramp' &&
+    tool !== 'objects' &&
+    tool !== 'measure' &&
+    tool !== 'aoe'
   )
 }
 

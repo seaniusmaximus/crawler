@@ -62,6 +62,21 @@ export type CharacterStats = {
 
 export const ABILITY_KEYS = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const
 export type AbilityKey = (typeof ABILITY_KEYS)[number]
+
+/** A character's proficiency bonus by level: +2 at 1st, rising by one every four levels; +2 when the level isn't known. */
+export function proficiencyBonus(level: number | null): number {
+  if (level == null || level < 1) return 2
+  return 2 + Math.floor((Math.min(20, level) - 1) / 4)
+}
+
+/** The ability a class casts with, read from its name ("Wizard 5", "Cleric"); null for classes that don't cast. */
+export function classCastingAbility(klass: string): AbilityKey | null {
+  const name = klass.toLowerCase()
+  if (/\b(wizard|artificer)\b/.test(name)) return 'int'
+  if (/\b(cleric|druid|ranger)\b/.test(name)) return 'wis'
+  if (/\b(bard|paladin|sorcerer|warlock)\b/.test(name)) return 'cha'
+  return null
+}
 export type AbilityModKey = `${AbilityKey}Mod`
 
 export const ABILITY_MOD_KEY: Record<AbilityKey, AbilityModKey> = {

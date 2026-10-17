@@ -1,3 +1,4 @@
+import { normalizePlacedAreas, type PlacedArea } from '../model/marks.ts'
 import { normalizePlayer } from '../model/players.ts'
 import type { ObjectDef } from '../objects/catalog.ts'
 import type { Dungeon, Floor, Player, Room } from '../model/types.ts'
@@ -14,6 +15,8 @@ export interface DungeonPatch {
   floors?: KeyedPatch<FloorPatch>
   /** The map's own objects, each sent whole when it changes. */
   customObjects?: KeyedPatch<ObjectDef>
+  /** Spell areas laid down at the table, each sent whole. */
+  areas?: KeyedPatch<PlacedArea>
 }
 
 /** Changed or added items, removed ids, and the full id order when it changed. */
@@ -135,6 +138,8 @@ export function diffDungeon(prev: Dungeon, next: Dungeon, force: ReadonlySet<str
     old && same(old, def) ? null : def,
   )
   if (customObjects) patch.customObjects = customObjects
+  const areas = diffKeyed(prev.areas ?? [], next.areas ?? [], (old, area) => (old && same(old, area) ? null : area))
+  if (areas) patch.areas = areas
   return Object.keys(patch).length ? patch : null
 }
 
@@ -180,6 +185,10 @@ export function applyDungeonPatch(dungeon: Dungeon, patch: DungeonPatch): Dungeo
   }
   if (patch.customObjects) {
     next.customObjects = applyKeyed(dungeon.customObjects ?? [], patch.customObjects, (_old, def) => def)
+  }
+  if (patch.areas) {
+    const areas = applyKeyed(dungeon.areas ?? [], patch.areas, (_old, area) => area)
+    next.areas = normalizePlacedAreas(areas)
   }
   return next
 }

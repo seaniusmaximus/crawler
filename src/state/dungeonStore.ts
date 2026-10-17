@@ -40,12 +40,17 @@ import {
   standOnFloor,
 } from '../model/players.ts'
 import {
+  addMoved,
   emptyCombat,
   nextTurnPlayerId,
   normalizeCombat,
+  roundAfter,
   normalizeInitiativeRoll,
   tokenForRoll,
   sortByInitiative,
+  turnTokenIds,
+  withDash,
+  withTurn,
 } from '../model/combat.ts'
 import type { DiceRoll } from '../model/dice.ts'
 import { normalizeAttacks, type Attack } from '../model/attacks.ts'
@@ -60,6 +65,8 @@ import {
 } from '../model/spells.ts'
 import { normalizeTraits, type Trait } from '../model/traits.ts'
 import { spawnName, type MonsterTemplate } from '../model/monsterTemplates.ts'
+import { MAX_PLACED_AREAS, normalizePlacedAreas, type PlacedArea } from '../model/marks.ts'
+import { brokenConcentration, concentrationCaster, pauseDurations, stampDuration, tickDurations } from '../model/areaEffects.ts'
 import { normalizeTravel, sameTravel } from '../model/travel.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import { emptyStats, isTextStat, mergeDdbStats, normalizeStats } from '../model/stats.ts'
@@ -370,7 +377,10 @@ interface DungeonState {
   setCompanionOwner: (companionId: string, ownerId: string | null) => void
   /** Act on the owner's turn, or roll its own initiative. */
   setCompanionFollows: (companionId: string, follows: boolean) => void
-  movePlayer: (playerId: string, floorId: string, x: number, y: number) => boolean
+  /** `feet` is how far it walked, counted toward its movement when it is acting this turn. */
+  movePlayer: (playerId: string, floorId: string, x: number, y: number, feet?: number) => boolean
+  /** Mark a token acting this turn as having taken the Dash action, or not. */
+  setDash: (playerId: string, dashed: boolean) => void
   /**
    * Bring a token, from wherever it is, into a room: to the free spot nearest
    * `near`. False when the room has no space for it.
@@ -436,6 +446,11 @@ interface DungeonState {
   refreshObjectCopies: (defs: readonly ObjectDef[]) => void
   playTravel: () => void
   finishTravel: () => void
+  /** Lay a spell area down on the map, to stay until it is taken away; the oldest go once there are too many. */
+  addArea: (area: PlacedArea) => void
+  removeAreas: (ids: readonly string[]) => void
+  /** End the areas whose caster is no longer concentrating, or gone. */
+  dropBrokenConcentration: () => void
 }
 
 /**
@@ -445,6 +460,36 @@ interface DungeonState {
  */
 export const useDungeonStore = create<DungeonState>((set, get) => ({
   dungeon: createDungeon(),
+
+  addArea: (area) => {
+    const dungeon = get().dungeon
+    const before = dungeon.areas?.find((item) => item.id === area.id)
+    // A changed duration starts counting afresh; an unchanged one keeps its count.
+    const placed =
+      before && JSON.stringify(before.duration) === JSON.stringify(area.duration)
+        ? { ...area, duration: before.duration }
+        : stampDuration(area, dungeon.combat)
+    const casterId = concentrationCaster(placed)
+    // Concentrating on something new ends whatever the caster held before.
+    const kept = (dungeon.areas ?? []).filter(
+      (item) => item.id !== placed.id && !(casterId && concentrationCaster(item) === casterId),
+    )
+    const players = casterId
+      ? (dungeon.players ?? []).map((player) =>
+          player.id === casterId && !playerStatuses(player).includes('concentrating')
+            ? { ...player, statuses: [...playerStatuses(player), 'concentrating' as const] }
+            : player,
+        )
+      : dungeon.players
+    set({ dungeon: { ...dungeon, players, areas: [...kept, placed].slice(-MAX_PLACED_AREAS) } })
+  },
+
+  removeAreas: (ids) => {
+    const dungeon = get().dungeon
+    const gone = new Set(ids)
+    const areas = (dungeon.areas ?? []).filter((area) => !gone.has(area.id))
+    if (areas.length !== (dungeon.areas ?? []).length) set({ dungeon: { ...dungeon, areas } })
+  },
 
   addFloor: (where) => {
     const dungeon = get().dungeon
@@ -483,12 +528,12 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         ...dungeon,
         floors: packFloors(rest),
         players,
-        combat: {
-          turnPlayerId:
-            turnPlayerId && !players.some((player) => player.id === turnPlayerId)
-              ? nextTurnPlayerId(players, null)
-              : turnPlayerId,
-        },
+        combat: withTurn(
+          dungeon.combat,
+          turnPlayerId && !players.some((player) => player.id === turnPlayerId)
+            ? nextTurnPlayerId(players, null)
+            : turnPlayerId,
+        ),
         travel: dungeon.travel?.floorId === floorId ? null : dungeon.travel,
       }),
     })
@@ -1044,7 +1089,13 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     set({ dungeon: { ...dungeon, players: sortByInitiative(players) } })
   },
 
-  movePlayer: (playerId, floorId, x, y) => {
+  setDash: (playerId, dashed) => {
+    const dungeon = get().dungeon
+    if (!turnTokenIds(dungeon.players ?? [], dungeon.combat?.turnPlayerId ?? null).has(playerId)) return
+    set({ dungeon: { ...dungeon, combat: withDash(dungeon.combat, playerId, dashed) } })
+  },
+
+  movePlayer: (playerId, floorId, x, y, feet = 0) => {
     const dungeon = get().dungeon
     const floor = dungeon.floors.find((item) => item.id === floorId)
     const moving = (dungeon.players ?? []).find((player) => player.id === playerId)
@@ -1063,12 +1114,15 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     ) {
       return false
     }
+    // A walk on its own turn counts toward how far it may still go.
+    const acting = feet > 0 && turnTokenIds(dungeon.players ?? [], dungeon.combat?.turnPlayerId ?? null).has(playerId)
     set({
       dungeon: exploreDungeon({
         ...dungeon,
         players: (dungeon.players ?? []).map((player) =>
           player.id === playerId ? { ...player, floorId, x, y } : player,
         ),
+        ...(acting ? { combat: addMoved(dungeon.combat, playerId, feet) } : {}),
       }),
     })
     return true
@@ -1191,6 +1245,14 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         }),
       },
     })
+    // Losing concentration ends the areas held by it.
+    get().dropBrokenConcentration()
+  },
+
+  dropBrokenConcentration: () => {
+    const dungeon = get().dungeon
+    const broken = brokenConcentration(dungeon.areas ?? [], dungeon.players ?? [])
+    if (broken.length) get().removeAreas(broken)
   },
 
   deletePlayer: (playerId) => {
@@ -1203,12 +1265,15 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
       dungeon.combat?.turnPlayerId === playerId
         ? nextTurnPlayerId(players, null)
         : (dungeon.combat?.turnPlayerId ?? null)
+    // Its emanations go with it, and whatever it was concentrating on.
+    const areas = dungeon.areas?.filter((area) => area.playerId !== playerId && concentrationCaster(area) !== playerId)
     set({
       dungeon: {
         ...dungeon,
         players,
-        combat: { turnPlayerId },
+        combat: withTurn(dungeon.combat, turnPlayerId),
         travel: dungeon.travel?.playerId === playerId ? null : dungeon.travel,
+        ...(areas ? { areas } : {}),
       },
     })
   },
@@ -1219,6 +1284,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         ...dungeon,
         combat: normalizeCombat(dungeon.combat),
         players: (dungeon.players ?? []).map(normalizePlayer),
+        areas: normalizePlacedAreas(dungeon.areas),
         // `travel` is this tab's own path in progress; other people's live in the travel store.
         travel: get().dungeon.travel,
       },
@@ -1252,6 +1318,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
         players: [...placed.slice(monsters.length), ...monsters],
         combat: emptyCombat(),
         travel: null,
+        areas: normalizePlacedAreas(base.areas),
       }),
     })
   },
@@ -1443,11 +1510,16 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
   advanceTurn: () => {
     const dungeon = get().dungeon
     const players = sortByInitiative(dungeon.players ?? [])
+    const from = dungeon.combat?.turnPlayerId ?? null
+    const turnPlayerId = nextTurnPlayerId(players, from)
+    const round = roundAfter(players, from, turnPlayerId, dungeon.combat?.round)
     set({
       dungeon: {
         ...dungeon,
         players,
-        combat: { turnPlayerId: nextTurnPlayerId(players, dungeon.combat?.turnPlayerId ?? null) },
+        combat: { turnPlayerId, ...(turnPlayerId ? { round } : {}) },
+        // Areas whose rounds are up end as the turn they were cast on comes back round.
+        ...(dungeon.areas?.length ? { areas: tickDurations(dungeon.areas, round, turnPlayerId) } : {}),
       },
     })
   },
@@ -1457,6 +1529,8 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     set({
       dungeon: {
         ...dungeon,
+        // Out of combat, areas lasting rounds stop counting down.
+        ...(dungeon.areas?.length ? { areas: pauseDurations(dungeon.areas, dungeon.combat?.round) } : {}),
         combat: emptyCombat(),
         players: (dungeon.players ?? []).map((player) => ({ ...player, initiativeRoll: null })),
       },
@@ -1571,7 +1645,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
     const dungeon = get().dungeon
     const travel = dungeon.travel
     if (!travel) return
-    get().movePlayer(travel.playerId, travel.floorId, travel.ghostX, travel.ghostY)
+    get().movePlayer(travel.playerId, travel.floorId, travel.ghostX, travel.ghostY, travel.feet)
     const latest = get().dungeon
     if (latest.travel?.playerId === travel.playerId) {
       set({ dungeon: { ...latest, travel: null } })

@@ -16,8 +16,8 @@ interface Seat {
   id: string
 }
 
-/** Sent straight to everyone, never through the DM's browser: rolls and live token paths. */
-const BROADCAST = new Set(['dice', 'travel'])
+/** Sent straight to everyone, never through the DM's browser: rolls, live token paths, rulers, spell areas and pings. */
+const BROADCAST = new Set(['dice', 'travel', 'mark', 'ping'])
 
 /** Close codes the client treats as final — no reconnect. */
 const CLOSE_REPLACED = 4001
@@ -56,11 +56,27 @@ export interface SavePoint {
   size: number
 }
 
-const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'switchMap', 'roll'])
-const GUEST_SENDS = new Set(['hello', 'claim', 'spawn', 'move', 'player', 'opening', 'dice', 'travel', 'resync', 'roll'])
+const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'mark', 'ping', 'switchMap', 'roll'])
+const GUEST_SENDS = new Set([
+  'hello',
+  'claim',
+  'spawn',
+  'move',
+  'player',
+  'opening',
+  'dice',
+  'travel',
+  'mark',
+  'area',
+  'effect',
+  'dash',
+  'ping',
+  'resync',
+  'roll',
+])
 
-/** Each connection may ask for this many rolls per window; enough for initiative, not for spam. */
-const ROLLS_PER_WINDOW = 20
+/** Each connection may ask for this many rolls per window: enough for a Fireball over a crowd, not for spam. */
+const ROLLS_PER_WINDOW = 60
 const ROLL_WINDOW_MS = 10_000
 
 /**
@@ -519,8 +535,8 @@ export class TableRoom extends DurableObject<RoomEnv> {
       if (parsed.quiet) return
     }
 
-    // The DM speaks to everyone; players speak to the DM, except rolls and live
-    // token paths, which everyone sees straight away (even while the DM is away).
+    // The DM speaks to everyone; players speak to the DM, except rolls, live token
+    // paths and marks, which everyone sees straight away (even while the DM is away).
     const targets =
       seat.role === 'guest' && !BROADCAST.has(type) ? this.ctx.getWebSockets('host') : this.ctx.getWebSockets()
     for (const peer of targets) {

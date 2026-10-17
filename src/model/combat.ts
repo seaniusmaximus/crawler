@@ -9,7 +9,18 @@ function nameOf(player: Player): string {
 
 export interface Combat {
   turnPlayerId: string | null
+  /** Feet each token acting this turn has moved so far; starts over every turn. */
+  moved?: Record<string, number>
+  /** Tokens acting this turn that took the Dash action, so they move twice their speed. */
+  dashed?: string[]
+  /** Which round of combat it is, from 1; missing out of combat. */
+  round?: number
+  /** Spell areas that have already hurt a token on entering this turn, as "areaId:tokenId". */
+  areaHits?: string[]
 }
+
+/** The most feet a turn's movement is believed to add up to, so a bad message can't wreck it. */
+const MAX_TURN_FEET = 10_000
 
 export function emptyCombat(): Combat {
   return { turnPlayerId: null }
@@ -18,7 +29,87 @@ export function emptyCombat(): Combat {
 export function normalizeCombat(value: unknown): Combat {
   const raw = value && typeof value === 'object' ? (value as Combat) : emptyCombat()
   const id = typeof raw.turnPlayerId === 'string' ? raw.turnPlayerId.trim() : ''
-  return { turnPlayerId: id || null }
+  const combat: Combat = { turnPlayerId: id || null }
+  if (raw.moved && typeof raw.moved === 'object') {
+    const moved: Record<string, number> = {}
+    for (const [tokenId, feet] of Object.entries(raw.moved)) {
+      if (typeof feet === 'number' && Number.isFinite(feet) && feet > 0) moved[tokenId] = Math.min(MAX_TURN_FEET, Math.round(feet))
+    }
+    if (Object.keys(moved).length) combat.moved = moved
+  }
+  if (Array.isArray(raw.dashed)) {
+    const dashed = raw.dashed.filter((tokenId): tokenId is string => typeof tokenId === 'string')
+    if (dashed.length) combat.dashed = dashed
+  }
+  if (combat.turnPlayerId && typeof raw.round === 'number' && Number.isFinite(raw.round) && raw.round >= 1) {
+    combat.round = Math.round(raw.round)
+  }
+  if (Array.isArray(raw.areaHits)) {
+    const hits = raw.areaHits.filter((hit): hit is string => typeof hit === 'string').slice(0, 500)
+    if (hits.length) combat.areaHits = hits
+  }
+  return combat
+}
+
+/**
+ * The turn as `turnPlayerId`: when it is still the same turn, what was moved,
+ * dashed and set off this turn carries on; a new turn starts fresh. The round
+ * carries on either way.
+ */
+export function withTurn(combat: Combat | undefined, turnPlayerId: string | null): Combat {
+  if (combat && combat.turnPlayerId === turnPlayerId) return { ...combat }
+  return { turnPlayerId, ...(turnPlayerId && combat?.round != null ? { round: combat.round } : {}) }
+}
+
+/**
+ * The round the turn passing from `from` to `to` lands in: the first turn of a
+ * fight is round 1, and coming back round to the top of the order starts the next.
+ */
+export function roundAfter(players: readonly Player[], from: string | null, to: string | null, round: number | undefined): number {
+  if (!to) return 0
+  if (!from || round == null) return 1
+  const order = sortByInitiative(players)
+    .filter((token) => !initiativeLeader(token, players))
+    .map((token) => token.id)
+  const before = order.indexOf(from)
+  const after = order.indexOf(to)
+  return before >= 0 && after >= 0 && after <= before ? round + 1 : round
+}
+
+/** The turn with `hit` (an area going off on a token as it entered) noted, so it goes off once a turn. */
+export function withAreaHit(combat: Combat, hit: string): Combat {
+  return { ...combat, areaHits: [...(combat.areaHits ?? []), hit] }
+}
+
+/** The turn with `feet` more moved by `tokenId`. */
+export function addMoved(combat: Combat, tokenId: string, feet: number): Combat {
+  const before = combat.moved?.[tokenId] ?? 0
+  return { ...combat, moved: { ...combat.moved, [tokenId]: Math.min(MAX_TURN_FEET, before + Math.round(feet)) } }
+}
+
+/** The turn with `tokenId` dashing, or not. */
+export function withDash(combat: Combat, tokenId: string, dashed: boolean): Combat {
+  const others = (combat.dashed ?? []).filter((item) => item !== tokenId)
+  return { ...combat, dashed: dashed ? [...others, tokenId] : others }
+}
+
+/** How far a token acting this turn may move, and has: its speed (twice that when dashing). */
+export interface MoveBudget {
+  used: number
+  total: number
+  dashed: boolean
+}
+
+/**
+ * A token's movement this turn, while it is acting in combat and has a speed;
+ * null otherwise (out of combat, not its turn, or no speed written down).
+ */
+export function moveBudget(token: Player, players: readonly Player[], combat: Combat | undefined): MoveBudget | null {
+  const speed = token.stats?.speed
+  if (!combat?.turnPlayerId || !speed || speed <= 0) return null
+  if (!turnTokenIds(players, combat.turnPlayerId).has(token.id)) return null
+  const dashed = combat.dashed?.includes(token.id) ?? false
+  return { used: combat.moved?.[token.id] ?? 0, total: speed * (dashed ? 2 : 1), dashed }
 }
 
 export function normalizeInitiativeRoll(value: unknown): number | null {

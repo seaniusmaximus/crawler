@@ -27,6 +27,7 @@ import { useSessionStore } from '../../state/sessionStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { placeLabel, revealTitle, tokenShown } from '../party/tokenInfo.ts'
 import { TILESETS, tilesetById } from '../../tiles/sets/index.ts'
+import { AreaMenu } from '../areas/AreaMenu.tsx'
 import { Ring, RingButton, RingCore, RingStepper } from './Ring.tsx'
 import { CARD_FRAME, ringLayout, type RingLayout } from './ringLayout.ts'
 
@@ -39,6 +40,7 @@ export function RadialMenu() {
   const floor = resolveFloor(floors, activeFloorId)
 
   if (!menu) return null
+  if (menu.kind === 'area') return <AreaMenu menu={menu} />
   if (menu.kind === 'player') {
     const player = players.find((item) => item.id === menu.playerId)
     if (!player) return null

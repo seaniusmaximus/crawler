@@ -143,6 +143,13 @@ function CharacterSheet({ player }: { player: Player }) {
         <AbilityGrid player={player} stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
         <Passives stats={stats} editable={editable} editing={editing} setEditing={setEditing} commit={commit} />
 
+        {/* The same features, attacks and spells a stat block has, so a character can roll and cast from here too. */}
+        <Traits player={player} editable={editable} />
+
+        <Attacks player={player} stats={stats} editable={editable} />
+
+        <Spells player={player} stats={stats} editable={editable} />
+
         <Conditions player={player} />
 
         {player.characterId ? (

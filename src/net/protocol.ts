@@ -1,4 +1,6 @@
 import type { DiceRoll, RollRequest } from '../model/dice.ts'
+import type { EffectPlan } from '../model/effects.ts'
+import type { AreaMark, MarkKind, Ping, TableMark } from '../model/marks.ts'
 import type { CharacterStats } from '../model/stats.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
@@ -27,7 +29,12 @@ export type NetMessage =
    */
   | { type: 'spawn'; clientId: string; name: string; playerId: string | null; pick?: boolean }
   | SnapshotMessage
-  | { type: 'move'; playerId: string; floorId: string; x: number; y: number }
+  /** `feet` is how far the token walked there, counted toward its movement on its turn. */
+  | { type: 'move'; playerId: string; floorId: string; x: number; y: number; feet?: number }
+  /** A player marks their token (or companion) as taking the Dash action this turn, or not. */
+  | { type: 'dash'; clientId: string; playerId: string; dashed: boolean }
+  /** A pulse on the map for everyone to look at, relayed straight to all and never saved. */
+  | { type: 'ping'; clientId: string; ping: Ping }
   | { type: 'player'; player: Player }
   | { type: 'opening'; floorId: string; roomId: string; x: number; y: number }
   /**
@@ -42,6 +49,21 @@ export type NetMessage =
    * null when the sender's path for `playerId` ends; `fromHost` is checked by the relay.
    */
   | { type: 'travel'; clientId: string; fromHost: boolean; playerId: string; travel: TokenTravel | null }
+  /**
+   * A ruler or spell area, relayed straight to everyone and never saved. `mark` is
+   * null when the sender takes theirs away; `fromHost` is checked by the relay.
+   */
+  | { type: 'mark'; clientId: string; fromHost: boolean; kind: MarkKind; mark: TableMark | null }
+  /**
+   * A player lays a spell area down on the map (`add`, with its id) or takes
+   * theirs away (`remove`). The DM's browser checks it over and puts it on the map.
+   */
+  | { type: 'area'; clientId: string; add?: AreaMark; remove?: string[] }
+  /**
+   * A player's spell going off: who it catches and what it does. The DM's browser
+   * waits for its rolls (tagged with its id) and applies the outcome.
+   */
+  | { type: 'effect'; clientId: string; plan: EffectPlan }
   | { type: 'focus'; floorId: string; roomId: string }
   /** Sent by the table relay itself whenever someone connects or drops. */
   | { type: 'presence'; host: boolean; guests: string[] }

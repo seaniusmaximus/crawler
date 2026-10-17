@@ -29,6 +29,8 @@ export interface DiceRoll {
   dice: DieResult[]
   modifier?: number
   kind?: string
+  /** Which spell or zone going off it belongs to, and its part in it (see effectResolver.ts). */
+  effect?: string
   at: number
 }
 
@@ -44,6 +46,7 @@ export interface IncomingRoll {
   dice?: Array<{ faces?: number; value?: number; discarded?: boolean }>
   modifier?: number
   kind?: string
+  effect?: string
   at?: number
 }
 
@@ -66,6 +69,8 @@ export interface RollRequest {
   character?: string
   characterId?: string
   tokenId?: string
+  /** Ties the roll to a spell or zone going off, so its result can be applied (see effectResolver.ts). */
+  effect?: string
 }
 
 /** The largest die and modifier the relay will roll, so a request can't ask for nonsense. */
@@ -108,6 +113,7 @@ export function rollDice(request: RollRequest, source: DiceSource): DiceRoll {
     dice,
     modifier: mod || undefined,
     kind: text(request.kind) || undefined,
+    effect: text(request.effect) || undefined,
     at: Date.now(),
   }
 }
@@ -151,6 +157,7 @@ export function normalizeRoll(raw: IncomingRoll): DiceRoll | null {
     dice,
     modifier: modifier ?? undefined,
     kind: String(raw.kind ?? '').trim() || undefined,
+    effect: String(raw.effect ?? '').trim().slice(0, 80) || undefined,
     at: finiteNumber(raw.at) ?? Date.now(),
   }
 }

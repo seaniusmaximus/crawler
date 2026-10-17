@@ -1,6 +1,20 @@
 import { DAMAGE_FACES } from './attacks.ts'
 import { MAX_DIE_COUNT, formatModifier, isDieFace } from './dice.ts'
 import { ABILITY_KEYS, ABILITY_LABEL, displayedAbilityMod, type AbilityKey, type CharacterStats } from './stats.ts'
+import {
+  AREA_SHAPES,
+  clampAreaFeet,
+  clampLineWidth,
+  type AreaAffects,
+  type AreaDamage,
+  type AreaDuration,
+  type AreaMark,
+  type AreaShape,
+  type AreaTrigger,
+} from './marks.ts'
+import { guessAffects, guessLasting, guessSpellArea, guessTrigger } from './spellNotes.ts'
+
+export { guessSpellArea } from './spellNotes.ts'
 import { isStatusId, type StatusId } from './status.ts'
 
 /**
@@ -46,6 +60,34 @@ export interface Spell {
   perDay: number | null
   /** Casts spent today, out of `perDay`. */
   used: number
+  /**
+   * The area it fills, for laying it on the map. Null means it has none; missing
+   * means nobody said, so it is read from the notes (see `spellArea`).
+   */
+  area?: SpellArea | null
+  /**
+   * What its area does once down, between casts: hurts whoever enters it or
+   * starts a turn there (or both). Null for a spell that only hurts when cast;
+   * missing means nobody said, so it is read from the notes.
+   */
+  trigger?: AreaTrigger | null
+  /** Who its area hurts on the map: everyone, or only enemies; missing is read from the notes. */
+  affects?: AreaAffects
+}
+
+/** A spell's area of effect: the area tool's shape and size. */
+export interface SpellArea {
+  shape: AreaShape
+  /** Radius of a circle or emanation, length of a cone or line, side of a cube. */
+  feet: number
+  /** How wide a line is. */
+  width: number
+  /**
+   * A cube that comes out of the caster ("originating from you": Thunderwave)
+   * rather than landing anywhere in range (Cloud of Daggers). Cones and lines
+   * always come out of the caster.
+   */
+  fromCaster?: boolean
 }
 
 export const MAX_SPELLS = 20
@@ -155,9 +197,82 @@ export function normalizeSpells(value: unknown): Spell[] {
       notes: typeof raw.notes === 'string' ? raw.notes.trim().slice(0, MAX_SPELL_NOTES) : '',
       perDay,
       used: perDay == null ? 0 : clampInt(raw.used, 0, perDay, 0),
+      ...(raw.area === null ? { area: null } : raw.area !== undefined ? { area: normalizeSpellArea(raw.area) } : {}),
+      ...(raw.trigger === null
+        ? { trigger: null }
+        : raw.trigger === 'enter' || raw.trigger === 'start' || raw.trigger === 'both'
+          ? { trigger: raw.trigger }
+          : {}),
+      ...(raw.affects === 'all' || raw.affects === 'enemies' || raw.affects === 'allies' ? { affects: raw.affects } : {}),
     })
   }
   return spells
+}
+
+function normalizeSpellArea(value: unknown): SpellArea | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  if (!AREA_SHAPES.some((item) => item.id === raw.shape)) return null
+  return {
+    shape: raw.shape as AreaShape,
+    feet: clampAreaFeet(Number(raw.feet) || 0),
+    width: clampLineWidth(Number(raw.width) || 5),
+    ...(raw.shape === 'square' && raw.fromCaster === true ? { fromCaster: true } : {}),
+  }
+}
+
+/** The area a spell fills: what was set for it, or else what its notes say. */
+export function spellArea(spell: Spell): SpellArea | null {
+  return spell.area === undefined ? guessSpellArea(spell.notes) : spell.area
+}
+
+/**
+ * What a spell's area does once it is down, as its notes and numbers say: it is
+ * named for the spell; it lasts while the caster concentrates ("Concentration"),
+ * or so many rounds ("1 minute" is 10); and a damaging spell whose notes say it
+ * hurts a creature that enters it or starts its turn there does so, with its save.
+ */
+export function spellAreaEffects(
+  spell: Spell,
+  casterId: string,
+  casting: Spellcasting,
+  stats: CharacterStats,
+): Pick<AreaMark, 'name' | 'duration' | 'damage'> {
+  const lasting = guessLasting(spell.notes)
+  const duration: AreaDuration | undefined =
+    lasting == null ? undefined : 'concentration' in lasting ? { kind: 'concentration', casterId } : { kind: 'rounds', rounds: lasting.rounds }
+  const trigger = spellTrigger(spell)
+  const lingers = trigger != null && hasDamage(spell) && spell.type.toLowerCase() !== 'healing'
+  const damage: AreaDamage | undefined = lingers
+    ? {
+        count: spell.count,
+        faces: spell.faces,
+        bonus: spell.damageBonus,
+        type: spell.type,
+        trigger,
+        save: spell.resolve === 'save' ? { ability: spell.save, dc: saveDc(casting, stats), onSave: spell.onSave } : null,
+        affects: spellAffects(spell),
+      }
+    : undefined
+  return { name: spell.name, ...(duration ? { duration } : {}), ...(damage ? { damage } : {}) }
+}
+
+/** When a spell's area hurts on the map between casts: what is set for it, or else what its notes say. */
+export function spellTrigger(spell: Spell): AreaTrigger | null {
+  return spell.trigger === undefined ? guessTrigger(spell.notes) : spell.trigger
+}
+
+/** Who a spell's area hurts on the map: what is set for it, or else what its notes say. */
+export function spellAffects(spell: Spell): AreaAffects {
+  return spell.affects ?? guessAffects(spell.notes, spell.type.toLowerCase() === 'healing')
+}
+
+/** "20-ft radius", "15-ft cone", "100 × 5 ft line". */
+export function spellAreaLabel(area: SpellArea): string {
+  if (area.shape === 'circle') return `${area.feet}-ft radius`
+  if (area.shape === 'line') return `${area.feet} × ${area.width} ft line`
+  if (area.shape === 'square') return `${area.feet}-ft cube`
+  return `${area.feet}-ft ${area.shape}`
 }
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {

@@ -13,9 +13,20 @@ import {
   type SessionPeer,
   type SnapshotMessage,
 } from '../net/protocol.ts'
-import { isMonster } from '../model/players.ts'
+import { characterNameOf, isMonster } from '../model/players.ts'
+import { areaSide } from '../model/areaEffects.ts'
+import { normalizeEffect, type EffectPlan } from '../model/effects.ts'
+import { registerEffect } from './effectResolver.ts'
 import { connectedOpenings, withinReach } from '../model/openings.ts'
 import { openingIsLocked } from '../model/tiles.ts'
+import {
+  normalizePing,
+  normalizePlacedArea,
+  type AreaMark,
+  type MarkKind,
+  type PlacedArea,
+  type TableMark,
+} from '../model/marks.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
@@ -23,6 +34,7 @@ import { setTableRoller, useDiceStore } from './diceStore.ts'
 import { useDungeonStore } from './dungeonStore.ts'
 import { untracked } from './history.ts'
 import { useEditorStore } from './editorStore.ts'
+import { useMarkStore } from './markStore.ts'
 import { useTravelStore } from './travelStore.ts'
 
 export type SessionRole = 'solo' | 'host' | 'guest'
@@ -87,15 +99,48 @@ interface SessionState {
   setCharacter: (character: DdbCharacter | null) => void
   chooseSeat: (seat: SeatChoice) => void
   setSeatPrompt: (open: boolean) => void
-  reportMove: (playerId: string, floorId: string, x: number, y: number) => void
+  /** `feet` is how far it walked, counted toward its movement on its turn. */
+  reportMove: (playerId: string, floorId: string, x: number, y: number, feet?: number) => void
+  /** Mark a token acting this turn as dashing (twice its speed), or not. */
+  reportDash: (playerId: string, dashed: boolean) => void
+  /** Pulse a square for everyone looking at that floor. */
+  reportPing: (floorId: string, x: number, y: number) => void
   reportPlayer: (playerId: string) => void
   /** Open or close a door from player view; says why not when it is locked or out of reach. */
   reportOpening: (floorId: string, roomId: string, x: number, y: number) => OpeningRefusal | null
   reportTravel: (travel: TokenTravel | null) => void
+  /** Show this tab's ruler or spell area (null takes it away), here and to everyone at the table. */
+  reportMark: (kind: MarkKind, mark: TableMark | null) => void
+  /** Lay a spell area down on the map for good (the DM's browser puts a player's there). */
+  placeArea: (area: AreaMark) => void
+  /** Take spell areas off the map; a player can only take their own. */
+  removeAreas: (ids: readonly string[]) => void
+  /** Change an area already on the map (its owner stays); a player can only change their own. */
+  updateArea: (area: PlacedArea) => void
+  /** A spell or zone going off: the DM's browser waits for its tagged rolls and applies what they come to. */
+  reportEffect: (plan: EffectPlan) => void
   reportFocus: (floorId: string, roomId: string) => void
 }
 
 const clientId = crypto.randomUUID()
+
+/**
+ * Who a spell area laid down here belongs to: the DM, or a player by their
+ * token (so it is still theirs after a reload), or by this tab if they have none.
+ */
+export function areaOwner(): string {
+  const session = useSessionStore.getState()
+  if (session.role !== 'guest') return 'dm'
+  return session.myPlayerId ?? `client:${clientId}`
+}
+
+/** Whether this tab may take an area away: the DM any, a player their own. */
+export function canRemoveArea(area: PlacedArea): boolean {
+  return useSessionStore.getState().role !== 'guest' || area.owner === areaOwner()
+}
+
+/** How long a player's area waits on the DM before its live copy stops showing. */
+const AREA_LANDING_MS = 4000
 
 /** This tab's id at the table, as it appears in the DM's claims. */
 export function myClientId(): string {
@@ -173,6 +218,10 @@ let travelQueued: TokenTravel | null = null
 let travelSentAt = 0
 /** The token whose path this tab last announced, so "path ended" can name it. */
 let travelPlayerId: string | null = null
+/** Rulers and spell areas go out at most this often while dragging, each kind on its own clock. */
+const MARK_MS = 66
+const markTimers: Record<MarkKind, number> = { ruler: 0, area: 0 }
+const markSentAt: Record<MarkKind, number> = { ruler: 0, area: 0 }
 /** Close table waits on this for the relay to confirm the final save. */
 let closeWaiter: (() => void) | null = null
 
@@ -240,6 +289,9 @@ function destroySocket(): void {
   travelQueued = null
   travelPlayerId = null
   useTravelStore.getState().clear()
+  window.clearTimeout(markTimers.ruler)
+  window.clearTimeout(markTimers.area)
+  useMarkStore.getState().clear()
   const old = socket
   socket = null
   old?.close()
@@ -376,6 +428,7 @@ function applySnapshot(message: Extract<NetMessage, { type: 'snapshot' }>): void
   })
   if (newMap) {
     useTravelStore.getState().clear()
+    useMarkStore.getState().clear()
     settleViewOnNewMap(useSessionStore.getState().myPlayerId)
   }
 }
@@ -517,6 +570,7 @@ function handleHostMessage(message: NetMessage): void {
     applyRemote(() => useDungeonStore.getState().enterMap(message.snapshot?.dungeon ?? null))
     useSessionStore.getState().reportTravel(null)
     useTravelStore.getState().clear()
+    useMarkStore.getState().clear()
     convertPortraits()
     // Everyone switches with this, and the relay saves it as the live map.
     sendSnapshot()
@@ -601,8 +655,9 @@ function handleHostMessage(message: NetMessage): void {
     return
   }
   if (message.type === 'move') {
+    const feet = typeof message.feet === 'number' && Number.isFinite(message.feet) ? Math.max(0, message.feet) : 0
     applyRemote(() => {
-      useDungeonStore.getState().movePlayer(message.playerId, message.floorId, message.x, message.y)
+      useDungeonStore.getState().movePlayer(message.playerId, message.floorId, message.x, message.y, feet)
     })
     // Resend where the token stands even if the DM refused the move, so the mover snaps back.
     forced.add(message.playerId)
@@ -625,6 +680,45 @@ function handleHostMessage(message: NetMessage): void {
     scheduleSync()
     return
   }
+  if (message.type === 'effect') {
+    const plan = normalizeEffect(message.plan)
+    if (plan) registerEffect(plan)
+    return
+  }
+  if (message.type === 'dash') {
+    // Only for a token of their own: their character, or a companion of theirs.
+    const peerPlayerId = session.peers.find((peer) => peer.id === message.clientId)?.playerId ?? null
+    const token = useDungeonStore.getState().dungeon.players.find((player) => player.id === message.playerId)
+    if (!token || !guestControls(token, peerPlayerId)) return
+    applyRemote(() => useDungeonStore.getState().setDash(message.playerId, message.dashed === true))
+    scheduleSync()
+    return
+  }
+  if (message.type === 'area') {
+    // A player's area is theirs: by their token, or their tab if they have none.
+    const owner = session.peers.find((peer) => peer.id === message.clientId)?.playerId ?? `client:${message.clientId}`
+    const added = message.add ? normalizePlacedArea({ ...message.add, owner }) : null
+    // A player changes only their own areas, and can't hide one: that is the DM's.
+    if (added) {
+      const existing = useDungeonStore.getState().dungeon.areas?.find((area) => area.id === added.id)
+      if (existing && existing.owner !== owner) return
+      delete added.hidden
+      // A player is on the party's side, whatever their area hurts.
+      added.side = 'party'
+    }
+    const mine = new Set(
+      (useDungeonStore.getState().dungeon.areas ?? [])
+        .filter((area) => area.owner === owner && message.remove?.includes(area.id))
+        .map((area) => area.id),
+    )
+    if (!added && mine.size === 0) return
+    applyRemote(() => {
+      if (added) useDungeonStore.getState().addArea(added)
+      if (mine.size) useDungeonStore.getState().removeAreas([...mine])
+    })
+    scheduleSync()
+    return
+  }
   if (message.type === 'dice') {
     // The relay already sent these to everyone.
     applyRemote(() => useDiceStore.getState().ingest(message.rolls))
@@ -642,13 +736,38 @@ function sendTravel(travel: TokenTravel | null): void {
   travelSentAt = Date.now()
 }
 
+/** Send this tab's ruler or spell area (or its removal) straight to the table through the relay. */
+function sendMark(kind: MarkKind, mark: TableMark | null): void {
+  const fromHost = useSessionStore.getState().role === 'host'
+  // A hidden area (the DM's trap) never goes out while it is dragged: the others see nothing.
+  const shown = mark?.kind === 'area' && mark.hidden ? null : mark
+  send({ type: 'mark', clientId, fromHost, kind, mark: shown })
+  markSentAt[kind] = Date.now()
+}
+
 /** Messages every seat handles the same way. */
 function handleSharedMessage(message: NetMessage): boolean {
   if (message.type === 'travel') {
     useTravelStore.getState().receive(message.clientId, message.fromHost, message.playerId, message.travel)
     return true
   }
-  if (message.type === 'presence') useTravelStore.getState().prune(message)
+  if (message.type === 'ping') {
+    const ping = normalizePing(message.ping)
+    if (ping) useMarkStore.getState().addPing(ping)
+    return true
+  }
+  if (message.type === 'mark') {
+    useMarkStore.getState().receive(message.clientId, message.fromHost, message.kind, message.mark)
+    return true
+  }
+  if (message.type === 'presence') {
+    useTravelStore.getState().prune(message)
+    useMarkStore.getState().prune(message)
+    // Whoever just arrived sees the rulers and spell areas already out.
+    const { mine } = useMarkStore.getState()
+    if (mine.ruler) sendMark('ruler', mine.ruler)
+    if (mine.area) sendMark('area', mine.area)
+  }
   return false
 }
 
@@ -1100,9 +1219,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setSeatPrompt: (open) => set({ seatPrompt: open }),
 
-  reportMove: (playerId, floorId, x, y) => {
+  reportMove: (playerId, floorId, x, y, feet) => {
     if (get().role !== 'guest') return
-    send({ type: 'move', playerId, floorId, x, y })
+    send({ type: 'move', playerId, floorId, x, y, ...(feet ? { feet } : {}) })
+  },
+
+  reportDash: (playerId, dashed) => {
+    if (!canControlPlayer(playerId)) return
+    // Shown here straight away; the DM's map has the final say.
+    useDungeonStore.getState().setDash(playerId, dashed)
+    if (get().role === 'guest') send({ type: 'dash', clientId, playerId, dashed })
+  },
+
+  reportPing: (floorId, x, y) => {
+    const session = get()
+    const dungeon = useDungeonStore.getState().dungeon
+    // A player pings in their character's name and colour; the DM as the DM.
+    const mine = session.role === 'guest' ? dungeon.players.find((player) => player.id === session.myPlayerId) : undefined
+    const color = mine && /^#[0-9a-f]{3,8}$/i.test(mine.color) ? mine.color : '#e8c468'
+    const ping = { floorId, x, y, name: mine ? characterNameOf(mine) : 'DM', color }
+    useMarkStore.getState().addPing(ping)
+    if (session.role !== 'solo') send({ type: 'ping', clientId, ping })
   },
 
   reportPlayer: (playerId) => {
@@ -1143,6 +1280,61 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       travelQueued = null
       if (next) sendTravel(next)
     }, wait)
+  },
+
+  reportMark: (kind, mark) => {
+    useMarkStore.getState().setMine(kind, mark)
+    if (get().role === 'solo') return
+    window.clearTimeout(markTimers[kind])
+    const wait = MARK_MS - (Date.now() - markSentAt[kind])
+    if (!mark || wait <= 0) {
+      sendMark(kind, mark)
+      return
+    }
+    // Dragging: send whatever is newest when the window opens.
+    markTimers[kind] = window.setTimeout(() => sendMark(kind, useMarkStore.getState().mine[kind]), wait)
+  },
+
+  placeArea: (area) => {
+    const id = area.id ?? crypto.randomUUID()
+    const owner = areaOwner()
+    // Its side: its caster's (an emanation's creature, or whoever concentrates on it), else whoever lays it down.
+    const casterId = area.playerId ?? (area.duration?.kind === 'concentration' ? area.duration.casterId : undefined)
+    const caster = useDungeonStore.getState().dungeon.players.find((player) => player.id === casterId)
+    const placed = normalizePlacedArea({ ...area, id, owner, side: area.side ?? areaSide(caster, owner) })
+    if (!placed) return
+    if (get().role !== 'guest') {
+      useDungeonStore.getState().addArea(placed)
+      return
+    }
+    send({ type: 'area', clientId, add: placed })
+    // The live copy shows until the DM's map has it (see MapEngine), or gives up if the DM is away.
+    window.setTimeout(() => {
+      if (useMarkStore.getState().mine.area?.id === id) get().reportMark('area', null)
+    }, AREA_LANDING_MS)
+  },
+
+  reportEffect: (plan) => {
+    if (get().role === 'guest') send({ type: 'effect', clientId, plan })
+    else registerEffect(plan)
+  },
+
+  updateArea: (area) => {
+    if (!canRemoveArea(area)) return
+    if (get().role !== 'guest') {
+      const placed = normalizePlacedArea(area)
+      if (placed) useDungeonStore.getState().addArea(placed)
+      return
+    }
+    send({ type: 'area', clientId, add: { ...area, hidden: undefined } })
+  },
+
+  removeAreas: (ids) => {
+    const areas = useDungeonStore.getState().dungeon.areas ?? []
+    const allowed = areas.filter((area) => ids.includes(area.id) && canRemoveArea(area)).map((area) => area.id)
+    if (allowed.length === 0) return
+    if (get().role !== 'guest') useDungeonStore.getState().removeAreas(allowed)
+    else send({ type: 'area', clientId, remove: allowed })
   },
 
   reportFocus: (floorId, roomId) => {

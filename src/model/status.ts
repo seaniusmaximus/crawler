@@ -14,6 +14,7 @@ export const STATUS_IDS = [
   'incapacitated',
   'petrified',
   'frightened',
+  'concentrating',
 ] as const
 
 export type StatusId = (typeof STATUS_IDS)[number]
@@ -40,7 +41,12 @@ export const STATUS_EFFECTS: readonly StatusEffect[] = [
   { id: 'incapacitated', label: 'Incapacitated', color: '#a1a1aa' },
   { id: 'petrified', label: 'Petrified', color: '#a8a29e' },
   { id: 'frightened', label: 'Frightened', color: '#f87171' },
+  // Not a condition: holding a concentration spell. A spell area tied to it ends when it goes.
+  { id: 'concentrating', label: 'Concentrating', color: '#38bdf8' },
 ]
+
+/** The statuses a spell or attack can put on a target: everything but concentrating, which is the caster's own. */
+export const CONDITION_EFFECTS: readonly StatusEffect[] = STATUS_EFFECTS.filter((item) => item.id !== 'concentrating')
 
 const BY_ID = new Map(STATUS_EFFECTS.map((item) => [item.id, item]))
 

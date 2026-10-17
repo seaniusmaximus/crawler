@@ -37,8 +37,11 @@ export function walkCells(from: Cell, to: Cell): Cell[] {
   return cells
 }
 
-/** Each grid step costs one tile, diagonal or cardinal. */
-export function pathFeet(cells: readonly Cell[]): number {
+/**
+ * Each grid step costs one tile, diagonal or cardinal; `cost` can make a step
+ * onto a square dearer (2 in difficult terrain).
+ */
+export function pathFeet(cells: readonly Cell[], cost?: (cell: Cell) => number): number {
   const trail = uniqueTrail(cells)
   if (trail.length < 2) return 0
   const first = trail[0]
@@ -48,7 +51,8 @@ export function pathFeet(cells: readonly Cell[]): number {
   for (let i = 1; i < trail.length; i++) {
     const end = trail[i]
     if (!end) continue
-    steps += walkCells(prev, end).length
+    const walked = walkCells(prev, end)
+    steps += cost ? walked.reduce((sum, cell) => sum + cost(cell), 0) : walked.length
     prev = end
   }
   return steps * FEET_PER_TILE

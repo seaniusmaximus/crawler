@@ -28,10 +28,11 @@ import {
   ABILITY_LABEL,
   displayedAbilityMod,
   formatSigned,
+  proficiencyBonus,
   type AbilityKey,
   type CharacterStats,
 } from '../../model/stats.ts'
-import { STATUS_EFFECTS, isStatusId, statusEffect, type StatusId } from '../../model/status.ts'
+import { CONDITION_EFFECTS, isStatusId, statusEffect, type StatusId } from '../../model/status.ts'
 import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
@@ -39,7 +40,7 @@ import { Stepper } from '../../ui/Stepper.tsx'
 import { rollAttack, rollDamage, rollSaveDamage } from './tokenRolls.ts'
 
 /**
- * A stat block's attacks. Each rolls to hit and for damage into the shared dice
+ * A token's attacks, on a character sheet or stat block. Each rolls to hit and for damage into the shared dice
  * log; whoever may edit the block adds, changes and removes them.
  */
 export function Attacks({ player, stats, editable }: { player: Player; stats: CharacterStats; editable: boolean }) {
@@ -55,7 +56,8 @@ export function Attacks({ player, stats, editable }: { player: Player; stats: Ch
   }
 
   function add(): void {
-    const attack = newAttack()
+    // A character's attacks start proficient at their level; a creature's start at +0 over the ability.
+    const attack = player.kind === 'player' ? { ...newAttack(), hitBonus: proficiencyBonus(stats.level) } : newAttack()
     save([...attacks, attack])
     setEditingId(attack.id)
     setFreshId(attack.id)
@@ -398,7 +400,7 @@ function AttackForm({
                 }
               >
                 <option value="">No condition</option>
-                {STATUS_EFFECTS.map((effect) => (
+                {CONDITION_EFFECTS.map((effect) => (
                   <option key={effect.id} value={effect.id}>
                     {effect.label}
                   </option>

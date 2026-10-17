@@ -28,6 +28,33 @@ const PATHS: Record<string, ReactNode> = {
   /** A chest: dressing rooms with objects. */
   objects: <path d="M4 11h16v8a1 1 0 01-1 1H5a1 1 0 01-1-1zM4 11V9a4 4 0 014-4h8a4 4 0 014 4v2M11 13h2v3h-2z" />,
   split: <path d="M4 4h6v16H4zM14 4h6v16h-6z" />,
+  /** Spell area shapes, as the area of effect tool lays them. */
+  areaCircle: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+    </>
+  ),
+  areaEmanation: (
+    <>
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" strokeDasharray="3 2.2" />
+      <circle cx="12" cy="10" r="2" />
+      <path d="M8.5 16.5a3.5 3.5 0 017 0" />
+    </>
+  ),
+  areaCone: <path d="M4 12L20 4v16z" />,
+  areaLine: <path d="M3 9.5h18v5H3z" />,
+  areaCube: <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9" />,
+  /** A ruler laid corner to corner. */
+  measure: <path d="M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2" />,
+  /** A blast spreading from its centre: a spell's area of effect. */
+  aoe: (
+    <>
+      <circle cx="12" cy="12" r="8.5" strokeDasharray="3 2.4" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="12" cy="12" r="0.9" fill="currentColor" />
+    </>
+  ),
   link: (
     <>
       <path d="M10 14a4 4 0 005.66 0l3-3a4 4 0 00-5.66-5.66L12 6.3" />

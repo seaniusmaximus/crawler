@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import { rotateAt, zoomAt } from '../canvas/camera.ts'
+import { areaColor, clampAreaFeet, clampLineWidth, type AreaShape } from '../model/marks.ts'
 import type { TemplateKind } from '../model/monsterTemplates.ts'
+import type { SpellArea } from '../model/spells.ts'
+import type { AreaMark } from '../model/marks.ts'
+import type { CastRoll } from '../features/areas/castRolls.ts'
 import { nextTurn } from '../model/objects.ts'
 import type { DoorStyle, Tool } from '../model/tools.ts'
 import type { StairLanding, StairUsePrompt } from '../model/stairs.ts'
@@ -48,7 +52,29 @@ export interface PlayerMenu {
   y: number
 }
 
-export type Menu = RoomMenu | OpeningMenu | ObjectMenu | PlayerMenu
+/** A spell cast from a sheet: whose token it comes from, and the spell's name for the hint. */
+export interface AreaCast {
+  playerId: string
+  name: string
+  /** What the area does once down: the spell's name, duration and lingering damage. */
+  effects?: Pick<AreaMark, 'name' | 'duration' | 'damage'>
+  /** What it does to the creatures in it as it lands (Fireball): their saves, and its damage or healing. */
+  onCast?: CastRoll
+  /** It is over as soon as it has gone off: its area shows for a moment, then goes. */
+  instant?: boolean
+  /** A cube that comes out of the caster rather than landing in range. */
+  fromCaster?: boolean
+}
+
+/** A spell area on the map, right-clicked with the area tool: its settings. */
+export interface AreaMenu {
+  kind: 'area'
+  areaId: string
+  x: number
+  y: number
+}
+
+export type Menu = RoomMenu | OpeningMenu | ObjectMenu | PlayerMenu | AreaMenu
 
 /** `leftInset` keeps the room centred in the area a docked panel is not covering. */
 export interface CreaturePicker {
@@ -107,6 +133,23 @@ interface EditorState {
   /** The object open in the object editor, as it was when opened; null when the editor is closed. */
   objectEditor: ObjectDef | null
   viewMode: ViewMode
+  /** The shape and size the area of effect tool lays down, in feet. */
+  aoeShape: AreaShape
+  aoeFeet: number
+  /** How wide a line is, in feet. */
+  aoeWidth: number
+  /** An emanation or cube covers its own caster too. */
+  aoeIncludeSelf: boolean
+  /** Which of the area colours new areas are washed in. */
+  aoeColor: string
+  /** New areas are hidden from players (the DM's traps); never set for a player. */
+  aoeHidden: boolean
+  /**
+   * A spell being cast from a sheet: the area tool is set to its shape and size,
+   * which a drag no longer changes, and a cone, line or cube comes out of the
+   * caster. Null when the tool is used freehand.
+   */
+  aoeCast: AreaCast | null
   /** Token whose character sheet or stat block is open beside its card. */
   sheetPlayerId: string | null
   setCamera: (camera: Camera) => void
@@ -149,6 +192,15 @@ interface EditorState {
   closeObjectEditor: () => void
   setViewMode: (mode: ViewMode) => void
   openSheet: (playerId: string | null) => void
+  /** Pick the area's shape, switching to the area tool. */
+  setAoeShape: (shape: AreaShape) => void
+  /** Take up the area tool to lay down a spell's area, for `cast.playerId`'s token. */
+  castArea: (cast: AreaCast, area: SpellArea) => void
+  setAoeFeet: (feet: number) => void
+  setAoeWidth: (feet: number) => void
+  setAoeIncludeSelf: (include: boolean) => void
+  setAoeColor: (color: string) => void
+  setAoeHidden: (hidden: boolean) => void
 }
 
 const ROOMS_LOCKED_KEY = 'crawler.roomsLocked'
@@ -189,6 +241,13 @@ export const useEditorStore = create<EditorState>((set) => ({
   creaturePicker: null,
   objectEditor: null,
   viewMode: 'dm',
+  aoeShape: 'circle',
+  aoeFeet: 20,
+  aoeWidth: 5,
+  aoeIncludeSelf: false,
+  aoeColor: 'red',
+  aoeHidden: false,
+  aoeCast: null,
   sheetPlayerId: null,
   setCamera: (camera) => set({ camera }),
   setViewport: (width, height) => set({ viewport: { width, height } }),
@@ -202,8 +261,10 @@ export const useEditorStore = create<EditorState>((set) => ({
     })),
   // Resize handles belong to the rooms tool, so leaving it ends resize mode.
   // Picking Stairs or Link comes back to whichever kind was last chosen.
+  // Picking any tool, the area tool included, ends casting a spell from a sheet.
   setTool: (tool) =>
     set((state) => ({
+      aoeCast: null,
       tool:
         tool === 'stairs' && state.stairsBetween
           ? 'ramp'
@@ -265,7 +326,9 @@ export const useEditorStore = create<EditorState>((set) => ({
   setLinkRoom: (roomId) => set({ linkRoomId: roomId }),
   openMenu: (menu) =>
     set(
-      menu.kind === 'player'
+      menu.kind === 'area'
+        ? { menu }
+        : menu.kind === 'player'
         ? { selectedPlayerId: menu.playerId, selectedRoomId: null, selectedObject: null, resizeRoomId: null, menu }
         : {
             selectedRoomId: menu.roomId,
@@ -308,4 +371,22 @@ export const useEditorStore = create<EditorState>((set) => ({
   setViewMode: (viewMode) =>
     set({ viewMode, menu: null, resizeRoomId: null, linkRoomId: null, hoverRoomId: null }),
   openSheet: (sheetPlayerId) => set({ sheetPlayerId }),
+  setAoeShape: (aoeShape) =>
+    set({ aoeShape, aoeCast: null, tool: 'aoe', menu: null, resizeRoomId: null, linkRoomId: null }),
+  castArea: (aoeCast, area) =>
+    set({
+      aoeCast,
+      aoeShape: area.shape,
+      aoeFeet: clampAreaFeet(area.feet),
+      aoeWidth: clampLineWidth(area.width),
+      tool: 'aoe',
+      menu: null,
+      resizeRoomId: null,
+      linkRoomId: null,
+    }),
+  setAoeFeet: (feet) => set({ aoeFeet: clampAreaFeet(feet) }),
+  setAoeWidth: (feet) => set({ aoeWidth: clampLineWidth(feet) }),
+  setAoeIncludeSelf: (aoeIncludeSelf) => set({ aoeIncludeSelf }),
+  setAoeColor: (color) => set({ aoeColor: areaColor(color).id }),
+  setAoeHidden: (aoeHidden) => set({ aoeHidden }),
 }))

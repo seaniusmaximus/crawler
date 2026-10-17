@@ -6,7 +6,7 @@ import { Icon } from '../../ui/Icon.tsx'
 import { NotesToggle, RowNotes } from './RowNotes.tsx'
 
 /**
- * A stat block's traits, written as a stat block does ("Pack Tactics. The wolf
+ * A token's traits (a character's features too), written as a stat block does ("Pack Tactics. The wolf
  * has advantage…"): open notes on what the creature can do or simply is.
  * Whoever may edit the block clicks one to rewrite it.
  */

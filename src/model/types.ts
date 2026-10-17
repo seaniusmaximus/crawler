@@ -5,6 +5,7 @@ import type { Senses } from './senses.ts'
 import type { Spell, Spellcasting } from './spells.ts'
 import type { Trait } from './traits.ts'
 import type { Combat } from './combat.ts'
+import type { PlacedArea } from './marks.ts'
 import type { CharacterStats, StatsManual } from './stats.ts'
 import type { TokenTravel } from './travel.ts'
 
@@ -157,6 +158,8 @@ export interface Dungeon {
   tileset?: string
   /** Objects the DM built for this map in the object editor; missing means none. */
   customObjects?: ObjectDef[]
+  /** Spell areas laid down at the table, kept until taken away; missing means none. */
+  areas?: PlacedArea[]
 }
 
 /** A character token that stands on a floor tile. */

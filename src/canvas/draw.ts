@@ -9,6 +9,11 @@ import {
   playerStatuses,
 } from '../model/players.ts'
 import { statusEffect } from '../model/status.ts'
+import { areaCells, areaColor, areaLabel, areaOutline, cellBorder, placedArea, roundsLeft, rulerFeet } from '../model/marks.ts'
+import { FEET_PER_TILE } from '../model/scale.ts'
+import type { AreaMark, Ping, Ruler, TableMark } from '../model/marks.ts'
+import type { MoveBudget } from '../model/combat.ts'
+import type { DashPill } from './dashPill.ts'
 import type { StatusId } from '../model/status.ts'
 import { sameLink } from '../model/links.ts'
 import { roomCells, roomContains } from '../model/rect.ts'
@@ -16,7 +21,7 @@ import { rampFlight, rampOccupancy } from '../model/ramps.ts'
 import type { RampDraft, RampSlice } from '../model/ramps.ts'
 import { openingGroup } from '../model/openings.ts'
 import type { OpeningGroup } from '../model/openings.ts'
-import { cellId, openingAt, openingIsLocked, openingIsOpen, parseCellKey, spriteAt, stairsAt } from '../model/tiles.ts'
+import { cellId, cellKey, openingAt, openingIsLocked, openingIsOpen, parseCellKey, spriteAt, stairsAt } from '../model/tiles.ts'
 import { stairsRegion, wallCells, wallPaintCells } from '../model/tools.ts'
 import { sharedWalls } from '../model/walls.ts'
 import type { SharedWalls } from '../model/walls.ts'
@@ -72,6 +77,17 @@ const ACCENT = '#e8c468'
 const SELECT = '#78d39b'
 const LINK = '#78d39b'
 const MEASURE = '#f4f1ea'
+/** Spell areas: a wash of their colour over the squares they touch, ringed by their shape. */
+const AREA_FILL_ALPHA = 0.3
+const AREA_PREVIEW_ALPHA = 0.16
+const AREA_EDGE_ALPHA = 0.95
+/** Rulers: the gold of the table tools, so they don't read as a token's path. */
+const RULER = '#e8c468'
+/** A path longer than the token may move this turn. */
+const OVER_BUDGET = '#ff8a8d'
+/** Squares a token can still reach this turn: a faint wash, under everything else. */
+const REACH_FILL = 'rgba(120, 211, 155, 0.13)'
+const REACH_EDGE = 'rgba(120, 211, 155, 0.55)'
 
 const TOOL_TINT: Record<FeatureTool, string> = {
   doors: '#e09a4a',
@@ -105,6 +121,14 @@ export interface DrawView {
   tokenPoses: readonly { playerId: string; x: number; y: number; tilt: number }[]
   /** Whose turn it is, with any companions acting on it. */
   turnIds: ReadonlySet<string>
+  /** How far each token acting this turn may move, and has, for the feet on its path. */
+  moveBudgets?: ReadonlyMap<string, MoveBudget>
+  /** Dash buttons beside tokens this viewer runs that are out of movement this turn. */
+  dashPills?: readonly DashPill[]
+  /** Squares the token in hand can still reach this turn, lightly shaded. */
+  reach?: readonly Cell[] | null
+  /** Pings on this floor, with how far through their pulse each is (0 to 1). */
+  pings?: readonly (Ping & { id: number; age: number })[]
   viewMode: ViewMode
   /** Explored rooms the party can see into now; the rest of the explored ones draw greyed out for players. */
   sight: ReadonlySet<string>
@@ -116,6 +140,14 @@ export interface DrawView {
   objectDraft: ObjectDraft | null
   /** Object footprints to outline: the one picked, and the one under the pointer with the Objects tool. */
   objectFocus: readonly { rect: CellRect; elevation: number; selected: boolean }[]
+  /** Rulers and spell areas being dragged out on this floor, from everyone at the table. */
+  marks?: readonly TableMark[]
+  /** Spell areas laid down on the map (emanations wherever their creature is). */
+  placedAreas?: readonly AreaMark[]
+  /** The round of combat, for how many rounds areas have left; missing out of combat. */
+  round?: number
+  /** Where this tab's area would land, under the pointer, before it is placed. */
+  areaPreview?: AreaMark | null
   /** The map's tiles. */
   tileCache: TileCache
   /** The tiles one room draws with, when it has a tileset of its own. */
@@ -283,8 +315,31 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, view: DrawView, soli
     drawLinkBadge(ctx, badge, view.hoverLink ? sameLink(view.hoverLink, badge.link) : false)
   }
 
+  const marks = view.marks ?? []
+  if (view.reach?.length) drawReach(ctx, painted, view.reach)
+
+  const placed = (view.placedAreas ?? []).map((area) => areaHere(view, area)).filter((area) => area !== null)
+  // Areas still being dragged out (or waiting on the DM to place them), which carry a size label.
+  const live = marks
+    .filter((mark): mark is AreaMark => mark.kind === 'area')
+    .map((area) => areaHere(view, area))
+    .filter((area) => area !== null)
+  const preview = view.areaPreview ? areaHere(view, view.areaPreview) : null
+  for (const area of placed) drawArea(ctx, painted, area, false)
+  for (const area of live) drawArea(ctx, painted, area, false)
+  if (preview) drawArea(ctx, painted, preview, true)
+
   drawMovePath(ctx, view)
   drawTokens(ctx, view, solids)
+
+  for (const pill of view.dashPills ?? []) drawDashPill(ctx, pill)
+
+  // Labels and rulers sit above the tokens, so they can always be read.
+  for (const area of placed) drawPlacedLabel(ctx, painted, area)
+  for (const area of live) drawAreaLabel(ctx, painted, area)
+  if (preview) drawAreaLabel(ctx, painted, preview)
+  for (const mark of marks) if (mark.kind === 'ruler') drawRuler(ctx, painted, mark)
+  for (const ping of view.pings ?? []) drawPing(ctx, painted, ping)
 
   if (view.objectDraft) drawObjectDraft(ctx, view, view.objectDraft)
   if (view.feature) drawFeaturePreview(ctx, view, view.feature)
@@ -1681,6 +1736,270 @@ function drawRampPreview(ctx: CanvasRenderingContext2D, view: DrawView, draft: R
   drawChip(ctx, label, east.x + 6, east.y, color)
 }
 
+/** Floor height under each cell, worked out once for a whole area or ruler. */
+function elevationLookup(view: DrawView): (x: number, y: number) => number {
+  const occupancy = rampOccupancy(view.ramps, view.rooms)
+  return (x, y) => occupancy.get(cellKey(x, y))?.stand ?? occupantRoom(view.rooms, x, y)?.elevation ?? 0
+}
+
+/**
+ * An area where it is now: an emanation on its creature's squares, mid-walk
+ * wherever the token has got to. One whose creature isn't on this floor, or
+ * that this view doesn't show, isn't drawn.
+ */
+function areaHere(view: DrawView, area: AreaMark): AreaMark | null {
+  return placedArea(area, view.players, (playerId) => {
+    const pose = view.tokenPoses.find((item) => item.playerId === playerId)
+    return pose ? { x: Math.round(pose.x), y: Math.round(pose.y) } : undefined
+  })
+}
+
+/** Where an area's label goes, in grid units: under an emanation's creature, else at its origin. */
+function areaAnchor(area: AreaMark): { x: number; y: number } {
+  if (area.shape !== 'emanation') return area.origin
+  const half = (area.tokenSize ?? 1) / 2
+  return { x: area.origin.x + half, y: area.origin.y + half }
+}
+
+/**
+ * A spell area: the squares it touches washed in its colour, each on its own floor height,
+ * and its true outline at the height of where it starts.
+ */
+function drawArea(ctx: CanvasRenderingContext2D, view: DrawView, area: AreaMark, preview: boolean): void {
+  const elevationAt = elevationLookup(view)
+  const camera = view.camera
+  const cells = areaCells(area)
+  ctx.save()
+  ctx.beginPath()
+  for (const cell of cells) {
+    diamondPath(ctx, liftCorners(cellCorners(cell.x, cell.y, camera), camera, roomLift(elevationAt(cell.x, cell.y))))
+  }
+  const rgb = areaColor(area.color).rgb
+  // A hidden area (only the DM sees it) is drawn faint, with a broken edge.
+  if (area.hidden) ctx.globalAlpha = 0.6
+  ctx.fillStyle = `rgba(${rgb}, ${preview ? AREA_PREVIEW_ALPHA : AREA_FILL_ALPHA})`
+  ctx.fill()
+  // Difficult terrain is hatched over its wash.
+  if (area.difficult) {
+    ctx.fillStyle = hatchFor(ctx, rgb)
+    ctx.fill()
+  }
+
+  const base = roomLift(elevationAt(Math.floor(area.origin.x), Math.floor(area.origin.y)))
+  const outline = areaOutline(area).map((point) => lift(cellToScreen(point.x, point.y, camera), camera, base))
+  const first = outline[0]
+  ctx.beginPath()
+  if (first) {
+    ctx.moveTo(first.x, first.y)
+    for (const point of outline.slice(1)) ctx.lineTo(point.x, point.y)
+    ctx.closePath()
+  } else {
+    // A shape laid out square by square is ringed by its squares' outer edges.
+    for (const edge of cellBorder(cells)) {
+      const height = roomLift(elevationAt(edge.cell.x, edge.cell.y))
+      const from = lift(cellToScreen(edge.from.x, edge.from.y, camera), camera, height)
+      const to = lift(cellToScreen(edge.to.x, edge.to.y, camera), camera, height)
+      ctx.moveTo(from.x, from.y)
+      ctx.lineTo(to.x, to.y)
+    }
+  }
+  ctx.strokeStyle = `rgba(${rgb}, ${AREA_EDGE_ALPHA})`
+  ctx.lineWidth = preview ? 1.25 : 2
+  ctx.lineCap = 'round'
+  if (preview || area.hidden) ctx.setLineDash([5, 4])
+  ctx.stroke()
+  // The point it spreads from; an emanation's is its creature, already plain to see.
+  if (area.shape !== 'emanation') {
+    const origin = lift(cellToScreen(area.origin.x, area.origin.y, camera), camera, base)
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.arc(origin.x, origin.y, 3.5, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(${rgb}, ${AREA_EDGE_ALPHA})`
+    ctx.fill()
+  }
+  ctx.restore()
+}
+
+const hatches = new Map<string, CanvasPattern | string>()
+
+/** Diagonal stripes in an area's colour, for difficult terrain; drawn once per colour. */
+function hatchFor(ctx: CanvasRenderingContext2D, rgb: string): CanvasPattern | string {
+  const known = hatches.get(rgb)
+  if (known) return known
+  const tile = document.createElement('canvas')
+  tile.width = 8
+  tile.height = 8
+  const pen = tile.getContext('2d')
+  if (pen) {
+    pen.strokeStyle = `rgba(${rgb}, 0.55)`
+    pen.lineWidth = 1.5
+    pen.beginPath()
+    // Corner to corner, plus the bits that wrap, so the stripes join up tile to tile.
+    pen.moveTo(0, 8)
+    pen.lineTo(8, 0)
+    pen.moveTo(-2, 2)
+    pen.lineTo(2, -2)
+    pen.moveTo(6, 10)
+    pen.lineTo(10, 6)
+    pen.stroke()
+  }
+  const pattern = ctx.createPattern(tile, 'repeat') ?? `rgba(${rgb}, 0.2)`
+  hatches.set(rgb, pattern)
+  return pattern
+}
+
+/**
+ * What an area on the map is, when there is anything to say: its name, rounds
+ * left or that it is held by concentration, and (to the DM) that it is hidden.
+ */
+function drawPlacedLabel(ctx: CanvasRenderingContext2D, view: DrawView, area: AreaMark): void {
+  const left = roundsLeft(area, view.round)
+  const parts = [
+    area.name,
+    left != null ? `${left} rd` : null,
+    area.duration?.kind === 'concentration' ? 'conc.' : null,
+    area.hidden ? 'hidden' : null,
+  ].filter((part) => part)
+  if (parts.length === 0) return
+  const elevationAt = elevationLookup(view)
+  const anchor = areaAnchor(area)
+  const base = roomLift(elevationAt(Math.floor(area.origin.x), Math.floor(area.origin.y)))
+  const at = lift(cellToScreen(anchor.x, anchor.y, view.camera), view.camera, base)
+  const label = parts.join(' · ')
+  ctx.save()
+  if (area.hidden) ctx.globalAlpha = 0.75
+  ctx.font = '600 12px system-ui, sans-serif'
+  const width = ctx.measureText(label).width + 12
+  drawChip(ctx, label, at.x - width / 2, at.y + 10, `rgb(${areaColor(area.color).rgb})`)
+  ctx.restore()
+}
+
+function drawAreaLabel(ctx: CanvasRenderingContext2D, view: DrawView, area: AreaMark): void {
+  const elevationAt = elevationLookup(view)
+  const anchor = areaAnchor(area)
+  const base = roomLift(elevationAt(Math.floor(area.origin.x), Math.floor(area.origin.y)))
+  const origin = lift(cellToScreen(anchor.x, anchor.y, view.camera), view.camera, base)
+  const label = areaLabel(area)
+  ctx.font = '600 12px system-ui, sans-serif'
+  const width = ctx.measureText(label).width + 12
+  drawChip(ctx, label, origin.x - width / 2, origin.y + 10, `rgb(${areaColor(area.color).rgb})`)
+}
+
+/** A Dash button beside a token that has used all its movement this turn. */
+function drawDashPill(ctx: CanvasRenderingContext2D, pill: DashPill): void {
+  ctx.save()
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'
+  ctx.shadowBlur = 4
+  ctx.beginPath()
+  ctx.roundRect(pill.x, pill.y, pill.width, pill.height, pill.height / 2)
+  ctx.fillStyle = 'rgba(18, 19, 24, 0.92)'
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.strokeStyle = ACCENT
+  ctx.lineWidth = 1
+  ctx.stroke()
+  ctx.font = '700 11px system-ui, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = ACCENT
+  ctx.fillText('Dash', pill.x + pill.width / 2, pill.y + pill.height / 2 + 0.5)
+  ctx.restore()
+}
+
+/** The squares a token can still reach this turn, each on its floor, ringed round the outside. */
+function drawReach(ctx: CanvasRenderingContext2D, view: DrawView, cells: readonly Cell[]): void {
+  const elevationAt = elevationLookup(view)
+  const camera = view.camera
+  ctx.save()
+  ctx.beginPath()
+  for (const cell of cells) {
+    diamondPath(ctx, liftCorners(cellCorners(cell.x, cell.y, camera), camera, roomLift(elevationAt(cell.x, cell.y))))
+  }
+  ctx.fillStyle = REACH_FILL
+  ctx.fill()
+  ctx.beginPath()
+  for (const edge of cellBorder(cells)) {
+    const height = roomLift(elevationAt(edge.cell.x, edge.cell.y))
+    const from = lift(cellToScreen(edge.from.x, edge.from.y, camera), camera, height)
+    const to = lift(cellToScreen(edge.to.x, edge.to.y, camera), camera, height)
+    ctx.moveTo(from.x, from.y)
+    ctx.lineTo(to.x, to.y)
+  }
+  ctx.strokeStyle = REACH_EDGE
+  ctx.lineWidth = 1.25
+  ctx.setLineDash([4, 3])
+  ctx.stroke()
+  ctx.restore()
+}
+
+/**
+ * A ping: rings spreading out from the square, fading as they go, with who
+ * sent it. `age` runs 0 to 1 over its pulse.
+ */
+function drawPing(ctx: CanvasRenderingContext2D, view: DrawView, ping: Ping & { age: number }): void {
+  const elevationAt = elevationLookup(view)
+  const camera = view.camera
+  const at = lift(cellCenter(ping.x, ping.y, camera), camera, roomLift(elevationAt(ping.x, ping.y)))
+  const unit = (TILE_WIDTH / 2) * camera.zoom
+  ctx.save()
+  ctx.strokeStyle = ping.color
+  ctx.fillStyle = ping.color
+  // Three rings a beat apart, each spreading and fading in turn.
+  for (const offset of [0, 0.22, 0.44]) {
+    const t = (ping.age * 1.6 - offset) % 1
+    if (t < 0 || ping.age * 1.6 < offset) continue
+    ctx.globalAlpha = (1 - t) * (1 - ping.age * 0.6)
+    ctx.lineWidth = 3 - t * 2
+    ctx.beginPath()
+    // Squashed like the floor, so it lies on the square.
+    ctx.ellipse(at.x, at.y, unit * (0.3 + t * 1.4), unit * (0.15 + t * 0.7), 0, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  ctx.globalAlpha = Math.max(0, 1 - ping.age)
+  ctx.beginPath()
+  ctx.ellipse(at.x, at.y, unit * 0.18, unit * 0.09, 0, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.font = '600 12px system-ui, sans-serif'
+  const width = ctx.measureText(ping.name).width + 12
+  drawChip(ctx, ping.name, at.x - width / 2, at.y - unit * 0.9 - 20, ping.color)
+  ctx.restore()
+}
+
+/** A ruler: a line through its turns, square to square, with the distance at its end. */
+function drawRuler(ctx: CanvasRenderingContext2D, view: DrawView, ruler: Ruler): void {
+  const elevationAt = elevationLookup(view)
+  const points = ruler.points.map((cell) =>
+    lift(cellCenter(cell.x, cell.y, view.camera), view.camera, roomLift(elevationAt(cell.x, cell.y))),
+  )
+  const first = points[0]
+  const last = points[points.length - 1]
+  if (!first || !last) return
+  ctx.save()
+  ctx.lineJoin = 'round'
+  ctx.lineCap = 'round'
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.72)'
+  ctx.shadowBlur = 4
+  ctx.shadowOffsetY = 1.5
+  ctx.beginPath()
+  ctx.moveTo(first.x, first.y)
+  for (const point of points.slice(1)) ctx.lineTo(point.x, point.y)
+  ctx.strokeStyle = RULER
+  ctx.lineWidth = 2.5
+  ctx.setLineDash([8, 5])
+  ctx.stroke()
+  ctx.setLineDash([])
+  for (const point of points) {
+    ctx.beginPath()
+    ctx.arc(point.x, point.y, point === first || point === last ? 4 : 3, 0, Math.PI * 2)
+    ctx.fillStyle = RULER
+    ctx.fill()
+  }
+  ctx.restore()
+  const feet = rulerFeet(ruler)
+  const squares = feet / FEET_PER_TILE
+  drawChip(ctx, `${feet} ft · ${squares} sq`, last.x + 10, last.y - 24, RULER)
+}
+
 function drawMovePath(ctx: CanvasRenderingContext2D, view: DrawView): void {
   for (const path of view.movePaths) drawOnePath(ctx, view, path)
 }
@@ -1813,12 +2132,8 @@ function drawTokens(ctx: CanvasRenderingContext2D, view: DrawView, solids: Token
     const trail = view.movePaths.find((item) => item.playerId === player.id)
     const walking = view.tokenPoses.some((item) => item.playerId === player.id)
     if (walking && trail && trail.feet > 0) {
-      drawMeasureChip(
-        ctx,
-        `${trail.feet} ft`,
-        pos.x + standee.width / 2 + 6,
-        pos.y - standee.height + standee.tab,
-      )
+      const chip = pathChip(view, player.id, trail.feet)
+      drawMeasureChip(ctx, chip.label, pos.x + standee.width / 2 + 6, pos.y - standee.height + standee.tab, chip.color)
     }
     ctx.globalAlpha = 1
   }
@@ -2104,12 +2419,8 @@ function drawGhostToken(
   )
   const trail = view.movePaths.find((item) => item.playerId === player.id)
   if (trail && trail.feet > 0) {
-    drawMeasureChip(
-      ctx,
-      `${trail.feet} ft`,
-      pos.x + standee.width / 2 + 6,
-      pos.y - standee.height + standee.tab,
-    )
+    const chip = pathChip(view, player.id, trail.feet)
+    drawMeasureChip(ctx, chip.label, pos.x + standee.width / 2 + 6, pos.y - standee.height + standee.tab, chip.color)
   }
   ctx.restore()
 }
@@ -2709,7 +3020,18 @@ function drawChip(
   ctx.fillText(label, x + pad, y + height / 2 + 0.5)
 }
 
-function drawMeasureChip(ctx: CanvasRenderingContext2D, label: string, x: number, y: number): void {
+/**
+ * The feet on a token's path: on its turn, with how far it may go all told
+ * ("25 / 30 ft", red once past it); otherwise just the walk.
+ */
+function pathChip(view: DrawView, playerId: string, feet: number): { label: string; color: string } {
+  const budget = view.moveBudgets?.get(playerId)
+  if (!budget) return { label: `${feet} ft`, color: MEASURE }
+  const after = budget.used + feet
+  return { label: `${after} / ${budget.total} ft`, color: after > budget.total ? OVER_BUDGET : MEASURE }
+}
+
+function drawMeasureChip(ctx: CanvasRenderingContext2D, label: string, x: number, y: number, color = MEASURE): void {
   ctx.save()
   ctx.font = '600 12px system-ui, sans-serif'
   ctx.textBaseline = 'middle'
@@ -2722,10 +3044,10 @@ function drawMeasureChip(ctx: CanvasRenderingContext2D, label: string, x: number
   ctx.shadowOffsetY = 1.5
   ctx.fillStyle = 'rgba(18, 19, 24, 0.82)'
   ctx.fillRect(x, y, width, height)
-  ctx.strokeStyle = MEASURE
+  ctx.strokeStyle = color
   ctx.lineWidth = 1
   ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1)
-  ctx.fillStyle = MEASURE
+  ctx.fillStyle = color
   ctx.fillText(label, x + pad, y + height / 2 + 0.5)
   ctx.restore()
 }

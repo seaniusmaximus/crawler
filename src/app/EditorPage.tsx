@@ -9,7 +9,6 @@ import { ObjectEditor } from '../features/objectEditor/ObjectEditor.tsx'
 import { Contained } from '../ui/Contained.tsx'
 import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
 import { TokenSheet } from '../features/party/TokenSheet.tsx'
-import { TurnBanner } from '../features/party/TurnBanner.tsx'
 import { MapsDock } from '../features/session/MapsDock.tsx'
 import { SaveDock } from '../features/session/SaveDock.tsx'
 import { SeatPrompt } from '../features/session/SeatPrompt.tsx'
@@ -22,6 +21,8 @@ import { MonsterPicker } from '../features/party/MonsterPicker.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
 import { ViewToggle } from '../features/view/ViewToggle.tsx'
 import { useEditorStore } from '../state/editorStore.ts'
+import { startAreaTriggers } from '../state/areaTriggers.ts'
+import { startEffectResolver } from '../state/effectResolver.ts'
 import { useSessionStore } from '../state/sessionStore.ts'
 
 /** The map fills the window; every control floats over it in its own corner. */
@@ -31,7 +32,6 @@ export function EditorPage() {
   const role = useSessionStore((state) => state.role)
   const characterId = useSessionStore((state) => state.character?.characterId ?? '')
   const guest = role === 'guest'
-  const tools = !guest && viewMode !== 'player'
 
   useEffect(() => {
     function onPointerDown(): void {
@@ -40,6 +40,10 @@ export function EditorPage() {
     window.addEventListener('pointerdown', onPointerDown)
     return () => window.removeEventListener('pointerdown', onPointerDown)
   }, [closeMenu])
+
+  // Spell areas that hurt go off here, in the DM's browser (or a solo one), and what they do is applied.
+  useEffect(() => startAreaTriggers(), [])
+  useEffect(() => startEffectResolver(), [])
 
   return (
     <div
@@ -58,7 +62,10 @@ export function EditorPage() {
         <div className="hud-top-left">
           <Brand />
         </div>
-        <div className="hud-top-center">{tools ? <ToolPanel /> : <TurnBanner />}</div>
+        <div className="hud-top-center">
+          {/* Everyone gets the tools they may use; players get measure and spell areas. */}
+          <ToolPanel />
+        </div>
         <div className="hud-top-right">
           {guest ? null : <ViewToggle />}
           <TableMenu />

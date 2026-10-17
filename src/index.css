@@ -1012,6 +1012,171 @@ a:hover {
   color: var(--text);
 }
 
+/* Every area option on one row: the shapes, then whatever the shape takes, then Clear. */
+.tool-block:hover .area-picker,
+.tool-block:focus-within .area-picker {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  padding: 16px 10px 10px;
+}
+
+.area-picker > * {
+  position: relative;
+  flex: none;
+}
+
+.area-shapes {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.area-shape {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 8px;
+}
+
+.area-self {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: var(--line);
+  align-self: stretch;
+}
+
+/* A spell area's settings, opened by right-clicking it. */
+.area-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 16px);
+  padding: 12px;
+  border-radius: 14px;
+  pointer-events: auto;
+}
+
+.area-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.area-menu-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--area);
+}
+
+.area-menu-name,
+.area-menu-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.area-menu-title {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.area-menu-shape {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.area-menu-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.area-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-color: var(--line);
+}
+
+.segment-grid.is-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.segment-grid.is-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Under a spell's notes: what they just filled in. */
+.notes-filled {
+  margin: -4px 0 0;
+  font-size: 11px;
+  color: var(--gold);
+}
+
+.area-menu-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.area-menu-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.area-menu-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.area-colors {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.area-color {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: var(--swatch) content-box;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.area-color:hover {
+  border-color: var(--line-strong);
+}
+
+.area-color.is-active {
+  border-color: var(--text);
+}
+
 .tool-hint {
   margin: 0;
   font-size: 12px;
@@ -1469,39 +1634,6 @@ a:hover {
   height: 30px;
   padding: 0 10px;
   font-size: 12px;
-}
-
-.turn-banner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 44px;
-  padding: 0 18px 0 8px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.turn-banner.is-mine {
-  border-color: var(--gold-line);
-}
-
-.turn-banner-title {
-  font-family: var(--font-display);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--gold);
-}
-
-.turn-banner-sub {
-  font-size: 13px;
-  color: var(--text-dim);
-}
-
-.turn-banner-sub strong {
-  font-weight: 600;
-  color: var(--text);
 }
 
 /* ---------- Avatars ---------- */
@@ -2424,6 +2556,15 @@ a:hover {
   font-family: var(--font-mono);
   font-size: 12px;
   cursor: pointer;
+}
+
+.attack-roll.spell-place {
+  border-color: var(--gold-line);
+  color: var(--gold);
+}
+
+.attack-roll.spell-place:hover {
+  border-color: var(--gold);
 }
 
 .attack-roll.is-damage {
