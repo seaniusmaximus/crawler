@@ -164,8 +164,10 @@ export function normalizeRoll(raw: IncomingRoll): DiceRoll | null {
 
 export function sameRoll(left: DiceRoll, right: DiceRoll): boolean {
   if (left.id && right.id && left.id === right.id) return true
+  // Rolls made here or by the table get one id when rolled, so a different id is a different roll,
+  // however alike they look. Only D&D Beyond rolls can arrive twice under different ids.
+  if (left.source !== 'ddb' || right.source !== 'ddb') return false
   return (
-    left.source === right.source &&
     left.character === right.character &&
     left.formula === right.formula &&
     left.total === right.total &&
