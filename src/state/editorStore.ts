@@ -140,8 +140,8 @@ interface EditorState {
   aoeWidth: number
   /** An emanation or cube covers its own caster too. */
   aoeIncludeSelf: boolean
-  /** Which of the area colours new areas are washed in. */
-  aoeColor: string
+  /** Which of the area colours new areas are washed in; null is each caster's token colour. */
+  aoeColor: string | null
   /** New areas are hidden from players (the DM's traps); never set for a player. */
   aoeHidden: boolean
   /**
@@ -199,7 +199,7 @@ interface EditorState {
   setAoeFeet: (feet: number) => void
   setAoeWidth: (feet: number) => void
   setAoeIncludeSelf: (include: boolean) => void
-  setAoeColor: (color: string) => void
+  setAoeColor: (color: string | null) => void
   setAoeHidden: (hidden: boolean) => void
 }
 
@@ -245,7 +245,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   aoeFeet: 20,
   aoeWidth: 5,
   aoeIncludeSelf: false,
-  aoeColor: 'red',
+  aoeColor: null,
   aoeHidden: false,
   aoeCast: null,
   sheetPlayerId: null,
@@ -387,6 +387,6 @@ export const useEditorStore = create<EditorState>((set) => ({
   setAoeFeet: (feet) => set({ aoeFeet: clampAreaFeet(feet) }),
   setAoeWidth: (feet) => set({ aoeWidth: clampLineWidth(feet) }),
   setAoeIncludeSelf: (aoeIncludeSelf) => set({ aoeIncludeSelf }),
-  setAoeColor: (color) => set({ aoeColor: areaColor(color).id }),
+  setAoeColor: (color) => set({ aoeColor: color === null ? null : areaColor(color).id }),
   setAoeHidden: (aoeHidden) => set({ aoeHidden }),
 }))

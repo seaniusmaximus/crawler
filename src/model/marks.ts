@@ -72,7 +72,7 @@ export interface AreaMark {
   tokenSize?: number
   /** An emanation or cube covers its own caster too. */
   includeSelf?: boolean
-  /** Which of `AREA_COLORS` it is washed in; missing is the first. */
+  /** Which of `AREA_COLORS` it is washed in, or its caster's token colour as hex; missing is the first. */
   color?: string
   /** What it is ("Spirit Guardians", "Pit trap"), shown on the map; missing for none. */
   name?: string
@@ -188,8 +188,21 @@ export const AREA_COLORS: ReadonlyArray<{ id: string; label: string; rgb: string
   { id: 'purple', label: 'Purple', rgb: '155, 107, 214' },
 ]
 
+const HEX_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i
+
+/** One of `AREA_COLORS` by id, or a token's own hex colour; anything else is the first. */
 export function areaColor(id: string | undefined): (typeof AREA_COLORS)[number] {
+  if (id && HEX_COLOR.test(id)) {
+    const hex = id.length === 4 ? id.replace(/[0-9a-f]/gi, (digit) => digit + digit) : id
+    const n = parseInt(hex.slice(1), 16)
+    return { id: hex.toLowerCase(), label: 'Token', rgb: `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}` }
+  }
   return AREA_COLORS.find((color) => color.id === id) ?? AREA_COLORS[0]
+}
+
+/** The colour an area is laid down in: the one picked in the area tool, else its caster's token colour. */
+export function areaColorFor(picked: string | null, caster: { color: string } | undefined): string {
+  return areaColor(picked ?? caster?.color).id
 }
 
 /** How many areas a map keeps at most, so a stuck mouse can't bury it. */

@@ -9,6 +9,7 @@ import { featureAt, isFeatureTool, isTableTool, pendingFeature, stairsRegion, wa
 import type { FeatureDraft, FeatureTool, Tool } from '../model/tools.ts'
 import {
   areaCells,
+  areaColorFor,
   emanationFromDrag,
   PING_MS,
   placedArea,
@@ -1503,7 +1504,7 @@ export class MapEngine {
       width: editor.aoeWidth,
       origin: snapAreaOrigin(editor.aoeShape, origin),
       angle: this.areaAngle,
-      color: editor.aoeColor,
+      color: areaColorFor(editor.aoeColor, this.areaCaster(token)),
       ...editor.aoeCast?.effects,
       // A spell cast from a sheet is on its caster's side.
       ...(editor.aoeCast ? { side: this.castSide(editor.aoeCast.playerId) } : {}),
@@ -1580,6 +1581,15 @@ export class MapEngine {
   }
 
   /** The side of a spell cast from a sheet: the monsters' for a monster's, else the party's. */
+  /**
+   * Whose area the tool is laying down, for its colour: the spell's caster, the
+   * creature an emanation comes out of, else a player's own token.
+   */
+  private areaCaster(token: AreaToken | null): Player | undefined {
+    const id = useEditorStore.getState().aoeCast?.playerId ?? token?.id ?? useSessionStore.getState().myPlayerId
+    return id ? (useDungeonStore.getState().dungeon.players ?? []).find((player) => player.id === id) : undefined
+  }
+
   private castSide(playerId: string): AreaSide {
     const caster = (useDungeonStore.getState().dungeon.players ?? []).find((player) => player.id === playerId)
     return areaSide(caster, areaOwner())

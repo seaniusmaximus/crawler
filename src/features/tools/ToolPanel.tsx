@@ -323,6 +323,7 @@ function AreaOptions() {
   const dm = useSessionStore((state) => state.role !== 'guest')
   useSessionStore((state) => state.myPlayerId)
   const owner = areaOwner()
+  const ownColor = useDungeonStore((state) => state.dungeon.players?.find((player) => player.id === owner)?.color)
   const mine = (areas ?? []).filter((area) => area.owner === owner).map((area) => area.id)
   const all = (areas ?? []).map((area) => area.id)
 
@@ -374,6 +375,17 @@ function AreaOptions() {
         </button>
       ) : null}
       <ul className="area-colors" aria-label="Colour">
+        <li>
+          <button
+            type="button"
+            className={`area-color is-token${color === null ? ' is-active' : ''}`}
+            style={{ '--swatch': ownColor ?? '#9a9ca6' } as CSSProperties}
+            onClick={() => setAoeColor(null)}
+            aria-pressed={color === null}
+            aria-label="Token colour"
+            title="Token colour: each area takes its caster's token colour"
+          />
+        </li>
         {AREA_COLORS.map((option) => (
           <li key={option.id}>
             <button

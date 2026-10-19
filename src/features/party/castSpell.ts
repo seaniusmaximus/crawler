@@ -10,7 +10,7 @@ import {
   type Spell,
   type SpellArea,
 } from '../../model/spells.ts'
-import type { AreaMark } from '../../model/marks.ts'
+import { areaColorFor, type AreaMark } from '../../model/marks.ts'
 import { normalizeStats } from '../../model/stats.ts'
 import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
@@ -61,7 +61,7 @@ export function placeSpellArea(player: Player, spell: Spell, area: SpellArea): v
       playerId: player.id,
       tokenSize: playerSize(player),
       includeSelf: editor.aoeIncludeSelf,
-      color: editor.aoeColor,
+      color: areaColorFor(editor.aoeColor, player),
       side: player.kind === 'monster' ? 'foes' : 'party',
       ...effects,
     }
