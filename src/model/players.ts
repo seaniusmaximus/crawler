@@ -137,6 +137,16 @@ export function normalizePlayer(player: Player): Player {
   }
 }
 
+/** A short stand-in for a portrait (a whole data URL), to tell whether D&D Beyond's picture changed. */
+export function portraitFingerprint(portrait: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < portrait.length; i++) {
+    hash ^= portrait.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `${portrait.length.toString(36)}-${(hash >>> 0).toString(36)}`
+}
+
 export function playerAirFeet(player: Pick<Player, 'hover'>): number {
   return playerHover(player) * FEET_PER_TILE
 }

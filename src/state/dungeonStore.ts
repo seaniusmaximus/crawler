@@ -36,6 +36,7 @@ import {
   playerSize,
   playerStatuses,
   playerVisualCenter,
+  portraitFingerprint,
   spotInRoom,
   standOnFloor,
 } from '../model/players.ts'
@@ -1371,7 +1372,7 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
                     : player.name,
                   characterId: characterId || player.characterId,
                   characterName: claimedName || player.characterName,
-                  portrait: info.portrait ?? player.portrait,
+                  ...claimedPortrait(player, info.portrait),
                   stats: mergeDdbStats(normalizeStats(player.stats), info.stats, player.statsManual),
                 }
               : player,
@@ -1653,6 +1654,17 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
   },
 }))
 
+/**
+ * The portrait a claim leaves on a token: D&D Beyond's only when it differs from
+ * the one Beyond sent last, so a picture set here survives the sheet being reopened.
+ */
+function claimedPortrait(player: Player, portrait: string | null): Pick<Player, 'portrait' | 'ddbPortrait'> {
+  if (!portrait) return { portrait: player.portrait, ddbPortrait: player.ddbPortrait }
+  const fingerprint = portraitFingerprint(portrait)
+  if (fingerprint === player.ddbPortrait) return { portrait: player.portrait, ddbPortrait: fingerprint }
+  return { portrait, ddbPortrait: fingerprint }
+}
+
 /** A fresh party token on the active floor, or null when there is no floor to stand on. */
 function newPartyToken(
   dungeon: Dungeon,
@@ -1667,6 +1679,7 @@ function newPartyToken(
     name: nextPlayerName(players),
     characterName: info.name || nextCharacterName(players),
     portrait: info.portrait,
+    ...(info.portrait ? { ddbPortrait: portraitFingerprint(info.portrait) } : {}),
     color: nextPlayerColor(players),
     floorId: floor.id,
     x: spot.x,

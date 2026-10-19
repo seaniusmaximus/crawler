@@ -188,6 +188,11 @@ export interface Player {
   hover: number
   /** Active condition rings drawn around the base. */
   statuses: string[]
+  /**
+   * Fingerprint of the portrait D&D Beyond last sent; a claim with the same one
+   * leaves `portrait` alone, so a picture set here outlasts rejoining. Missing until one is sent.
+   */
+  ddbPortrait?: string
   /** D&D Beyond character id when the extension has seen this sheet. */
   characterId: string | null
   /** Combat line shown under the name. Filled from Beyond when possible. */
