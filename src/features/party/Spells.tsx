@@ -2,6 +2,7 @@ import { Fragment, useRef, useState, type CSSProperties, type FormEvent, type Ke
 import { MAX_DIE_COUNT } from '../../model/dice.ts'
 import {
   castingMod,
+  classSpellcasting,
   hasDamage,
   levelLabel,
   MAX_PER_DAY,
@@ -15,7 +16,6 @@ import {
   SPELL_RESOLVE_LABEL,
   spellAffects,
   spellArea,
-  spellAreaEffects,
   spellAreaLabel,
   spellTrigger,
   spellAttackBonus,
@@ -31,23 +31,16 @@ import {
   AREA_SHAPES,
   LINE_MAX_WIDTH,
   type AreaAffects,
-  type AreaMark,
   type AreaShape,
   type AreaTrigger,
 } from '../../model/marks.ts'
 import { readSpellNotes, type NotesFields } from '../../model/spellNotes.ts'
-import { playerSize } from '../../model/players.ts'
 import { FEET_PER_TILE } from '../../model/scale.ts'
-import { useEditorStore } from '../../state/editorStore.ts'
-import { useSessionStore } from '../../state/sessionStore.ts'
 import {
   ABILITY_KEYS,
   ABILITY_LABEL,
-  classCastingAbility,
   displayedAbilityMod,
   formatSigned,
-  normalizeStats,
-  proficiencyBonus,
   type AbilityKey,
   type CharacterStats,
 } from '../../model/stats.ts'
@@ -56,79 +49,13 @@ import type { Player } from '../../model/types.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { Icon } from '../../ui/Icon.tsx'
 import { Stepper } from '../../ui/Stepper.tsx'
-import { INSTANT_AREA_MS, rollCast, type CastRoll } from '../areas/castRolls.ts'
+import { placeSpellArea } from './castSpell.ts'
 import { DamageTypeField, DiePicker } from './DamageFields.tsx'
 import { NotesToggle, RowNotes } from './RowNotes.tsx'
-import { tokenShown } from './tokenInfo.ts'
 import { rollSpellAttack, rollSpellDamage } from './tokenRolls.ts'
 
 const LEVELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-/**
- * Lay a spell's area on the map. An emanation lands on the caster at once;
- * anything else takes up the area tool at the spell's shape and size, coming
- * out of the caster (a circle goes wherever it is clicked).
- */
-function placeSpellArea(player: Player, spell: Spell, area: SpellArea): void {
-  const editor = useEditorStore.getState()
-  const effects = spellAreaEffects(spell, player.id, normalizeSpellcasting(player.spellcasting), normalizeStats(player.stats))
-  const onCast = castRollFor(player, spell)
-  // Over once it has gone off: no lingering damage, and nothing to last.
-  const instant = spellTrigger(spell) == null && !effects.duration
-  // The caster's floor, so the area lands where they are.
-  if (editor.activeFloorId !== player.floorId) editor.setActiveFloor(player.floorId)
-  if (area.shape === 'emanation') {
-    const placed: AreaMark = {
-      kind: 'area',
-      id: crypto.randomUUID(),
-      floorId: player.floorId,
-      shape: 'emanation',
-      feet: area.feet,
-      width: area.width,
-      origin: { x: player.x, y: player.y },
-      angle: 0,
-      playerId: player.id,
-      tokenSize: playerSize(player),
-      includeSelf: editor.aoeIncludeSelf,
-      color: editor.aoeColor,
-      side: player.kind === 'monster' ? 'foes' : 'party',
-      ...effects,
-    }
-    useSessionStore.getState().placeArea(placed)
-    if (onCast) rollCast(placed, onCast, shownOn(player.floorId))
-    if (instant && placed.id) {
-      const id = placed.id
-      window.setTimeout(() => useSessionStore.getState().removeAreas([id]), INSTANT_AREA_MS)
-    }
-    return
-  }
-  editor.castArea({ playerId: player.id, name: spell.name, effects, onCast, instant, fromCaster: area.fromCaster === true }, area)
-}
-
-/**
- * What a spell does to the creatures in its area as it is cast: their saves and
- * its damage or healing. None for a spell that hurts only as creatures enter or
- * start their turn in it (that is the area's own doing), or one with nothing to roll.
- */
-function castRollFor(player: Player, spell: Spell): CastRoll | undefined {
-  if (spellTrigger(spell) != null) return undefined
-  const stats = normalizeStats(player.stats)
-  const casting = normalizeSpellcasting(player.spellcasting)
-  const save = spell.resolve === 'save' ? { ability: spell.save, dc: saveDc(casting, stats), onSave: spell.onSave } : null
-  const dice = hasDamage(spell)
-    ? { count: spell.count, faces: spell.faces, bonus: spell.damageBonus, type: spell.type }
-    : null
-  if (!save && !dice) return undefined
-  return { spell: spell.name, casterId: player.id, affects: spellAffects(spell), save, dice, condition: spell.condition }
-}
-
-/** The tokens on a floor this viewer can see: a spell cast here goes off only on those. */
-function shownOn(floorId: string): Player[] {
-  const dungeon = useDungeonStore.getState().dungeon
-  const viewMode = useEditorStore.getState().viewMode
-  const tokens = dungeon.players ?? []
-  return tokens.filter((token) => token.floorId === floorId && tokenShown(token, dungeon.floors, tokens, viewMode))
-}
 const RESOLVES: readonly SpellResolve[] = ['save', 'attack', 'auto']
 
 /**
@@ -154,10 +81,7 @@ export function Spells({ player, stats, editable }: { player: Player; stats: Cha
     const spell = newSpell()
     // A character's first spell sets them casting as their class does, proficient at their level.
     if (player.kind === 'player' && spells.length === 0) {
-      useDungeonStore.getState().setPlayerSpellcasting(player.id, {
-        ability: classCastingAbility(stats.klass) ?? casting.ability,
-        bonus: proficiencyBonus(stats.level),
-      })
+      useDungeonStore.getState().setPlayerSpellcasting(player.id, classSpellcasting(stats, casting))
     }
     save([...spells, spell])
     setEditingId(spell.id)

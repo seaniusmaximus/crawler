@@ -125,7 +125,7 @@ export function readSpellNotes(notes: string): NotesFields {
 
   // Healing first ("regains 2d8 hit points"), else damage dice with the type beside them.
   const types = DAMAGE_TYPES.join('|')
-  const healing = /regains?\s+(?:hit points equal to\s+)?(\d+)d(\d+)(?:\s*\+\s*(\d+))?/.exec(text)
+  const healing = /regains?\s+(?:a number of\s+)?(?:hit points equal to\s+)?(\d+)d(\d+)(?:\s*\+\s*(\d+))?/.exec(text)
   const typed = new RegExp(String.raw`(\d+)d(\d+)(?:\s*\+\s*(\d+))?\s+(${types})\b`).exec(text)
   const dice = healing ?? typed ?? /(\d+)d(\d+)(?:\s*\+\s*(\d+))?/.exec(text)
   if (dice) {

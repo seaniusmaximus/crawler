@@ -3,6 +3,8 @@
 // Page-only by design: this runs in the extension's isolated world, reads what
 // the sheet already shows, and never injects code into the page, patches its
 // network calls, hooks its internals, or calls D&D Beyond's services itself.
+// The one thing it adds is a "Send to Crawler" button beside each spell shown,
+// which copies that spell's text across when pressed.
 
 const CHARACTER_POLL_MS = 2000
 const ROLL_SCAN_MS = 1500
@@ -442,16 +444,326 @@ function requestScan() {
   scanTimer = window.setTimeout(scanRolls, 40)
 }
 
+// ---------- Spells, sent over on request ----------
+
+// A spell shows as labelled lines ("Casting Time", "Duration") over its
+// description: in the sheet's spell pane, or on a spell's own page. Crawler
+// works out what the spell does from that text; this only copies it across
+// when the player presses the button added beside it.
+const SPELL_LABELS =
+  /^(level|casting time|range\/area|range|area|components|duration|school|attack\/save|damage\/effect)$/i
+const LABEL_SELECTOR = '[class*="label"], [class*="Label"], dt, strong, h4'
+const SEND_ATTR = 'data-crawler-send'
+
+function labelText(node) {
+  return clean(node.textContent).replace(/:$/, '')
+}
+
+/** The labels of spell lines under `root`. */
+function spellLabels(root) {
+  return [...root.querySelectorAll(LABEL_SELECTOR)].filter(
+    // The sheet's Customize section has its own Range, Damage and so on: the player's overrides form, not the spell.
+    (node) => !node.closest(`[${SEND_ATTR}], [class*="customize"]`) && SPELL_LABELS.test(labelText(node)),
+  )
+}
+
+/**
+ * Text as the reader sees it, with the icons D&D Beyond uses for words put back
+ * as words: an area's shape ("20 ft. sphere"), concentration and ritual.
+ */
+function readable(node) {
+  const copy = node.cloneNode(true)
+  copy.querySelectorAll(`[${SEND_ATTR}], button, script, style`).forEach((item) => item.remove())
+  copy.querySelectorAll('[class]').forEach((item) => {
+    // Only icons: an element with words of its own keeps them.
+    if (clean(item.textContent)) return
+    const name = String(item.getAttribute('class') || '')
+    const shape = name.match(/aoe-(sphere|cone|cube|cylinder|line|square|emanation|radius|circle)/i)?.[1]
+    if (shape) item.replaceWith(` ${shape.toLowerCase()} `)
+    else if (/concentration/i.test(name) && !/concentration/i.test(copy.textContent || '')) item.replaceWith(' (Concentration) ')
+    else if (/ritual/i.test(name) && !/ritual/i.test(copy.textContent || '')) item.replaceWith(' (Ritual) ')
+  })
+  return clean(copy.textContent)
+}
+
+/** A line's value: what follows its label, or what else its row says. */
+function labelValue(label) {
+  const next = label.nextElementSibling
+  if (next) return readable(next)
+  const row = label.parentElement
+  if (!row) return ''
+  return readable(row).replace(clean(label.textContent), '').trim()
+}
+
+/** The block holding the whole spell: the sheet's spell detail, else the smallest block around a "Casting Time" label that has its text too. */
+function spellRootFrom(label) {
+  const detail = label.closest('.ct-spell-detail, [class*="spell-detail"]:not([class*="spell-detail__"]), .ct-spell-pane')
+  if (detail) return detail
+  let node = label.parentElement
+  for (let depth = 0; node && depth < 12; depth += 1, node = node.parentElement) {
+    if (node === document.body) return null
+    if (spellLabels(node).length < 3) continue
+    if (node.querySelector('p')) return node
+  }
+  return null
+}
+
+/** What isn't the spell's text: the sheet's Customize form, its cast controls, buttons, and ours. */
+const NOT_TEXT = `[${SEND_ATTR}], [class*="customize"], [class*="spell-caster"], button, script, style, svg`
+
+/**
+ * Its description, as the player reads it: the description block when there
+ * is one, else its paragraphs, else everything the spell shows, line by line.
+ * Crawler reads this as spell notes, so more text is better than less.
+ */
+function spellDescription(root) {
+  const block = ['.more-info-content', '[class*="spell-detail__description"]', '[class*="description"]', '[class*="html-content"]']
+    .flatMap((selector) => [...root.querySelectorAll(selector)])
+    .find((node) => !node.closest(NOT_TEXT) && clean(node.textContent).length > 20)
+  const within = block || root
+  const paragraphs = [...within.querySelectorAll('p')]
+    .filter((p) => !p.closest(NOT_TEXT))
+    .map((p) => readable(p))
+    .filter(Boolean)
+  if (paragraphs.length) return paragraphs.join('\n\n')
+  return linesOf(within)
+}
+
+const BLOCK_TAGS = /^(DIV|P|LI|UL|OL|H[1-6]|SECTION|ARTICLE|HEADER|FOOTER|TR|DT|DD|BR)$/
+
+/** A block's text with a line for each of its blocks, as it reads on screen. */
+function linesOf(node) {
+  const copy = node.cloneNode(true)
+  copy.querySelectorAll(NOT_TEXT).forEach((item) => item.remove())
+  const parts = []
+  const visit = (current) => {
+    for (const child of current.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) parts.push(child.textContent)
+      else if (child.nodeType === Node.ELEMENT_NODE) {
+        const block = BLOCK_TAGS.test(child.tagName)
+        if (block) parts.push('\n')
+        visit(child)
+        if (block) parts.push('\n')
+      }
+    }
+  }
+  visit(copy)
+  return parts
+    .join('')
+    .split('\n')
+    .map(clean)
+    .filter(Boolean)
+    .join('\n')
+}
+
+/**
+ * The spell's name: the sheet's spell pane titles it in its header (beside it,
+ * not inside the detail), a spell's page in its h1. Headings inside the detail
+ * ("Customize") are its sections, not its name.
+ */
+function spellName(root) {
+  const NAMED = '[class*="spellName"], [class*="SpellName"], [class*="sidebar__heading"], h1'
+  const candidates = []
+  // Out from the spell a few levels: the nearest block whose header names it.
+  let outer = root
+  for (let depth = 0; outer && outer !== document.body && depth < 4; depth += 1, outer = outer.parentElement) {
+    const named = [...outer.querySelectorAll(NAMED)].filter((node) => !root.contains(node) || node === root)
+    candidates.push(...named)
+  }
+  candidates.push(document.querySelector('h1.page-title'), ...root.querySelectorAll('h1, h2, h3'))
+  for (const node of candidates) {
+    if (!node) continue
+    // Plain words: a concentration or ritual icon beside the name isn't part of it.
+    const copy = node.cloneNode(true)
+    copy.querySelectorAll(`[${SEND_ATTR}], button`).forEach((item) => item.remove())
+    const text = clean(copy.textContent)
+    if (couldBeName(text)) return text
+  }
+  // No heading by any name we know: the first line of text at the top of the
+  // spell, else the nearest one above it, which is where a pane puts its title.
+  return firstTextIn(root) || lastTextAbove(root)
+}
+
+const NOT_A_NAME =
+  /^(close|back|spells?|cast|manage|customize|at will|legacy •|concentration|ritual|legacy|abjuration|conjuration|divination|enchantment|evocation|illusion|necromancy|transmutation)$|\bcantrip\b|\blevel\b/i
+
+function couldBeName(text) {
+  return Boolean(text) && text.length <= 60 && /[a-z]{2}/i.test(text) && !SPELL_LABELS.test(text.replace(/:$/, '')) && !NOT_A_NAME.test(text)
+}
+
+/** Text nodes worth reading under `root`, in page order: not in a button, our own or anyone's. */
+function textNodes(root) {
+  const nodes = []
+  const visit = (node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (clean(child.textContent)) nodes.push(child)
+      } else if (child.nodeType === Node.ELEMENT_NODE && !child.matches(`[${SEND_ATTR}], button, script, style, [aria-hidden="true"]`)) {
+        visit(child)
+      }
+    }
+  }
+  visit(root)
+  return nodes
+}
+
+/** The first line of text inside the spell, before its first labelled line. */
+function firstTextIn(root) {
+  const firstLabel = spellLabels(root)[0]
+  for (const node of textNodes(root)) {
+    if (firstLabel && (firstLabel.contains(node) || firstLabel.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) break
+    const text = clean(node.parentElement.textContent)
+    if (couldBeName(text)) return text
+  }
+  return ''
+}
+
+/** The nearest line of text above the spell, looking a few levels out. */
+function lastTextAbove(root) {
+  let outer = root.parentElement
+  for (let depth = 0; outer && outer !== document.body && depth < 6; depth += 1, outer = outer.parentElement) {
+    let found = ''
+    for (const node of textNodes(outer)) {
+      if (root.contains(node) || root.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) break
+      const text = clean(node.parentElement.textContent)
+      if (couldBeName(text)) found = text
+    }
+    if (found) return found
+  }
+  return ''
+}
+
+function scrapeSpell(root) {
+  const properties = []
+  for (const label of spellLabels(root)) {
+    const value = labelValue(label)
+    const name = labelText(label)
+    if (value && !properties.some((item) => item.label.toLowerCase() === name.toLowerCase())) {
+      properties.push({ label: name, value })
+    }
+  }
+  // "Legacy • Evocation Cantrip": its parts sit side by side with no spaces between, and "Legacy" is a rules version, not the spell.
+  const school = root.querySelector('[class*="level-school"], [class*="LevelSchool"]')
+  const parts = school ? [...school.querySelectorAll('[class*="level-school-item"], [class*="LevelSchoolItem"]')] : []
+  const subtitle = (parts.length ? parts.map(readable) : [school ? readable(school) : ''])
+    .map((part) => part.replace(/^legacy\b/i, '').replace(/^[\s•·]+|[\s•·]+$/g, ''))
+    .filter(Boolean)
+    .join(' ')
+  return {
+    id: crypto.randomUUID(),
+    name: spellName(root),
+    subtitle,
+    properties,
+    description: spellDescription(root),
+    characterId: sheetCharacterId() || null,
+  }
+}
+
+const BUTTON_STYLE = [
+  'display:inline-flex',
+  'align-items:center',
+  'gap:6px',
+  'margin:6px 0 10px',
+  'padding:5px 12px',
+  'border:1px solid #c9a24a',
+  'border-radius:999px',
+  'background:#1a1712',
+  'color:#e8c468',
+  'font:600 12px/1.2 system-ui,sans-serif',
+  'letter-spacing:0.02em',
+  'cursor:pointer',
+].join(';')
+
+function sendButton(root) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.setAttribute(SEND_ATTR, '1')
+  button.setAttribute('style', BUTTON_STYLE)
+  button.textContent = 'Send to Crawler'
+  button.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const spell = scrapeSpell(root)
+    if (!spell.name) {
+      // Left in the console so the page's layout can be looked at and the reading fixed.
+      console.warn('[Crawler Dice Bridge] No spell name found in this block:', root, spell)
+      flash(button, 'Couldn’t read this spell')
+      return
+    }
+    button.disabled = true
+    button.textContent = 'Sending…'
+    if (!runtimeAlive()) {
+      flash(button, 'Refresh this page first')
+      return
+    }
+    // Whichever comes first: the answer, or giving up on it, so the button never sticks on "Sending…".
+    let answered = false
+    const answer = (text) => {
+      if (answered) return
+      answered = true
+      window.clearTimeout(giveUp)
+      flash(button, text)
+    }
+    const giveUp = window.setTimeout(() => answer('Sent, no answer from Crawler'), 5000)
+    try {
+      chrome.runtime.sendMessage({ type: 'SPELL', spell }, (reply) => {
+        void chrome.runtime.lastError
+        answer(reply?.delivered ? 'Sent to Crawler' : 'Open Crawler first')
+      })
+    } catch {
+      answer('Refresh this page first')
+    }
+  })
+  return button
+}
+
+function flash(button, text) {
+  button.disabled = false
+  button.textContent = text
+  window.setTimeout(() => {
+    button.textContent = 'Send to Crawler'
+  }, 2500)
+}
+
+/** Pages that show one spell at a time: a character sheet (its spell pane) and a spell's own page. */
+function spellPage() {
+  const path = window.location.pathname
+  return /\/characters\/\d+/.test(path) || /^\/spells\/[^/]+/.test(path)
+}
+
+/** Put a button on each spell showing that doesn't have one yet. */
+function addSpellButtons() {
+  if (!spellPage()) return
+  const roots = new Set()
+  for (const label of document.querySelectorAll(LABEL_SELECTOR)) {
+    if (!/^casting time$/i.test(labelText(label))) continue
+    const root = spellRootFrom(label)
+    if (root) roots.add(root)
+  }
+  for (const root of roots) {
+    if (root.querySelector(`[${SEND_ATTR}]`)) continue
+    root.prepend(sendButton(root))
+  }
+}
+
+let spellTimer = 0
+function requestSpellButtons() {
+  window.clearTimeout(spellTimer)
+  spellTimer = window.setTimeout(addSpellButtons, 300)
+}
+
 // ---------- Start watching ----------
 
 function start() {
   scanRolls()
   baselineTaken = true
   void sendCharacter()
+  addSpellButtons()
 
   const observer = new MutationObserver(() => {
     requestScan()
     requestCharacter()
+    requestSpellButtons()
   })
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
 

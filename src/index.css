@@ -4797,6 +4797,74 @@ a.dialog-button {
   color: var(--gold-ink);
 }
 
+.dialog-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ---------- Spell card (sent from D&D Beyond) ---------- */
+
+.dialog.spell-card {
+  width: min(460px, calc(100% - 32px));
+  max-height: calc(100% - 48px);
+}
+
+.dialog.spell-card h2 {
+  margin: 4px 0 2px;
+  font-size: 16px;
+}
+
+.dialog p.spell-card-sub {
+  margin: 0 0 12px;
+  font-style: italic;
+}
+
+.spell-card-props {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 14px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--wash);
+}
+
+.spell-card-props dt {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.spell-card-props dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.spell-card-text p {
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dialog p.spell-card-plan {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.spell-card-plan .kicker {
+  color: var(--gold);
+}
+
 /* ---------- Tileset prompt ---------- */
 
 /* The two choices side by side at equal width, Cancel a quiet full row beneath. */

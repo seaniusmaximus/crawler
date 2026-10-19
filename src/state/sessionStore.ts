@@ -27,6 +27,7 @@ import {
   type PlacedArea,
   type TableMark,
 } from '../model/marks.ts'
+import { normalizeSpellCard, type SpellCard } from '../model/spellCard.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
 import { requestDdbCharacter } from '../features/dice/bridge.ts'
@@ -35,6 +36,7 @@ import { useDungeonStore } from './dungeonStore.ts'
 import { untracked } from './history.ts'
 import { useEditorStore } from './editorStore.ts'
 import { useMarkStore } from './markStore.ts'
+import { useSpellCardStore } from './spellCardStore.ts'
 import { useTravelStore } from './travelStore.ts'
 
 export type SessionRole = 'solo' | 'host' | 'guest'
@@ -105,6 +107,8 @@ interface SessionState {
   reportDash: (playerId: string, dashed: boolean) => void
   /** Pulse a square for everyone looking at that floor. */
   reportPing: (floorId: string, x: number, y: number) => void
+  /** Put a spell up on everyone else's screen, under this player's character (or the DM). */
+  reportSpellCard: (card: SpellCard) => void
   reportPlayer: (playerId: string) => void
   /** Open or close a door from player view; says why not when it is locked or out of reach. */
   reportOpening: (floorId: string, roomId: string, x: number, y: number) => OpeningRefusal | null
@@ -756,6 +760,11 @@ function handleSharedMessage(message: NetMessage): boolean {
     if (ping) useMarkStore.getState().addPing(ping)
     return true
   }
+  if (message.type === 'spellCard') {
+    const card = normalizeSpellCard(message.card)
+    if (card) useSpellCardStore.getState().open({ ...card, from: card.from || 'Someone' }, 'shown')
+    return true
+  }
   if (message.type === 'mark') {
     useMarkStore.getState().receive(message.clientId, message.fromHost, message.kind, message.mark)
     return true
@@ -1240,6 +1249,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const ping = { floorId, x, y, name: mine ? characterNameOf(mine) : 'DM', color }
     useMarkStore.getState().addPing(ping)
     if (session.role !== 'solo') send({ type: 'ping', clientId, ping })
+  },
+
+  reportSpellCard: (card) => {
+    const session = get()
+    if (session.role === 'solo') return
+    const mine = session.role === 'guest' ? useDungeonStore.getState().dungeon.players.find((player) => player.id === session.myPlayerId) : undefined
+    send({ type: 'spellCard', clientId, card: { ...card, from: mine ? characterNameOf(mine) : 'DM' } })
   },
 
   reportPlayer: (playerId) => {

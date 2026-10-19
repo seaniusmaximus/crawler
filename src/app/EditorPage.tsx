@@ -12,6 +12,7 @@ import { TokenSheet } from '../features/party/TokenSheet.tsx'
 import { MapsDock } from '../features/session/MapsDock.tsx'
 import { SaveDock } from '../features/session/SaveDock.tsx'
 import { SeatPrompt } from '../features/session/SeatPrompt.tsx'
+import { SpellCardDialog } from '../features/party/SpellCardDialog.tsx'
 import { Brand, TableMenu } from '../features/session/SessionPanel.tsx'
 import { StairUsePrompt } from '../features/stairs/StairUsePrompt.tsx'
 import { StairsPrompt } from '../features/stairs/StairsPrompt.tsx'
@@ -96,6 +97,7 @@ export function EditorPage() {
       <StairsPrompt />
       <StairUsePrompt />
       <TilesetPrompt />
+      <SpellCardDialog />
       <MonsterPicker />
       <ObjectEditor />
       <SeatPrompt />

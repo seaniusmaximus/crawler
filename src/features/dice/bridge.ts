@@ -3,6 +3,8 @@ import { getDiceBridge } from '../../state/diceStore.ts'
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import type { IncomingRoll } from '../../model/dice.ts'
 import type { DdbCharacter } from '../../net/protocol.ts'
+import { normalizeSpellCard } from '../../model/spellCard.ts'
+import { useSpellCardStore } from '../../state/spellCardStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
 
 const HELLO = 'CRAWLER_DICE_HELLO'
@@ -10,6 +12,7 @@ const READY = 'CRAWLER_DICE_READY'
 const ROLL = 'CRAWLER_DICE_ROLL'
 const CHARACTER = 'CRAWLER_DDB_CHARACTER'
 const REQUEST_CHARACTER = 'CRAWLER_DDB_REQUEST'
+const SPELL = 'CRAWLER_DDB_SPELL'
 
 export const EXTENSION_URL =
   'https://chromewebstore.google.com/detail/crawler-dice-bridge/bpgbfbpckmbljndpmoncdjpeniepplbb'
@@ -25,6 +28,7 @@ export function startDiceBridge(): () => void {
       roll?: IncomingRoll
       rolls?: IncomingRoll[]
       character?: DdbCharacter
+      spell?: unknown
     }
     const bridge = getDiceBridge()
     if (data.type === HELLO) {
@@ -35,6 +39,12 @@ export function startDiceBridge(): () => void {
     }
     if (data.type === CHARACTER && data.character) {
       useSessionStore.getState().setCharacter(data.character)
+      return
+    }
+    if (data.type === SPELL) {
+      // A spell this player sent from D&D Beyond: up on their screen, to cast, keep or show around.
+      const card = normalizeSpellCard(data.spell)
+      if (card) useSpellCardStore.getState().open(card, 'sent')
       return
     }
     if (data.type !== ROLL) return

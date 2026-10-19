@@ -1,6 +1,14 @@
 import { DAMAGE_FACES } from './attacks.ts'
 import { MAX_DIE_COUNT, formatModifier, isDieFace } from './dice.ts'
-import { ABILITY_KEYS, ABILITY_LABEL, displayedAbilityMod, type AbilityKey, type CharacterStats } from './stats.ts'
+import {
+  ABILITY_KEYS,
+  ABILITY_LABEL,
+  classCastingAbility,
+  displayedAbilityMod,
+  proficiencyBonus,
+  type AbilityKey,
+  type CharacterStats,
+} from './stats.ts'
 import {
   AREA_SHAPES,
   clampAreaFeet,
@@ -106,6 +114,11 @@ export const SPELL_RESOLVE_LABEL: Record<SpellResolve, string> = {
 /** Proficiency +2 on the creature's INT: a sensible start that the DM changes in two clicks. */
 export function defaultSpellcasting(): Spellcasting {
   return { ability: 'int', bonus: 2 }
+}
+
+/** How a character casts once they take up their first spell: as their class does, proficient at their level. */
+export function classSpellcasting(stats: CharacterStats, fallback: Spellcasting): Spellcasting {
+  return { ability: classCastingAbility(stats.klass) ?? fallback.ability, bonus: proficiencyBonus(stats.level) }
 }
 
 /** A fresh spell: a 1st-level DEX save that halves its damage, the most common shape there is. */

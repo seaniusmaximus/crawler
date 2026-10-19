@@ -68,7 +68,7 @@ async function flush(tabId) {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id
   if (message?.type === 'REQUEST_CHARACTER') {
     requestCharacters(tabId)
@@ -78,6 +78,11 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     remember(tabId)
     flush(tabId)
     return false
+  }
+  if (message?.type === 'SPELL') {
+    // Only to a Crawler open now, never queued: a spell turning up later, unasked, would be a surprise.
+    deliver(message).then((delivered) => sendResponse({ delivered }))
+    return true
   }
   if (message?.type === 'DICE_ROLL' || message?.type === 'CHARACTER') {
     broadcast(message)

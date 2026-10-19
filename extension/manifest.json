@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Crawler Dice Bridge",
-  "description": "Forwards D&D Beyond characters and rolls into Crawler, including shared tables.",
-  "version": "0.4.1",
+  "description": "Forwards D&D Beyond characters, rolls and spells into Crawler, including shared tables.",
+  "version": "0.5.1",
   "icons": {
     "16": "icon-16.png",
     "32": "icon-32.png",

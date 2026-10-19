@@ -3,6 +3,7 @@ const READY = 'CRAWLER_DICE_READY'
 const ROLL = 'CRAWLER_DICE_ROLL'
 const CHARACTER = 'CRAWLER_DDB_CHARACTER'
 const REQUEST_CHARACTER = 'CRAWLER_DDB_REQUEST'
+const SPELL = 'CRAWLER_DDB_SPELL'
 
 let booted = false
 
@@ -62,6 +63,10 @@ function helloBackground() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'DICE_ROLL') {
     sendResponse({ ok: toPage(ROLL, { rolls: message.rolls ?? [] }) })
+    return false
+  }
+  if (message?.type === 'SPELL') {
+    sendResponse({ ok: toPage(SPELL, { spell: message.spell }) })
     return false
   }
   if (message?.type === 'CHARACTER') {

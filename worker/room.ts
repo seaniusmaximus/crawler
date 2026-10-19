@@ -16,8 +16,8 @@ interface Seat {
   id: string
 }
 
-/** Sent straight to everyone, never through the DM's browser: rolls, live token paths, rulers, spell areas and pings. */
-const BROADCAST = new Set(['dice', 'travel', 'mark', 'ping'])
+/** Sent straight to everyone, never through the DM's browser: rolls, live token paths, rulers, spell areas, pings and spells shown to the table. */
+const BROADCAST = new Set(['dice', 'travel', 'mark', 'ping', 'spellCard'])
 
 /** Close codes the client treats as final — no reconnect. */
 const CLOSE_REPLACED = 4001
@@ -56,7 +56,7 @@ export interface SavePoint {
   size: number
 }
 
-const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'mark', 'ping', 'switchMap', 'roll'])
+const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'mark', 'ping', 'spellCard', 'switchMap', 'roll'])
 const GUEST_SENDS = new Set([
   'hello',
   'claim',
@@ -71,6 +71,7 @@ const GUEST_SENDS = new Set([
   'effect',
   'dash',
   'ping',
+  'spellCard',
   'resync',
   'roll',
 ])

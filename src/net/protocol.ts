@@ -1,6 +1,7 @@
 import type { DiceRoll, RollRequest } from '../model/dice.ts'
 import type { EffectPlan } from '../model/effects.ts'
 import type { AreaMark, MarkKind, Ping, TableMark } from '../model/marks.ts'
+import type { SpellCard } from '../model/spellCard.ts'
 import type { CharacterStats } from '../model/stats.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
@@ -35,6 +36,8 @@ export type NetMessage =
   | { type: 'dash'; clientId: string; playerId: string; dashed: boolean }
   /** A pulse on the map for everyone to look at, relayed straight to all and never saved. */
   | { type: 'ping'; clientId: string; ping: Ping }
+  /** A spell someone sent over from D&D Beyond, shown to everyone to read; relayed straight to all and never saved. */
+  | { type: 'spellCard'; clientId: string; card: SpellCard }
   | { type: 'player'; player: Player }
   | { type: 'opening'; floorId: string; roomId: string; x: number; y: number }
   /**
