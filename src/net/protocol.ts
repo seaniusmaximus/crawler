@@ -1,6 +1,7 @@
 import type { DiceRoll, RollRequest } from '../model/dice.ts'
 import type { EffectPlan } from '../model/effects.ts'
 import type { AreaMark, MarkKind, Ping, TableMark } from '../model/marks.ts'
+import type { Handout, Note, SharedNote } from '../model/notes.ts'
 import type { SpellCard } from '../model/spellCard.ts'
 import type { CharacterStats } from '../model/stats.ts'
 import type { TokenTravel } from '../model/travel.ts'
@@ -88,6 +89,27 @@ export type NetMessage =
   | { type: 'saved'; seq: number }
   /** A save point was restored: the DM's browser takes this as its map. */
   | { type: 'restore'; snapshot: SnapshotMessage }
+  /**
+   * Notes (see src/model/notes.ts) are kept by the relay, never in the map. The DM
+   * saves or deletes their own; a player, those of the token the DM says they hold.
+   */
+  | { type: 'noteSave'; clientId: string; note: Note }
+  | { type: 'noteDelete'; clientId: string; id: string }
+  /**
+   * From the relay: this seat's own notes (the DM's, or the player's token's) and
+   * everything shared with the table, on connecting and whenever the seat changes
+   * hands. `mapId` is the map in play, which pins are placed on.
+   */
+  | { type: 'notebook'; mapId: string | null; notes: Note[]; shared: SharedNote[] }
+  /** From the relay: one of this seat's notes changed in another tab. */
+  | { type: 'noteMine'; id: string; note: Note | null }
+  /** From the relay: a note shared with the table changed, or stopped being shared (`note` null). */
+  | { type: 'noteShared'; id: string; author: string; note: SharedNote | null }
+  | { type: 'noteError'; message: string }
+  /** The DM puts a picture (or a note's shared words) up on everyone's screen; relayed straight to all, never saved. */
+  | { type: 'handout'; clientId: string; handout: Handout }
+  /** From the relay: the party moved to this map. */
+  | { type: 'liveMap'; mapId: string }
 
 export interface SnapshotMessage {
   type: 'snapshot'

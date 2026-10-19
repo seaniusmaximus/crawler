@@ -24,6 +24,9 @@ import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { useEditorStore } from '../../state/editorStore.ts'
 import type { ObjectMenu, OpeningMenu, PlayerMenu, RoomMenu } from '../../state/editorStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
+import { useNotesStore } from '../../state/notesStore.ts'
+import type { NoteAnchor } from '../../model/notes.ts'
+import { objectDef } from '../../objects/catalog.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { placeLabel, revealTitle, tokenShown } from '../party/tokenInfo.ts'
 import { TILESETS, tilesetById } from '../../tiles/sets/index.ts'
@@ -57,6 +60,20 @@ export function RadialMenu() {
     return <ObjectRing menu={menu} floorId={floor.id} room={room} rooms={floor.rooms} object={object} />
   }
   return <RoomRing menu={menu} floorId={floor.id} room={room} />
+}
+
+/**
+ * Start a note pinned here and open it. Without a campaign's notebook the panel
+ * opens to say notes need one.
+ */
+function leaveNote(anchor: Omit<NoteAnchor, 'mapId'>): void {
+  const notes = useNotesStore.getState()
+  useEditorStore.getState().closeMenu()
+  if (!notes.ready || !notes.mapId) {
+    notes.openPanel('mine')
+    return
+  }
+  notes.create({ anchor: { ...anchor, mapId: notes.mapId } })
 }
 
 /** The menu's box, centred on the click: as big as its ring needs, or a card's frame. */
@@ -162,8 +179,8 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
     return <TilesetPicker menu={menu} floorId={floorId} room={room} onBack={() => setPickingTileset(false)} />
   }
 
-  // Eight seats, clockwise from twelve o'clock.
-  const ring = ringLayout(8)
+  // Nine seats, clockwise from twelve o'clock.
+  const ring = ringLayout(9)
   const seat = ring.seats
   return (
     <RingFrame menu={menu} ring={ring}>
@@ -227,6 +244,21 @@ function RoomRing({ menu, floorId, room }: { menu: RoomMenu; floorId: string; ro
           active={Boolean(room.tileset)}
           title={`Change the tileset of ${room.name} alone`}
           onClick={() => setPickingTileset(true)}
+        />
+        <RingButton
+          spot={seat[8]}
+          icon="note"
+          label="Note"
+          title={`Leave a note here in ${room.name}; only you see it`}
+          onClick={() =>
+            leaveNote({
+              floorId,
+              roomId: room.id,
+              dx: menu.cellX - room.rect.minX,
+              dy: menu.cellY - room.rect.minY,
+              label: room.name,
+            })
+          }
         />
       </Ring>
     </RingFrame>
@@ -403,7 +435,7 @@ function ObjectRing({
   }
 
   // A step that wouldn't fit (into a wall, or onto something at that height) is greyed out.
-  const ring = ringLayout(5)
+  const ring = ringLayout(6)
   return (
     <RingFrame menu={menu} ring={ring}>
       <Ring radius={ring.radius}>
@@ -434,6 +466,20 @@ function ObjectRing({
         />
         <RingButton spot={ring.seats[3]} icon="trash" label="Remove" danger onClick={remove} />
         <RingButton spot={ring.seats[4]} icon="rotateLeft" label="Turn left" onClick={() => turn(-1)} />
+        <RingButton
+          spot={ring.seats[5]}
+          icon="note"
+          label="Note"
+          title="Leave a note on this; only you see it"
+          onClick={() =>
+            leaveNote({
+              floorId,
+              roomId: room.id,
+              objectId: object.id,
+              label: `${room.name} · ${objectDef(object.kind).name}`,
+            })
+          }
+        />
       </Ring>
     </RingFrame>
   )

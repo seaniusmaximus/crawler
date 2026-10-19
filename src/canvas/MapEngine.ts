@@ -2,6 +2,10 @@ import { moveBudget, turnTokenIds, type MoveBudget } from '../model/combat.ts'
 import { reachableCells } from '../model/reach.ts'
 import { areaSide, stepCost } from '../model/areaEffects.ts'
 import { dashPillAt, hitDashPill, type DashPill } from './dashPill.ts'
+import { hitNotePin, notePins, type NotePin } from './notePins.ts'
+import { anchorLabel } from '../model/noteMap.ts'
+import type { NoteAnchor } from '../model/notes.ts'
+import { useNotesStore } from '../state/notesStore.ts'
 import { INSTANT_AREA_MS, rollCast } from '../features/areas/castRolls.ts'
 import { sameLink } from '../model/links.ts'
 import { normalizeRect, rectContains, resizeRect, topmostRoomAt, translateRect } from '../model/rect.ts'
@@ -238,6 +242,9 @@ export class MapEngine {
   private areaAngle = 0
   /** Dash buttons beside tokens out of movement this turn, as last drawn. */
   private dashes: DashPill[] = []
+  /** Pins for this viewer's notes, as last drawn, and the one under the pointer. */
+  private pins: NotePin[] = []
+  private hoverPinId: string | null = null
   /** Waits out a held press, to ping when it is held long enough. */
   private pingTimer = 0
   /** The squares last worked out as in reach, kept while nothing they depend on changes. */
@@ -322,6 +329,10 @@ export class MapEngine {
       }),
       useTravelStore.subscribe(() => this.markDirty()),
       useMarkStore.subscribe(() => this.markDirty()),
+      useNotesStore.subscribe((state, prev) => {
+        if (state.notes !== prev.notes || state.mapId !== prev.mapId) this.markDirty()
+        if (state.pinningId !== prev.pinningId && !this.session) this.applyCursor(state.pinningId ? 'copy' : null)
+      }),
       useEditorStore.subscribe((state, prev) => {
         this.markDirty()
         // A ruler is only out while the Measure tool is in hand.
@@ -445,6 +456,8 @@ export class MapEngine {
       turnIds: turnTokenIds(dungeon.players ?? [], dungeon.combat?.turnPlayerId ?? null),
       moveBudgets: this.moveBudgets(players),
       dashPills: (this.dashes = this.dashPills(players)),
+      notePins: (this.pins = this.notePins(floor)),
+      hoverPinId: this.hoverPinId,
       reach: this.reach(players),
       pings: useMarkStore
         .getState()
@@ -590,6 +603,46 @@ export class MapEngine {
     return best
   }
 
+  /**
+   * Pins for this viewer's own notes on this floor. The DM's never show in player
+   * view, even on the DM's own screen; a player's are theirs alone.
+   */
+  private notePins(floor: Floor): NotePin[] {
+    const editor = useEditorStore.getState()
+    const guest = useSessionStore.getState().role === 'guest'
+    if (!guest && editor.viewMode === 'player') return []
+    const notes = useNotesStore.getState()
+    if (!notes.ready || !notes.notes.length) return []
+    const shown = new Set(this.viewRooms().map((room) => room.id))
+    return notePins(useDungeonStore.getState().dungeon, notes.notes, notes.mapId, floor.id, shown, editor.camera)
+  }
+
+  /** With a note waiting for a spot: pin it to the object or room under the pointer. False when nothing's there. */
+  private pinNoteAt(sx: number, sy: number): boolean {
+    const mapId = useNotesStore.getState().mapId
+    if (!mapId) return false
+    const floor = getActiveFloor()
+    const object = this.objectUnder(sx, sy)
+    let anchor: Omit<NoteAnchor, 'label'>
+    if (object) {
+      anchor = { mapId, floorId: floor.id, roomId: object.roomId, objectId: object.objectId }
+    } else {
+      const room = this.roomAt(sx, sy)
+      if (!room) return false
+      const cell = this.cellAt(sx, sy, room)
+      anchor = { mapId, floorId: floor.id, roomId: room.id, dx: cell.x - room.rect.minX, dy: cell.y - room.rect.minY }
+    }
+    const label = anchorLabel(useDungeonStore.getState().dungeon, anchor, (kind) => objectDef(kind).name)
+    useNotesStore.getState().pinTo({ ...anchor, label })
+    return true
+  }
+
+  private setHoverPin(id: string | null): void {
+    if (this.hoverPinId === id) return
+    this.hoverPinId = id
+    this.markDirty()
+  }
+
   private badges(): LinkBadge[] {
     if (useEditorStore.getState().viewMode === 'player') return []
     const floor = getActiveFloor()
@@ -712,6 +765,20 @@ export class MapEngine {
     // A Dash button beside a token out of movement takes the action, and the press goes no further.
     if (event.button === 0 && !this.session) {
       const at = this.eventPoint(event)
+      // A note waiting for a spot takes the click; one already pinned opens.
+      if (useNotesStore.getState().pinningId && !this.spaceDown && !event.altKey) {
+        this.pinNoteAt(at.x, at.y)
+        useEditorStore.getState().closeMenu()
+        event.preventDefault()
+        return
+      }
+      const pin = hitNotePin(this.pins, at.x, at.y)
+      if (pin) {
+        useNotesStore.getState().select(pin.noteId)
+        useEditorStore.getState().closeMenu()
+        event.preventDefault()
+        return
+      }
       const pill = hitDashPill(this.dashes, at.x, at.y)
       if (pill) {
         useSessionStore.getState().reportDash(pill.playerId, true)
@@ -1141,6 +1208,7 @@ export class MapEngine {
     this.hoverFeature = null
     this.hoverRamp = null
     this.hoverLink = null
+    this.hoverPinId = null
     useEditorStore.getState().setHoverRoom(null)
     useEditorStore.getState().setHoverPlayer(null)
     this.markDirty()
@@ -1859,6 +1927,16 @@ export class MapEngine {
       this.applyCursor('pointer')
       return
     }
+    const pin = this.session ? undefined : hitNotePin(this.pins, sx, sy)
+    this.setHoverPin(pin?.noteId ?? null)
+    if (pin) {
+      this.applyCursor('pointer')
+      return
+    }
+    if (!this.session && useNotesStore.getState().pinningId) {
+      this.applyCursor('copy')
+      return
+    }
     const editor = useEditorStore.getState()
     const rooms = getActiveFloor().rooms
     const room = this.roomAt(sx, sy)
@@ -2046,6 +2124,7 @@ export class MapEngine {
       event.preventDefault()
     }
     if (event.code === 'Escape') {
+      useNotesStore.getState().cancelPin()
       this.draft = null
       this.dragFeature = null
       this.hoverFeature = null

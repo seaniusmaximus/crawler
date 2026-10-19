@@ -1,5 +1,15 @@
 import { DurableObject } from 'cloudflare:workers'
 import { rollDice, type RollRequest } from '../src/model/dice.ts'
+import {
+  MAX_DM_NOTES,
+  MAX_NOTE_CHARS,
+  MAX_PLAYER_NOTES,
+  normalizeNote,
+  sharedView,
+  type Note,
+  type NoteOwner,
+  type SharedNote,
+} from '../src/model/notes.ts'
 import type { DmLibrary } from './library.ts'
 
 export interface RoomEnv {
@@ -16,8 +26,8 @@ interface Seat {
   id: string
 }
 
-/** Sent straight to everyone, never through the DM's browser: rolls, live token paths, rulers, spell areas, pings and spells shown to the table. */
-const BROADCAST = new Set(['dice', 'travel', 'mark', 'ping', 'spellCard'])
+/** Sent straight to everyone, never through the DM's browser: rolls, live token paths, rulers, spell areas, pings, spells and handouts shown to the table. */
+const BROADCAST = new Set(['dice', 'travel', 'mark', 'ping', 'spellCard', 'handout'])
 
 /** Close codes the client treats as final — no reconnect. */
 const CLOSE_REPLACED = 4001
@@ -56,8 +66,24 @@ export interface SavePoint {
   size: number
 }
 
-const HOST_SENDS = new Set(['snapshot', 'patch', 'focus', 'dice', 'travel', 'mark', 'ping', 'spellCard', 'switchMap', 'roll'])
+const HOST_SENDS = new Set([
+  'snapshot',
+  'patch',
+  'focus',
+  'dice',
+  'travel',
+  'mark',
+  'ping',
+  'spellCard',
+  'switchMap',
+  'roll',
+  'noteSave',
+  'noteDelete',
+  'handout',
+])
 const GUEST_SENDS = new Set([
+  'noteSave',
+  'noteDelete',
   'hello',
   'claim',
   'spawn',
@@ -90,6 +116,11 @@ export class TableRoom extends DurableObject<RoomEnv> {
   private migrated = false
   /** Recent roll times per connection, for the rate limit (lost on hibernation, which is fine). */
   private rollTimes = new Map<WebSocket, number[]>()
+  /**
+   * Who holds which token (client id → player id), as the DM last said; it decides
+   * whose notebook a player's connection opens. Kept in `meta` too, for after hibernation.
+   */
+  private claimsCache: Record<string, string | null> | null = null
 
   /** Created on demand: deleteAll() drops them, and the instance may live on. */
   private ensureTables(): void {
@@ -130,6 +161,14 @@ export class TableRoom extends DurableObject<RoomEnv> {
         idx INTEGER NOT NULL,
         data TEXT NOT NULL,
         PRIMARY KEY (map_id, idx)
+      );
+      CREATE TABLE IF NOT EXISTS notes (
+        owner TEXT NOT NULL,
+        id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        shared INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (owner, id)
       );
     `)
     if (this.migrated) return
@@ -260,6 +299,154 @@ export class TableRoom extends DurableObject<RoomEnv> {
     }
     const snapshot = this.loadSnapshot()
     ws.send(`{"type":"mapLoad","mapId":${JSON.stringify(mapId)},"snapshot":${snapshot ?? 'null'}}`)
+    // Pins follow the map in play.
+    this.sendAll(JSON.stringify({ type: 'liveMap', mapId }))
+  }
+
+  // ---------- Notes ----------
+  //
+  // Kept per campaign, beside the maps rather than in them, so save points and map
+  // switches leave them be. The DM's own never leave here except to the DM; the
+  // table gets only what is shared (see `sharedView`).
+
+  private claims(): Record<string, string | null> {
+    if (this.claimsCache) return this.claimsCache
+    try {
+      this.claimsCache = JSON.parse(this.meta('claims') ?? '{}') as Record<string, string | null>
+    } catch {
+      this.claimsCache = {}
+    }
+    return this.claimsCache
+  }
+
+  /** Whose notebook a connection opens: the DM's, or the token its player holds (none until the DM seats them). */
+  private noteOwner(seat: Seat): NoteOwner | null {
+    if (seat.role === 'host') return 'dm'
+    return this.claims()[seat.id] ?? null
+  }
+
+  /** The DM said who holds which token: anyone whose token changed gets their notebook. */
+  private updateClaims(you: unknown): void {
+    if (!you || typeof you !== 'object') return
+    const next: Record<string, string | null> = {}
+    for (const [client, player] of Object.entries(you as Record<string, unknown>)) {
+      next[client] = typeof player === 'string' ? player : null
+    }
+    const before = this.claims()
+    const json = JSON.stringify(next)
+    if (json === JSON.stringify(before)) return
+    this.claimsCache = next
+    this.setMeta('claims', json)
+    for (const ws of this.ctx.getWebSockets('guest')) {
+      const seat = seatOf(ws)
+      if (seat && (before[seat.id] ?? null) !== (next[seat.id] ?? null)) this.sendNotebook(ws, seat)
+    }
+  }
+
+  private ownNotes(owner: NoteOwner): Note[] {
+    return this.ctx.storage.sql
+      .exec<{ data: string }>('SELECT data FROM notes WHERE owner = ? ORDER BY updated_at DESC', owner)
+      .toArray()
+      .map((row) => JSON.parse(row.data) as Note)
+  }
+
+  private sharedNotes(): SharedNote[] {
+    return this.ctx.storage.sql
+      .exec<{ owner: string; data: string }>('SELECT owner, data FROM notes WHERE shared = 1 ORDER BY updated_at DESC')
+      .toArray()
+      .map((row) => sharedView(JSON.parse(row.data) as Note, row.owner))
+      .filter((note): note is SharedNote => note !== null)
+  }
+
+  private sendNotebook(ws: WebSocket, seat: Seat): void {
+    const owner = this.noteOwner(seat)
+    const message = {
+      type: 'notebook',
+      mapId: this.liveMapId(),
+      notes: owner ? this.ownNotes(owner) : [],
+      shared: this.sharedNotes(),
+    }
+    try {
+      ws.send(JSON.stringify(message))
+    } catch {
+      // Going away.
+    }
+  }
+
+  /** Tell the seat's other tabs (the same DM, or the same player's token) what changed. */
+  private sendMine(from: WebSocket, owner: NoteOwner, id: string, note: Note | null): void {
+    const message = JSON.stringify({ type: 'noteMine', id, note })
+    for (const ws of this.ctx.getWebSockets()) {
+      const seat = seatOf(ws)
+      if (ws === from || !seat || this.noteOwner(seat) !== owner) continue
+      try {
+        ws.send(message)
+      } catch {
+        // Going away.
+      }
+    }
+  }
+
+  private saveNote(ws: WebSocket, seat: Seat, raw: unknown): void {
+    const owner = this.noteOwner(seat)
+    if (!owner) return this.noteError(ws, 'Take a seat at the table to keep notes')
+    const note = normalizeNote(raw)
+    if (!note) return
+    note.updatedAt = Date.now()
+    const data = JSON.stringify(note)
+    if (data.length > MAX_NOTE_CHARS) return this.noteError(ws, 'That note is too long to save; split it in two')
+    const sql = this.ctx.storage.sql
+    const before = sql
+      .exec<{ data: string }>('SELECT data FROM notes WHERE owner = ? AND id = ?', owner, note.id)
+      .toArray()[0]
+    if (!before) {
+      const limit = owner === 'dm' ? MAX_DM_NOTES : MAX_PLAYER_NOTES
+      const count = sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM notes WHERE owner = ?', owner).one().n
+      if (count >= limit) return this.noteError(ws, `You can keep up to ${limit} notes; delete one first`)
+    }
+    sql.exec(
+      'INSERT OR REPLACE INTO notes (owner, id, data, shared, updated_at) VALUES (?, ?, ?, ?, ?)',
+      owner,
+      note.id,
+      data,
+      note.shared ? 1 : 0,
+      note.updatedAt,
+    )
+    this.sendMine(ws, owner, note.id, note)
+    const was = before ? sharedView(JSON.parse(before.data) as Note, owner) : null
+    const now = sharedView(note, owner)
+    if (was || now) this.sendAll(JSON.stringify({ type: 'noteShared', id: note.id, author: owner, note: now }))
+  }
+
+  private deleteNote(ws: WebSocket, seat: Seat, id: unknown): void {
+    const owner = this.noteOwner(seat)
+    if (!owner || typeof id !== 'string') return
+    const sql = this.ctx.storage.sql
+    const before = sql
+      .exec<{ shared: number }>('SELECT shared FROM notes WHERE owner = ? AND id = ?', owner, id)
+      .toArray()[0]
+    if (!before) return
+    sql.exec('DELETE FROM notes WHERE owner = ? AND id = ?', owner, id)
+    this.sendMine(ws, owner, id, null)
+    if (before.shared) this.sendAll(JSON.stringify({ type: 'noteShared', id, author: owner, note: null }))
+  }
+
+  private noteError(ws: WebSocket, message: string): void {
+    try {
+      ws.send(JSON.stringify({ type: 'noteError', message }))
+    } catch {
+      // Going away.
+    }
+  }
+
+  private sendAll(message: string): void {
+    for (const peer of this.ctx.getWebSockets()) {
+      try {
+        peer.send(message)
+      } catch {
+        // Going away.
+      }
+    }
   }
 
   /**
@@ -486,6 +673,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
 
     const snapshot = this.loadSnapshot()
     if (snapshot) ws.send(snapshot)
+    this.sendNotebook(ws, { role, id })
     this.broadcastPresence()
     return new Response(null, { status: 101, webSocket: pair[0] })
   }
@@ -503,6 +691,9 @@ export class TableRoom extends DurableObject<RoomEnv> {
       mapId?: unknown
       request?: unknown
       rolls?: unknown
+      you?: unknown
+      note?: unknown
+      id?: unknown
     }
     try {
       parsed = JSON.parse(message)
@@ -526,6 +717,17 @@ export class TableRoom extends DurableObject<RoomEnv> {
       if (typeof parsed.mapId === 'string') this.switchMap(ws, parsed.mapId)
       return
     }
+
+    if (type === 'noteSave') {
+      this.saveNote(ws, seat, parsed.note)
+      return
+    }
+    if (type === 'noteDelete') {
+      this.deleteNote(ws, seat, parsed.id)
+      return
+    }
+    // The DM's map says who holds which token, which decides whose notebook each player opens.
+    if (seat.role === 'host' && (type === 'snapshot' || type === 'patch')) this.updateClaims(parsed.you)
 
     if (type === 'snapshot') {
       this.saveSnapshot(message)

@@ -126,6 +126,28 @@ const PATHS: Record<string, ReactNode> = {
   pull: <path d="M3 12h11M10 8l4 4-4 4M18 4v16" />,
   doorOpen: <path d="M4 21h16M6 21V4l8-1v18M14 5h4v16M11 12v.5" />,
   tileset: <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />,
+  /** A page with a turned corner: notes. */
+  note: <path d="M6 3h9l4 4v13a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1zM14 3v5h5M8.5 12h7M8.5 15.5h7M8.5 8.5h3" />,
+  /** A bound notebook with a ribbon: the notes tool. */
+  notebook: <path d="M7 3h11a1 1 0 011 1v16a1 1 0 01-1 1H7a2 2 0 01-2-2V5a2 2 0 012-2zM9 3v18M5 7h2M5 12h2M5 17h2M14 3v6l1.5-1.2L17 9V3" />,
+  /** A map pin: where a note is left. */
+  pin: (
+    <>
+      <path d="M12 21s-6.5-6.2-6.5-11.2a6.5 6.5 0 0113 0C18.5 14.8 12 21 12 21z" />
+      <circle cx="12" cy="9.8" r="2.3" />
+    </>
+  ),
+  star: <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z" />,
+  image: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="M4 18l5.5-5.5 4 4 2.5-2.5 4.5 4.5" />
+    </>
+  ),
+  chevronLeft: <path d="M15 6l-6 6 6 6" />,
+  /** A tripwire and its spike: a trap. */
+  trap: <path d="M3 19h18M6 19l2.5-6 2.5 6M13 19l2.5-6 2.5 6M4 10h16" />,
   d4: <path d="M12 3L21 20H3z" />,
   d6: <rect x="4" y="4" width="16" height="16" rx="2" />,
   d8: <path d="M12 2L21 12 12 22 3 12zM3 12h18" />,

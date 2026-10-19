@@ -14,6 +14,7 @@ import { FEET_PER_TILE } from '../model/scale.ts'
 import type { AreaMark, Ping, Ruler, TableMark } from '../model/marks.ts'
 import type { MoveBudget } from '../model/combat.ts'
 import type { DashPill } from './dashPill.ts'
+import type { NotePin } from './notePins.ts'
 import type { StatusId } from '../model/status.ts'
 import { sameLink } from '../model/links.ts'
 import { roomCells, roomContains } from '../model/rect.ts'
@@ -125,6 +126,9 @@ export interface DrawView {
   moveBudgets?: ReadonlyMap<string, MoveBudget>
   /** Dash buttons beside tokens this viewer runs that are out of movement this turn. */
   dashPills?: readonly DashPill[]
+  /** Pins for this viewer's own notes, and the one under the pointer, whose title shows. */
+  notePins?: readonly NotePin[]
+  hoverPinId?: string | null
   /** Squares the token in hand can still reach this turn, lightly shaded. */
   reach?: readonly Cell[] | null
   /** Pings on this floor, with how far through their pulse each is (0 to 1). */
@@ -333,6 +337,7 @@ export function drawOverlays(ctx: CanvasRenderingContext2D, view: DrawView, soli
   drawTokens(ctx, view, solids)
 
   for (const pill of view.dashPills ?? []) drawDashPill(ctx, pill)
+  for (const pin of view.notePins ?? []) drawNotePin(ctx, pin, pin.noteId === view.hoverPinId)
 
   // Labels and rulers sit above the tokens, so they can always be read.
   for (const area of placed) drawPlacedLabel(ctx, painted, area)
@@ -1903,6 +1908,54 @@ function drawDashPill(ctx: CanvasRenderingContext2D, pill: DashPill): void {
   ctx.textBaseline = 'middle'
   ctx.fillStyle = ACCENT
   ctx.fillText('Dash', pill.x + pill.width / 2, pill.y + pill.height / 2 + 0.5)
+  ctx.restore()
+}
+
+/** A note pinned to the map: a parchment head on a stem down to its square, its title shown on hover. */
+function drawNotePin(ctx: CanvasRenderingContext2D, pin: NotePin, hovered: boolean): void {
+  ctx.save()
+  ctx.beginPath()
+  ctx.ellipse(pin.footX, pin.footY, 4, 2, 0, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'
+  ctx.fill()
+  ctx.beginPath()
+  ctx.moveTo(pin.footX, pin.footY)
+  ctx.lineTo(pin.x, pin.y + pin.radius)
+  ctx.strokeStyle = 'rgba(232, 196, 104, 0.8)'
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'
+  ctx.shadowBlur = 5
+  ctx.beginPath()
+  ctx.arc(pin.x, pin.y, pin.radius + (hovered ? 1.5 : 0), 0, Math.PI * 2)
+  ctx.fillStyle = hovered ? '#f4e7c2' : '#e6d6a8'
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.strokeStyle = ACCENT
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  // Three ruled lines, as on a page.
+  ctx.strokeStyle = '#5a4520'
+  ctx.lineWidth = 1.2
+  ctx.beginPath()
+  for (const dy of [-3, 0, 3]) {
+    const half = dy === 3 ? 2.5 : 4
+    ctx.moveTo(pin.x - 4, pin.y + dy)
+    ctx.lineTo(pin.x - 4 + half * 2, pin.y + dy)
+  }
+  ctx.stroke()
+  // Shared with the table: a gold dot at its shoulder.
+  if (pin.shared) {
+    ctx.beginPath()
+    ctx.arc(pin.x + pin.radius * 0.72, pin.y - pin.radius * 0.72, 3, 0, Math.PI * 2)
+    ctx.fillStyle = SELECT
+    ctx.fill()
+  }
+  if (hovered) {
+    ctx.font = '600 12px system-ui, sans-serif'
+    const width = ctx.measureText(pin.title).width + 12
+    drawChip(ctx, pin.title, pin.x - width / 2, pin.y - pin.radius - 26, ACCENT)
+  }
   ctx.restore()
 }
 

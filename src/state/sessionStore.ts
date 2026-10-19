@@ -36,6 +36,7 @@ import { useDungeonStore } from './dungeonStore.ts'
 import { untracked } from './history.ts'
 import { useEditorStore } from './editorStore.ts'
 import { useMarkStore } from './markStore.ts'
+import { setNoteAuthor, setNoteClientId, setNoteSender, useNotesStore } from './notesStore.ts'
 import { useSpellCardStore } from './spellCardStore.ts'
 import { useTravelStore } from './travelStore.ts'
 
@@ -127,6 +128,7 @@ interface SessionState {
 }
 
 const clientId = crypto.randomUUID()
+setNoteClientId(clientId)
 
 /**
  * Who a spell area laid down here belongs to: the DM, or a player by their
@@ -296,6 +298,7 @@ function destroySocket(): void {
   window.clearTimeout(markTimers.ruler)
   window.clearTimeout(markTimers.area)
   useMarkStore.getState().clear()
+  useNotesStore.getState().reset()
   const old = socket
   socket = null
   old?.close()
@@ -309,6 +312,13 @@ function send(message: NetMessage): void {
     // Drop a single failed packet; the next snapshot will catch up.
   }
 }
+
+// Notes go over the same socket; they keep what couldn't go and send it again on reconnecting.
+setNoteSender((message) => {
+  if (socket?.readyState !== WebSocket.OPEN) return false
+  send(message)
+  return true
+})
 
 function claims(): Record<string, string | null> {
   const you: Record<string, string | null> = {}
@@ -751,6 +761,7 @@ function sendMark(kind: MarkKind, mark: TableMark | null): void {
 
 /** Messages every seat handles the same way. */
 function handleSharedMessage(message: NetMessage): boolean {
+  if (useNotesStore.getState().receive(message)) return true
   if (message.type === 'travel') {
     useTravelStore.getState().receive(message.clientId, message.fromHost, message.playerId, message.travel)
     return true
@@ -1358,6 +1369,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     send({ type: 'focus', floorId, roomId })
   },
 }))
+
+// A shared note is this seat's own when it's the DM's, or this player's token's.
+useSessionStore.subscribe((state) => setNoteAuthor(state.role === 'guest' ? state.myPlayerId : 'dm'))
+setNoteAuthor('dm')
 
 export function bootSessionFromUrl(): void {
   const session = useSessionStore.getState()

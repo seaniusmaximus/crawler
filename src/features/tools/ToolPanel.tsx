@@ -13,6 +13,7 @@ import { useObjectLibraryStore } from '../../state/objectLibraryStore.ts'
 import { areaOwner, useSessionStore } from '../../state/sessionStore.ts'
 import { roomsWithOwnTileset, TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Icon } from '../../ui/Icon.tsx'
+import { NotesButton } from '../notes/NotesPanel.tsx'
 import { Stepper } from '../../ui/Stepper.tsx'
 
 interface ToolDef {
@@ -123,6 +124,7 @@ export function ToolPanel() {
           <strong>{active.label}</strong> · {hint}
         </p>
       ) : null}
+      <div className="tool-row">
       <div className="panel tools scroll-h" role="toolbar" aria-label="Tools">
         {tools.map((item) => (
           <Fragment key={item.id}>
@@ -153,6 +155,8 @@ export function ToolPanel() {
             <TilesetSelect />
           </>
         )}
+      </div>
+      <NotesButton />
       </div>
     </div>
   )

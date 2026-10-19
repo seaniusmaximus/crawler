@@ -19,6 +19,9 @@ import { StairsPrompt } from '../features/stairs/StairsPrompt.tsx'
 import { CameraControls } from '../features/tools/CameraControls.tsx'
 import { TilesetPrompt } from '../features/tools/TilesetPrompt.tsx'
 import { MonsterPicker } from '../features/party/MonsterPicker.tsx'
+import { HandoutDialog } from '../features/notes/HandoutDialog.tsx'
+import { NotesPanel } from '../features/notes/NotesPanel.tsx'
+import { RoomReminders } from '../features/notes/RoomReminders.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
 import { ViewToggle } from '../features/view/ViewToggle.tsx'
 import { useEditorStore } from '../state/editorStore.ts'
@@ -93,6 +96,8 @@ export function EditorPage() {
         </div>
       </div>
 
+      <NotesPanel />
+      <RoomReminders />
       <SafeRadialMenu />
       <StairsPrompt />
       <StairUsePrompt />
@@ -101,6 +106,8 @@ export function EditorPage() {
       <MonsterPicker />
       <ObjectEditor />
       <SeatPrompt />
+      {/* Over the seat prompt: a handout shown while someone is still choosing a seat is still read. */}
+      <HandoutDialog />
     </div>
   )
 }
