@@ -2471,13 +2471,6 @@ function drawStandee(
   ctx.fillStyle = 'rgba(0, 0, 0, 0.18)'
   ctx.fill()
 
-  const slotW = Math.max(3, width * 0.16)
-  const slotH = Math.max(1.5, ry * 0.28)
-  ctx.beginPath()
-  ctx.roundRect(pos.x - slotW / 2, pos.y - slotH / 2, slotW, slotH, slotH / 2)
-  ctx.fillStyle = 'rgba(18, 16, 12, 0.55)'
-  ctx.fill()
-
   ctx.beginPath()
   ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2)
   ctx.strokeStyle = ring
@@ -2501,9 +2494,6 @@ function drawStandee(
     ctx.rotate(tilt)
     ctx.translate(-pos.x, -plant)
   }
-  ctx.fillStyle = '#cbb892'
-  ctx.fillRect(pos.x - slotW * 0.38, plant - tab * 0.35, slotW * 0.76, tab * 0.7)
-
   if (portrait) {
     const iw = imageWidth(portrait)
     const ih = imageHeight(portrait)
@@ -2513,7 +2503,7 @@ function drawStandee(
     const dx = pos.x - dw / 2
     const dy = plant - dh
     ctx.save()
-    ctx.filter = 'drop-shadow(0 1px 0 rgba(70, 52, 28, 0.7)) drop-shadow(1px 3px 3px rgba(0, 0, 0, 0.38))'
+    ctx.filter = 'drop-shadow(1px 3px 3px rgba(0, 0, 0, 0.38))'
     ctx.drawImage(portrait, dx, dy, dw, dh)
     ctx.restore()
   } else {
