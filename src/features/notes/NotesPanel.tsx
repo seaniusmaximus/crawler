@@ -6,14 +6,22 @@ import { sharedKey, useNotesStore, type NotesTab } from '../../state/notesStore.
 import { useSessionStore } from '../../state/sessionStore.ts'
 import { Diamond, Icon } from '../../ui/Icon.tsx'
 import { NoteEditor } from './NoteEditor.tsx'
-import { NoteBlocks } from './NoteBlocks.tsx'
+import { ImageLightbox, NoteBlocks } from './NoteBlocks.tsx'
 import { goToAnchor, lookAtRoom, useAnchorLabel, useAuthorName, useIsDm } from './noteHooks.ts'
 
-/** Where a note's list can be narrowed to. */
-type Scope = 'all' | 'map' | 'shared'
+/** The notes tool at the end of the toolbar: its button, and its panel dropping down beneath like the other tools'. */
+export function NotesTool() {
+  const open = useNotesStore((state) => state.open)
+  return (
+    <div className="notes-tool-block">
+      <NotesButton />
+      {open ? <Panel /> : null}
+    </div>
+  )
+}
 
-/** The notes button beside the toolbar: a notebook that opens and closes the panel. */
-export function NotesButton() {
+/** The notebook button that opens and closes the panel. */
+function NotesButton() {
   const open = useNotesStore((state) => state.open)
   const unread = useNotesStore((state) => state.unread.length)
   const dm = useIsDm()
@@ -33,19 +41,19 @@ export function NotesButton() {
   )
 }
 
-/** Notes: this seat's own, what the table has shared, and (for the DM) what the map reminds them of. */
-export function NotesPanel() {
-  const open = useNotesStore((state) => state.open)
+/** What notes put over the whole page: the pinning banner, errors, and pictures full size. */
+export function NotesOverlays() {
   const pinningId = useNotesStore((state) => state.pinningId)
   return (
     <>
       {pinningId ? <PinBanner noteId={pinningId} /> : null}
-      {open ? <Panel /> : null}
       <NoteErrorToast />
+      <ImageLightbox />
     </>
   )
 }
 
+/** Notes: this seat's own, what the table has shared, and (for the DM) what the map reminds them of. */
 function Panel() {
   const dm = useIsDm()
   const ready = useNotesStore((state) => state.ready)
@@ -57,7 +65,7 @@ function Panel() {
   const selected = notes.find((note) => note.id === selectedId)
   const reading = shared.find((note) => sharedKey(note) === readingKey)
   const tabs: { id: NotesTab; label: string; count?: number }[] = [
-    { id: 'mine', label: dm ? 'Campaign' : 'My notes' },
+    { id: 'mine', label: 'My notes' },
     { id: 'table', label: 'Shared', count: shared.length },
   ]
   if (dm) tabs.push({ id: 'reminders', label: 'Reminders' })
@@ -134,26 +142,13 @@ function NotReady() {
 
 function NoteList({ notes }: { notes: readonly Note[] }) {
   const dm = useIsDm()
-  const mapId = useNotesStore((state) => state.mapId)
   const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<Scope>('all')
-  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set())
+  const closed = useNotesStore((state) => state.closedFolders)
+  const searching = query.trim() !== ''
 
-  const shown = sortNotes(notes).filter(
-    (note) =>
-      noteMatches(note, query) &&
-      (scope === 'all' || (scope === 'map' ? note.anchor?.mapId === mapId : note.shared)),
-  )
-  const folders = [...new Set(shown.map((note) => note.folder))].sort((a, b) =>
-    a === '' ? 1 : b === '' ? -1 : a.localeCompare(b),
-  )
-
-  function toggle(folder: string): void {
-    const next = new Set(closed)
-    if (next.has(folder)) next.delete(folder)
-    else next.add(folder)
-    setClosed(next)
-  }
+  const shown = sortNotes(notes).filter((note) => noteMatches(note, query))
+  const folders = [...new Set(shown.map((note) => note.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  const loose = shown.filter((note) => !note.folder)
 
   return (
     <div className="notes-list-view">
@@ -166,28 +161,10 @@ function NoteList({ notes }: { notes: readonly Note[] }) {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <button type="button" className="chip-btn is-gold" onClick={() => useNotesStore.getState().create()}>
-          New note
+        <button type="button" className="chip-btn is-gold notes-new" onClick={() => useNotesStore.getState().create()}>
+          <Icon id="plus" size={14} />
+          New
         </button>
-      </div>
-      <div className="notes-scopes" role="group" aria-label="Show">
-        {(
-          [
-            ['all', 'All'],
-            ['map', 'This map'],
-            ['shared', dm ? 'Shared' : 'Shared by me'],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={`notes-scope${scope === id ? ' is-on' : ''}`}
-            aria-pressed={scope === id}
-            onClick={() => setScope(id)}
-          >
-            {label}
-          </button>
-        ))}
       </div>
       {notes.length === 0 ? (
         <p className="panel-empty">
@@ -198,28 +175,57 @@ function NoteList({ notes }: { notes: readonly Note[] }) {
       ) : shown.length === 0 ? (
         <p className="panel-empty">No notes match.</p>
       ) : (
-        folders.map((folder) => {
-          const inFolder = shown.filter((note) => note.folder === folder)
-          const isClosed = closed.has(folder)
-          return (
-            <section key={folder || '—'} className="notes-folder">
-              {folders.length > 1 || folder ? (
-                <button type="button" className="notes-folder-head" aria-expanded={!isClosed} onClick={() => toggle(folder)}>
-                  <Icon id={isClosed ? 'chevronDown' : 'chevronUp'} size={13} />
-                  <span>{folder || 'Unfiled'}</span>
-                  <span className="notes-folder-count">{inFolder.length}</span>
-                </button>
-              ) : null}
-              {isClosed ? null : (
-                <ul className="notes-rows">
-                  {inFolder.map((note) => (
-                    <NoteRow key={note.id} note={note} />
-                  ))}
-                </ul>
-              )}
-            </section>
-          )
-        })
+        <>
+          {/* Folders first, like a file list, then the notes in none. */}
+          {folders.map((folder) => {
+            const inFolder = shown.filter((note) => note.folder === folder)
+            // A search opens every folder it found something in.
+            const isClosed = !searching && closed.includes(folder)
+            return (
+              <section key={folder} className={`notes-folder${isClosed ? '' : ' is-open'}`}>
+                <div className="notes-folder-head">
+                  <button
+                    type="button"
+                    className="notes-folder-toggle"
+                    aria-expanded={!isClosed}
+                    title={isClosed ? `Open ${folder}` : `Close ${folder}`}
+                    onClick={() => useNotesStore.getState().toggleFolder(folder)}
+                  >
+                    <Icon id={isClosed ? 'chevronRight' : 'chevronDown'} size={14} className="notes-folder-chevron" />
+                    <Icon id="folder" size={16} className="notes-folder-icon" />
+                    <span className="notes-folder-name">{folder}</span>
+                    <span className="notes-folder-count">
+                      {inFolder.length} {inFolder.length === 1 ? 'note' : 'notes'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn notes-folder-add"
+                    aria-label={`New note in ${folder}`}
+                    title={`New note in ${folder}`}
+                    onClick={() => useNotesStore.getState().create({ folder })}
+                  >
+                    <Icon id="plus" size={14} />
+                  </button>
+                </div>
+                {isClosed ? null : (
+                  <ul className="notes-rows notes-folder-items">
+                    {inFolder.map((note) => (
+                      <NoteRow key={note.id} note={note} />
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )
+          })}
+          {loose.length ? (
+            <ul className="notes-rows">
+              {loose.map((note) => (
+                <NoteRow key={note.id} note={note} />
+              ))}
+            </ul>
+          ) : null}
+        </>
       )}
     </div>
   )
@@ -230,17 +236,11 @@ function NoteRow({ note }: { note: Note }) {
   const preview = notePreview(note)
   return (
     <li className="notes-row">
-      <button
-        type="button"
-        className={`notes-star${note.starred ? ' is-on' : ''}`}
-        aria-label={note.starred ? 'Unstar' : 'Star'}
-        aria-pressed={note.starred}
-        onClick={() => useNotesStore.getState().update(note.id, { starred: !note.starred })}
-      >
-        <Icon id="star" size={14} />
-      </button>
       <button type="button" className="notes-row-main" onClick={() => useNotesStore.getState().select(note.id)}>
-        <span className="notes-row-title">{noteTitle(note)}</span>
+        <span className="notes-row-title">
+          {note.starred ? <Icon id="star" size={12} className="notes-row-star" /> : null}
+          {noteTitle(note)}
+        </span>
         {preview ? <span className="notes-row-preview">{preview}</span> : null}
         {anchor || note.shared ? (
           <span className="notes-row-meta">
@@ -262,12 +262,12 @@ function NoteRow({ note }: { note: Note }) {
       {anchor?.here ? (
         <button
           type="button"
-          className="icon-btn"
-          aria-label="Look at it on the map"
-          title="Look at it on the map"
+          className="icon-btn notes-row-go"
+          aria-label={`Show ${anchor.label} on the map`}
+          title={`Show ${anchor.label} on the map`}
           onClick={() => goToAnchor(note.anchor)}
         >
-          <Icon id="look" size={15} />
+          <Icon id="pin" size={15} />
         </button>
       ) : null}
     </li>

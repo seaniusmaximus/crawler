@@ -43,6 +43,13 @@ interface NotesState {
   pinningId: string | null
   /** Handouts put up by the DM; the first is on screen. */
   handouts: Handout[]
+  /** Folders closed in the list, by name. */
+  closedFolders: string[]
+  toggleFolder: (folder: string) => void
+  /** A note's picture open full size. */
+  image: { src: string; caption: string } | null
+  openImage: (image: { src: string; caption: string }) => void
+  closeImage: () => void
   /** Shared notes (by `sharedKey`) someone else shared or changed since this seat last looked. */
   unread: string[]
 
@@ -126,6 +133,16 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   pinningId: null,
   handouts: [],
   unread: [],
+  image: null,
+  closedFolders: [],
+  toggleFolder: (folder) =>
+    set((state) => ({
+      closedFolders: state.closedFolders.includes(folder)
+        ? state.closedFolders.filter((item) => item !== folder)
+        : [...state.closedFolders, folder],
+    })),
+  openImage: (image) => set({ image }),
+  closeImage: () => set({ image: null }),
 
   openPanel: (tab) =>
     set((state) => {
@@ -270,6 +287,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       pinningId: null,
       handouts: [],
       unread: [],
+      image: null,
     })
   },
 }))

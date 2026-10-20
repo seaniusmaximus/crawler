@@ -20,7 +20,7 @@ import { CameraControls } from '../features/tools/CameraControls.tsx'
 import { TilesetPrompt } from '../features/tools/TilesetPrompt.tsx'
 import { MonsterPicker } from '../features/party/MonsterPicker.tsx'
 import { HandoutDialog } from '../features/notes/HandoutDialog.tsx'
-import { NotesPanel } from '../features/notes/NotesPanel.tsx'
+import { NotesOverlays } from '../features/notes/NotesPanel.tsx'
 import { RoomReminders } from '../features/notes/RoomReminders.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
 import { ViewToggle } from '../features/view/ViewToggle.tsx'
@@ -96,7 +96,7 @@ export function EditorPage() {
         </div>
       </div>
 
-      <NotesPanel />
+      <NotesOverlays />
       <RoomReminders />
       <SafeRadialMenu />
       <StairsPrompt />

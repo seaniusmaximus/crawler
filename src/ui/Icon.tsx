@@ -146,6 +146,8 @@ const PATHS: Record<string, ReactNode> = {
     </>
   ),
   chevronLeft: <path d="M15 6l-6 6 6 6" />,
+  chevronRight: <path d="M9 6l6 6-6 6" />,
+  folder: <path d="M3.5 7a1.5 1.5 0 011.5-1.5h4.2l2 2.2H19a1.5 1.5 0 011.5 1.5v8.3A1.5 1.5 0 0119 19H5a1.5 1.5 0 01-1.5-1.5z" />,
   /** A tripwire and its spike: a trap. */
   trap: <path d="M3 19h18M6 19l2.5-6 2.5 6M13 19l2.5-6 2.5 6M4 10h16" />,
   d4: <path d="M12 3L21 20H3z" />,
