@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { signInHref } from '../../net/api.ts'
 import { useAccountStore } from '../../state/accountStore.ts'
+import { useChestStore } from '../../state/chestStore.ts'
 import { useSessionStore, type SaveState } from '../../state/sessionStore.ts'
-import { Diamond, Icon } from '../../ui/Icon.tsx'
+import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
 import { CampaignList } from './CampaignPanel.tsx'
 import { SaveFileActions } from './SaveFileActions.tsx'
 import { SavePoints } from './SavePoints.tsx'
@@ -20,26 +21,28 @@ export function SaveDock() {
   const role = useSessionStore((state) => state.role)
   const saveState = useSessionStore((state) => state.saveState)
   const campaignName = useSessionStore((state) => state.campaignName)
-  const [open, setOpen] = useState(false)
+  const open = useChestStore((state) => state.open === 'save')
 
   if (role === 'guest') return null
   const hosting = role === 'host'
   const tone = saveState === 'saved' ? 'good' : saveState === 'saving' ? 'busy' : 'warn'
+  const name = hosting ? campaignName || 'Campaign' : 'No campaign'
 
   return (
     <div className="save-dock">
-      {open ? <SavePanel onClose={() => setOpen(false)} /> : null}
+      {open ? <SavePanel onClose={() => useChestStore.getState().close()} /> : null}
       <button
         type="button"
-        className={`panel save-fab chest${open ? ' is-open' : ''}`}
+        className={`panel chest-fab chest${open ? ' is-open' : ''}`}
         aria-expanded={open}
         aria-label={`Save: ${BUBBLE_LABEL[saveState]}`}
-        onClick={() => setOpen(!open)}
+        title={`${BUBBLE_LABEL[saveState]} · ${name}`}
+        onClick={() => useChestStore.getState().toggle('save')}
       >
         <Icon id="save" size={22} className="is-gold" />
-        <span className="save-fab-copy">
-          <span className={`save-fab-state is-${tone}`}>{BUBBLE_LABEL[saveState]}</span>
-          <span className="save-fab-name">{hosting ? campaignName || 'Campaign' : 'No campaign'}</span>
+        <span className="chest-fab-copy">
+          <span className={`chest-fab-state is-${tone}`}>{BUBBLE_LABEL[saveState]}</span>
+          <span className="chest-fab-name">{name}</span>
         </span>
       </button>
     </div>
@@ -53,34 +56,40 @@ function SavePanel({ onClose }: { onClose: () => void }) {
 
   return (
     <section className="panel save-panel chest-panel" aria-label="Save">
-      <div className="panel-body">
-        <header className="panel-head">
-          <h2 className="panel-title">
-            <Diamond />
-            <span>Save</span>
-          </h2>
-          <button type="button" className="icon-btn is-boxed" aria-label="Close" onClick={onClose}>
-            <Icon id="close" size={15} />
-          </button>
-        </header>
+      <header className="notes-head">
+        <h2 className="panel-title">
+          <Diamond />
+          <span>Save</span>
+        </h2>
+        <button type="button" className="icon-btn is-boxed" aria-label="Close" onClick={onClose}>
+          <Icon id="close" size={15} />
+        </button>
+      </header>
 
+      {/* Like the dice tray: how things stand on top, a gold rule, and only what's beneath it scrolls. */}
+      <div className="panel-split">
         <SaveStatus />
+        <Divider />
+      </div>
 
-        {role === 'host' && roomId ? (
-          <>
-            <span className="kicker">Save points</span>
-            <SavePoints campaignId={roomId} />
-          </>
-        ) : null}
+      <div className="notes-body">
+        <div className="notes-list-view">
+          {role === 'host' && roomId ? (
+            <>
+              <span className="kicker">Save points</span>
+              <SavePoints campaignId={roomId} />
+            </>
+          ) : null}
 
-        {signedIn ? (
-          <>
-            <span className="kicker">Your campaigns</span>
-            <CampaignList empty="No saved campaigns yet." />
-          </>
-        ) : null}
+          {signedIn ? (
+            <>
+              <span className="kicker">Your campaigns</span>
+              <CampaignList empty="No saved campaigns yet." />
+            </>
+          ) : null}
 
-        <SaveFileActions />
+          <SaveFileActions />
+        </div>
       </div>
     </section>
   )

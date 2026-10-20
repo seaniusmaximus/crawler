@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { MapStage } from '../canvas/MapStage.tsx'
 import { DiceTray } from '../features/dice/DiceTray.tsx'
 import { PhysicalDice } from '../features/dice/PhysicalDice.tsx'
@@ -7,7 +7,7 @@ import { FloorDock } from '../features/floors/FloorPanel.tsx'
 import { RadialMenu } from '../features/menus/RadialMenu.tsx'
 import { ObjectEditor } from '../features/objectEditor/ObjectEditor.tsx'
 import { Contained } from '../ui/Contained.tsx'
-import { FoesCard, PartyCard } from '../features/party/PartyList.tsx'
+import { TokensCard } from '../features/party/PartyList.tsx'
 import { TokenSheet } from '../features/party/TokenSheet.tsx'
 import { MapsDock } from '../features/session/MapsDock.tsx'
 import { SaveDock } from '../features/session/SaveDock.tsx'
@@ -20,11 +20,13 @@ import { CameraControls } from '../features/tools/CameraControls.tsx'
 import { TilesetPrompt } from '../features/tools/TilesetPrompt.tsx'
 import { MonsterPicker } from '../features/party/MonsterPicker.tsx'
 import { HandoutDialog } from '../features/notes/HandoutDialog.tsx'
-import { NotesOverlays } from '../features/notes/NotesPanel.tsx'
+import { NotesOverlays, NotesTool } from '../features/notes/NotesPanel.tsx'
 import { RoomReminders } from '../features/notes/RoomReminders.tsx'
 import { ToolPanel } from '../features/tools/ToolPanel.tsx'
 import { ViewToggle } from '../features/view/ViewToggle.tsx'
+import { WorldReturn, WorldView } from '../features/worlds/WorldView.tsx'
 import { useEditorStore } from '../state/editorStore.ts'
+import { useBottomClearance } from './bottomClearance.ts'
 import { startAreaTriggers } from '../state/areaTriggers.ts'
 import { startEffectResolver } from '../state/effectResolver.ts'
 import { useSessionStore } from '../state/sessionStore.ts'
@@ -46,6 +48,11 @@ export function EditorPage() {
   }, [closeMenu])
 
   // Spell areas that hurt go off here, in the DM's browser (or a solo one), and what they do is applied.
+  // The floor tower keeps clear of the chest row.
+  const chestRow = useRef<HTMLDivElement>(null)
+  const bottomCentre = useRef<HTMLDivElement>(null)
+  useBottomClearance(chestRow, bottomCentre)
+
   useEffect(() => startAreaTriggers(), [])
   useEffect(() => startEffectResolver(), [])
 
@@ -75,27 +82,29 @@ export function EditorPage() {
           <TableMenu />
         </div>
 
-        <div className="hud-left">
-          <PartyCard />
-        </div>
         <div className="hud-right">
-          <FoesCard />
+          <TokensCard />
         </div>
         <TokenSheet />
 
-        <div className="hud-bottom-left">
+        {/* A row of chests; each one's panel opens above the row, one at a time. */}
+        <div ref={chestRow} className="hud-bottom-left chest-row">
           <DiceTray />
-        </div>
-        <div className="hud-bottom-center">
+          <NotesTool />
           <MapsDock />
-          <FloorDock />
           <SaveDock />
+        </div>
+        <div ref={bottomCentre} className="hud-bottom-center">
+          <FloorDock />
         </div>
         <div className="hud-bottom-right">
           <CameraControls />
         </div>
       </div>
 
+      {/* Over the HUD, under dialogs and handouts, which still show while a world map is up. */}
+      <WorldView />
+      <WorldReturn />
       <NotesOverlays />
       <RoomReminders />
       <SafeRadialMenu />

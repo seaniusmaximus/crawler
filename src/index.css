@@ -42,6 +42,12 @@
   box-sizing: border-box;
 }
 
+/* Every scrollbar thin and quiet, like the floor tower's: a faint thumb, no track. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
 html,
 body,
 #root {
@@ -148,19 +154,12 @@ a:hover {
   gap: 10px;
 }
 
-.hud-left,
+/* The Tokens panel, down the right side. */
 .hud-right {
   position: absolute;
   top: 100px;
-  width: 300px;
-}
-
-.hud-left {
-  left: 24px;
-}
-
-.hud-right {
   right: 24px;
+  width: 340px;
 }
 
 .hud-bottom-left {
@@ -178,7 +177,7 @@ a:hover {
   align-items: flex-end;
   /* Room for the bubbles' side rollers. */
   gap: 24px;
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% + var(--clear-left, 0px)));
 }
 
 .hud-bottom-right {
@@ -914,8 +913,6 @@ a:hover {
   padding: 2px 8px 2px 2px;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
   list-style: none;
 }
 
@@ -1352,25 +1349,41 @@ a:hover {
   color: var(--gold);
 }
 
-/* ---------- Save dock (bottom centre, beside the floors) ---------- */
+/* ---------- Chest row (bottom left): Dice, Maps and Save ---------- */
 
-.save-dock {
-  position: relative;
+.hud-bottom-left.chest-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
 }
 
-.save-fab {
+/* Their panels open from the row's left edge, so the docks don't position them. */
+.chest-row .dice-dock,
+.chest-row .notes-dock,
+.chest-row .maps-dock,
+.chest-row .save-dock {
+  position: static;
+}
+
+/* Every chest the same size: its icon, then what it is and how it stands. */
+.chest-fab {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: var(--floor-tower-height, 56px);
-  padding: 0 16px 0 14px;
+  gap: 8px;
+  width: 116px;
+  height: 62px;
+  padding: 12px 10px 0;
   color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
-.save-fab:hover,
-.save-fab.is-open {
+.chest-fab > .icon {
+  flex: none;
+}
+
+.chest-fab:hover,
+.chest-fab.is-open {
   border-color: rgba(232, 196, 104, 0.45);
 }
 
@@ -1444,11 +1457,11 @@ a:hover {
   transform: translateY(-3px);
 }
 
-/* A chest's panel: brass corner brackets and a brass edge along the top (beats .save-panel's background). */
+/* A chest's panel: square-cornered and borderless, with brass corner brackets (beats .save-panel's background). */
 .panel.chest-panel {
   --bracket: linear-gradient(var(--brass-hi), var(--brass-hi));
-  border-color: rgba(227, 191, 106, 0.2);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   background:
     var(--bracket) left 6px top 6px / 18px 2px no-repeat,
     var(--bracket) left 6px top 6px / 2px 18px no-repeat,
@@ -1459,9 +1472,36 @@ a:hover {
     var(--bracket) right 6px bottom 6px / 18px 2px no-repeat,
     var(--bracket) right 6px bottom 6px / 2px 18px no-repeat,
     rgba(17, 18, 23, 0.95);
-  box-shadow:
-    inset 0 2px 0 var(--brass),
-    var(--shadow);
+  box-shadow: var(--shadow);
+}
+
+/*
+ * Everything in a chest's panel, scroll areas and their scrollbars included, sits
+ * inside the brass corner brackets, with room to spare: the panel is inset 14px, and each part gives
+ * that back from its own padding so the spacing reads as before.
+ */
+.panel.chest-panel {
+  padding: 14px;
+}
+
+.chest-panel .notes-head {
+  padding: 2px 2px 8px;
+}
+
+.chest-panel .notes-tabs {
+  margin: 0 2px;
+}
+
+.chest-panel .panel-split {
+  padding: 10px 2px 0;
+}
+
+.chest-panel .notes-body {
+  padding: 14px 2px 4px;
+}
+
+.chest-panel .panel-body {
+  padding: 6px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1471,27 +1511,29 @@ a:hover {
   }
 }
 
-.save-fab-copy {
+.chest-fab-copy {
   display: grid;
   gap: 1px;
-  max-width: 260px;
+  min-width: 0;
 }
 
-.save-fab-state {
+.chest-fab-state {
+  overflow: hidden;
   font-size: 14px;
   font-weight: 500;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.save-fab-state.is-good {
+.chest-fab-state.is-good {
   color: var(--good);
 }
 
-.save-fab-state.is-warn {
+.chest-fab-state.is-warn {
   color: var(--gold);
 }
 
-.save-fab-name {
+.chest-fab-name {
   overflow: hidden;
   font-size: 12px;
   color: var(--text-dim);
@@ -1499,10 +1541,11 @@ a:hover {
   white-space: nowrap;
 }
 
+/* A chest's panel, above the row (the chests and their lids, plus a gap that clears the floor tower). */
 .save-panel {
   position: absolute;
   left: 0;
-  bottom: calc(var(--floor-tower-height, 56px) + 28px);
+  bottom: 96px;
   z-index: 5;
   width: 400px;
   max-height: calc(100vh - 220px);
@@ -1521,46 +1564,181 @@ a:hover {
   overflow-y: auto;
 }
 
-/* ---------- Maps dock (bottom centre, left of the floors) ---------- */
+/* ---------- Maps dock (a chest in the bottom-left row) ---------- */
 
 .maps-dock {
   position: relative;
 }
 
+/* Laid out like the notes panel: world maps are folders of battle maps, the rest loose beneath. */
 .maps-panel {
   width: 440px;
 }
 
-.maps-list {
-  max-height: min(340px, 45vh);
+.maps-body {
+  user-select: none;
 }
 
-.map-row {
-  flex-wrap: wrap;
-  padding-left: 4px;
-}
-
-.map-pick {
-  display: grid;
-  flex: 1;
-  min-width: 0;
-  padding: 2px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.map-pick:hover:not(:disabled),
-.map-pick:focus-visible {
+.maps-new {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
   background: var(--gold-wash);
 }
 
-.map-pick:disabled {
+.maps-new-kind {
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.maps-new-kind button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.notes-new.is-active {
+  background: var(--gold-wash);
+}
+
+/* A world map folder: open it from its gold button; its battle maps hang beneath. */
+.maps-world.is-shown .notes-folder-head {
+  border-color: var(--gold-line);
+}
+
+/*
+ * One line: the name, then rename and delete (only while hovered) and Open world map.
+ * Doubled up to outrank .notes-folder-head, which comes later in this file.
+ */
+.notes-folder-head.maps-world-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.maps-world-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 5px;
+}
+
+.maps-flag {
+  display: inline-flex;
+  flex: none;
+  color: var(--gold);
+}
+
+/* Hidden until the row is hovered (or tabbed to), so they never squeeze the name. */
+.maps-world-tool {
+  display: none;
+  width: 28px;
+  height: 28px;
+}
+
+.maps-world-head:hover .maps-world-tool,
+.maps-world-head:focus-within .maps-world-tool {
+  display: grid;
+}
+
+.maps-world-open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin-left: 4px;
+  padding: 0 11px;
+}
+
+.maps-world-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 0 6px 7px 50px;
+}
+
+.maps-world-confirm .panel-note {
+  flex: 1 1 auto;
+}
+
+.maps-folder-empty {
+  margin: 0;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.maps-folder-empty .text-btn {
+  padding: 2px 4px;
+  color: var(--gold);
+}
+
+.maps-loose-head {
+  margin-top: 4px;
+}
+
+.maps-tag {
+  padding: 1px 7px;
+  border: 1px solid var(--gold-line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+/* A battle map: a row like a note's; the one the party is on edged in gold. */
+.maps-row {
+  flex-wrap: wrap;
+}
+
+.maps-row.is-live {
+  border-color: var(--gold-line);
+  background: var(--gold-wash);
+}
+
+.maps-row .notes-row-main:disabled {
   cursor: default;
+}
+
+.maps-row-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.maps-row.is-live .maps-row-icon {
+  color: var(--gold);
+}
+
+.maps-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.maps-row .notes-row-preview.is-ask {
+  color: var(--text);
+  white-space: normal;
+}
+
+.maps-row-actions {
+  display: flex;
+  opacity: 0.55;
+}
+
+.maps-row:hover .maps-row-actions,
+.maps-row-actions:focus-within {
+  opacity: 1;
+}
+
+.maps-row > form {
+  padding: 6px;
 }
 
 .map-rename {
@@ -1568,10 +1746,10 @@ a:hover {
   align-items: center;
 }
 
-.map-row-error {
+.maps-row-error {
   flex-basis: 100%;
   margin: 0;
-  padding-left: 8px;
+  padding: 0 10px 6px;
 }
 
 .save-status {
@@ -1700,6 +1878,86 @@ a:hover {
 
 .token-card .panel-head {
   padding: 0 12px 8px;
+}
+
+/* Party, then Foes: each under a heading that folds it away. */
+.token-section + .token-section {
+  margin-top: 8px;
+}
+
+.token-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 8px 0 4px;
+}
+
+.token-section-toggle {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.token-section-toggle:hover {
+  color: var(--text);
+}
+
+.token-section.is-foe .token-section-toggle .kicker {
+  color: var(--foe);
+}
+
+.token-section-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.token-section-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+}
+
+.token-section-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Player, Companion, Monster: one row of add buttons. */
+.panel-foot.token-add {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.token-add .dashed-btn {
+  flex: 1 1 0;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.token-add .btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashed-btn.is-foe:hover {
+  border-color: rgba(217, 98, 94, 0.45);
+  color: var(--foe);
 }
 
 /* The DM's initiative controls, between the Party title and its rows. */
@@ -1923,6 +2181,37 @@ a:hover {
   white-space: nowrap;
 }
 
+/* Up next in initiative: a small gold tag on the bottom edge of the portrait, and its roll lit to match. */
+.token-avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.next-chip {
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  z-index: 1;
+  transform: translateX(-50%);
+  padding: 0 5px;
+  background: var(--panel-solid);
+  border: 1px solid var(--gold-line);
+  border-radius: 999px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 13px;
+  color: var(--gold);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.token-row.is-next .token-init {
+  color: var(--gold);
+  opacity: 0.75;
+}
+
 .token-hp {
   flex: none;
   font-family: var(--font-mono);
@@ -2064,12 +2353,13 @@ a:hover {
   overflow-y: auto;
 }
 
-.sheet.is-party {
-  left: 348px;
+/* Every sheet opens beside the Tokens panel, to its left; a foe's keeps its red edge. */
+.sheet.is-party,
+.sheet.is-foe {
+  right: 388px;
 }
 
 .sheet.is-foe {
-  right: 348px;
   border-color: rgba(217, 98, 94, 0.22);
 }
 
@@ -3393,8 +3683,6 @@ a:hover {
   max-height: calc(3 * 34px + 2 * 3px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
 
 .floor-tower-list > * {
@@ -3487,6 +3775,23 @@ a:hover {
   gap: 4px;
   padding-left: 8px;
   border-left: 1px solid var(--line);
+}
+
+/* Open the world map above this battle map (when there is one), over the expand chevron. */
+.floor-tower-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.icon-btn.floor-world-btn {
+  color: var(--gold);
+}
+
+.icon-btn.floor-world-btn:hover {
+  color: var(--gold-hi);
+  background: var(--gold-wash);
 }
 
 /* Add and delete floor (DM): a column in the tower, a row in the drawer's head. */
@@ -3828,19 +4133,45 @@ a:hover {
 
 /* ---------- Camera ---------- */
 
+/* Two pills, matching the view toggle and Invite at the top right. */
 .camera-dock {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.camera-pill {
+  display: flex;
+  align-items: center;
   gap: 2px;
-  padding: 5px;
-  border-radius: 14px;
+  height: 42px;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.camera-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.camera-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
 }
 
 .compass {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   color: var(--gold);
 }
 
@@ -3873,32 +4204,17 @@ a:hover {
   position: relative;
 }
 
-.dice-fab {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  height: 56px;
-  min-width: 56px;
-  padding: 0 14px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-/* As a chest, the button keeps room under the lid. */
-.dice-fab.chest {
-  padding-top: 12px;
-}
-
-.dice-fab:hover,
-.dice-fab.is-open {
-  border-color: rgba(232, 196, 104, 0.45);
-}
-
+/* The latest roll, after "Last roll:" on the Dice chest's second line. */
 .dice-fab-total {
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* A row of d20s stays on the line, cut short with the rest if it runs long. */
+.chest-fab-name .dice-fab-total.roll-split {
+  display: inline;
 }
 
 .dice-fab-total.is-crit {
@@ -3909,18 +4225,15 @@ a:hover {
   color: var(--low);
 }
 
-.dice-panel {
-  position: absolute;
-  left: 0;
-  /* Clears the dice button's rollers and its own. */
-  bottom: 84px;
-  width: 400px;
-  max-height: calc(100vh - 220px);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
+/* The tray is a chest's panel (see .save-panel and .chest-panel); a little more room between its parts. */
+.dice-panel-body {
   gap: 16px;
-  background: rgba(17, 18, 23, 0.92);
+}
+
+.dice-head-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .bridge-pip {
@@ -4637,8 +4950,6 @@ a:hover {
   max-height: 290px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
 
 .radial-pull-item {
@@ -4992,17 +5303,13 @@ a.dialog-button {
 /* ---------- Narrow windows ---------- */
 
 @media (max-width: 1280px) {
-  .hud-left,
   .hud-right {
-    width: 264px;
+    width: 300px;
   }
 
-  .sheet.is-party {
-    left: 308px;
-  }
-
+  .sheet.is-party,
   .sheet.is-foe {
-    right: 308px;
+    right: 344px;
   }
 
   .floor-tower .floor-stack {
@@ -5010,25 +5317,21 @@ a.dialog-button {
   }
 }
 
+/* Too narrow for four labelled chests beside the floor tower and camera: just their icons. */
+@media (max-width: 1320px) {
+  .chest-fab {
+    justify-content: center;
+    width: 62px;
+    padding: 12px 0 0;
+  }
+
+  .chest-fab-copy {
+    display: none;
+  }
+}
+
 @media (max-width: 960px) {
-  .hud-right {
-    display: none;
-  }
-
-  .sheet.is-foe {
-    right: 16px;
-  }
-
   .tool-hint {
-    display: none;
-  }
-
-  .save-fab {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .save-fab-copy {
     display: none;
   }
 
@@ -5261,8 +5564,6 @@ a.dialog-button {
   padding: 0 4px 0 0;
   overflow-y: auto;
   list-style: none;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
 
 .studio-part-row {
@@ -5454,8 +5755,6 @@ a.dialog-button {
 .studio-inspector-wrap {
   padding: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
 
 .studio-inspector {
@@ -5822,32 +6121,12 @@ a.dialog-button {
   gap: 18px;
 }
 
-.notes-tool {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 50px;
-  height: 50px;
-  padding: 0;
-  border-radius: 14px;
-  border-color: var(--gold-line);
-  color: var(--gold);
-  cursor: pointer;
-}
-
-.notes-tool:hover {
-  color: var(--gold-hi);
-  background: rgba(227, 191, 106, 0.08);
-}
-
-.notes-tool.is-active {
-  background: rgba(227, 191, 106, 0.14);
-}
-
+/* Newly shared notes, on the Notes chest's corner. */
 .notes-dot {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: -6px;
+  right: -6px;
+  z-index: 1;
   display: grid;
   place-items: center;
   min-width: 16px;
@@ -5886,21 +6165,13 @@ a.dialog-button {
   z-index: 4;
 }
 
-.notes-tool-block {
-  position: relative;
+/* A chest's panel (see .save-panel), opening above the row like the others. */
+.notes-panel {
+  width: 380px;
 }
 
-/* Drops down from its button under the toolbar, as the other tools' pickers do. */
-.notes-panel {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  z-index: 5;
-  width: 380px;
-  max-height: calc(100vh - 240px);
-  display: flex;
-  flex-direction: column;
-  background: rgba(17, 18, 23, 0.95);
+.chest-fab-name.is-news {
+  color: var(--gold);
 }
 
 .notes-head {
@@ -5943,6 +6214,24 @@ a.dialog-button {
 .notes-toolbar {
   display: flex;
   gap: 8px;
+}
+
+/*
+ * The fixed top of the Notes and Maps panels, like the dice tray: search, New (and
+ * its form), then a gold rule. Only the list under the rule scrolls.
+ */
+.panel-split {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 16px 0;
+}
+
+/* In the Save panel the whole area under the rule scrolls, so its lists run their full length instead of scrolling inside it. */
+.save-panel .notes-body .campaign-list {
+  max-height: none;
+  overflow: visible;
 }
 
 .chip-btn.is-gold {
@@ -6803,4 +7092,457 @@ button.note-chip:hover {
   display: flex;
   justify-content: flex-end;
   gap: 4px;
+}
+
+/* ---------- World maps: a flat overview picture over the battle map ---------- */
+
+.world-view {
+  position: absolute;
+  inset: 0;
+  /* Over the HUD; under dialogs, handouts and pictures shown full size. */
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: #08090c;
+}
+
+.world-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  min-height: 58px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-solid);
+}
+
+.world-title {
+  display: grid;
+  min-width: 0;
+}
+
+.world-title strong {
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.world-tools {
+  padding: 3px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.world-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+}
+
+.world-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.world-show {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+}
+
+.world-hint {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--gold-line);
+  border-radius: 10px;
+  background: rgba(17, 18, 23, 0.92);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  color: var(--text-dim);
+  transform: translateX(-50%);
+}
+
+.world-hint .is-error {
+  color: var(--low);
+}
+
+.world-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.world-stage:active {
+  cursor: grabbing;
+}
+
+.world-stage.is-pin,
+.world-stage.is-label,
+.world-stage.is-route {
+  cursor: crosshair;
+}
+
+.world-svg {
+  display: block;
+}
+
+.world-svg image {
+  image-rendering: auto;
+}
+
+/* Routes */
+
+.world-route polyline {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.world-route-halo {
+  stroke: rgba(10, 8, 6, 0.65);
+  stroke-width: 6;
+}
+
+.world-route-line {
+  stroke-width: 3;
+}
+
+.world-hit {
+  stroke: transparent;
+  stroke-width: 16;
+  cursor: pointer;
+}
+
+.world-route.is-selected .world-route-halo {
+  stroke: var(--gold-hi);
+  stroke-opacity: 0.55;
+  stroke-width: 9;
+}
+
+.world-route.is-hidden {
+  opacity: 0.45;
+}
+
+.world-vertex {
+  fill: #15161b;
+  stroke: var(--gold-hi);
+  stroke-width: 2;
+  cursor: move;
+}
+
+.world-draft polyline {
+  fill: none;
+  stroke: var(--gold-hi);
+  stroke-width: 2.5;
+  stroke-dasharray: 8 6;
+}
+
+.world-draft circle {
+  fill: var(--gold-hi);
+}
+
+/* Labels: lettered across the map, sized with it. */
+
+.world-label {
+  fill: #f3ead2;
+  stroke: rgba(20, 16, 10, 0.85);
+  paint-order: stroke;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  cursor: pointer;
+}
+
+.world-stage.is-pin .world-label,
+.world-stage.is-label .world-label,
+.world-stage.is-route .world-label {
+  cursor: inherit;
+}
+
+.world-label.is-selected {
+  fill: var(--gold-hi);
+}
+
+.world-label.is-hidden {
+  opacity: 0.45;
+}
+
+/* Pins */
+
+.world-pin {
+  cursor: pointer;
+}
+
+.world-pin-shadow {
+  fill: rgba(0, 0, 0, 0.45);
+}
+
+.world-pin-body {
+  stroke: rgba(10, 8, 6, 0.85);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
+}
+
+.world-pin:hover .world-pin-body {
+  stroke: var(--gold-hi);
+}
+
+.world-pin-ring {
+  fill: none;
+  stroke: var(--gold-hi);
+  stroke-width: 2.5;
+}
+
+.world-pin-link {
+  fill: var(--gold);
+  stroke: rgba(10, 8, 6, 0.85);
+  stroke-width: 1.5;
+}
+
+.world-pin-name {
+  fill: #f6f1e4;
+  stroke: rgba(10, 8, 6, 0.85);
+  stroke-width: 3.5;
+  paint-order: stroke;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: hanging;
+  pointer-events: none;
+}
+
+.world-pin.is-hidden {
+  opacity: 0.5;
+}
+
+.world-pin-here {
+  fill: none;
+  stroke: var(--gold-hi);
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: world-here 1.8s ease-out infinite;
+}
+
+@keyframes world-here {
+  from {
+    opacity: 0.9;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-pin-here {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* Zoom buttons, bottom right like the battle map's camera controls. */
+
+.world-zoom {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+}
+
+/* The mark panel: the DM's editor, or a player's look at a place. */
+
+.world-side {
+  position: absolute;
+  top: 82px;
+  right: 24px;
+  z-index: 3;
+  width: min(320px, calc(100% - 48px));
+  max-height: calc(100% - 180px);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+}
+
+.world-side-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.world-side-body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.world-field {
+  display: grid;
+  gap: 6px;
+}
+
+.world-text {
+  height: auto;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.world-select {
+  appearance: auto;
+}
+
+.world-select option {
+  background: var(--panel-solid);
+}
+
+.world-glyphs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.world-glyph {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.world-glyph:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.world-glyph.is-active {
+  border-color: var(--gold);
+  background: var(--gold-wash);
+  color: var(--gold);
+}
+
+.world-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.world-swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.world-swatch.is-active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--gold-line);
+}
+
+.world-travel {
+  justify-self: start;
+}
+
+/* "Move the party?": over the whole world map, so it can't be missed. */
+.dialog.world-travel-dialog {
+  border-color: var(--gold-line);
+}
+
+.dialog.world-travel-dialog strong {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.world-here-note {
+  color: var(--gold);
+}
+
+.world-hidden-note {
+  padding: 6px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+}
+
+.world-card-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.world-side .campaign-tag {
+  justify-self: start;
+}
+
+/* A player who stepped back to the battle map: the way back to the world map the DM is showing. */
+
+.world-return {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  z-index: 9;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 14px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transform: translateX(-50%);
+}
+
+.world-return:hover {
+  border-color: var(--gold-line);
+}
+
+.world-return strong {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .world-bar-end {
+    margin-left: 0;
+  }
+
+  .world-hint {
+    top: auto;
+    bottom: 80px;
+  }
 }

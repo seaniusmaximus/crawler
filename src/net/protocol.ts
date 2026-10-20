@@ -6,6 +6,7 @@ import type { SpellCard } from '../model/spellCard.ts'
 import type { CharacterStats } from '../model/stats.ts'
 import type { TokenTravel } from '../model/travel.ts'
 import type { Dungeon, Player } from '../model/types.ts'
+import type { World } from '../model/worlds.ts'
 import type { DungeonPatch } from './patch.ts'
 
 export interface DdbCharacter {
@@ -110,6 +111,19 @@ export type NetMessage =
   | { type: 'handout'; clientId: string; handout: Handout }
   /** From the relay: the party moved to this map. */
   | { type: 'liveMap'; mapId: string }
+  /**
+   * World maps (see src/model/worlds.ts) are kept by the relay beside the maps. Only
+   * the DM saves, deletes or shows one; the table only ever gets `playerView` of the one shown.
+   */
+  | { type: 'worldSave'; world: World }
+  | { type: 'worldDelete'; id: string }
+  /** The DM puts a world map on everyone's screen, or (null) takes it down. */
+  | { type: 'worldShow'; id: string | null }
+  /** From the relay, to the DM on connecting: every world map, and which one the table is shown. */
+  | { type: 'worlds'; worlds: World[]; shown: string | null }
+  /** From the relay: the world map the table is shown now (to players, as they may see it), or none. */
+  | { type: 'worldShown'; world: World | null }
+  | { type: 'worldError'; message: string }
 
 export interface SnapshotMessage {
   type: 'snapshot'

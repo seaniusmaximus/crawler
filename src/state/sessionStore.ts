@@ -39,6 +39,7 @@ import { useMarkStore } from './markStore.ts'
 import { setNoteAuthor, setNoteClientId, setNoteSender, useNotesStore } from './notesStore.ts'
 import { useSpellCardStore } from './spellCardStore.ts'
 import { useTravelStore } from './travelStore.ts'
+import { setWorldSender, useWorldStore } from './worldStore.ts'
 
 export type SessionRole = 'solo' | 'host' | 'guest'
 export type SessionStatus = 'idle' | 'connecting' | 'reconnecting' | 'live' | 'error'
@@ -299,6 +300,7 @@ function destroySocket(): void {
   window.clearTimeout(markTimers.area)
   useMarkStore.getState().clear()
   useNotesStore.getState().reset()
+  useWorldStore.getState().reset()
   const old = socket
   socket = null
   old?.close()
@@ -313,12 +315,14 @@ function send(message: NetMessage): void {
   }
 }
 
-// Notes go over the same socket; they keep what couldn't go and send it again on reconnecting.
-setNoteSender((message) => {
+// Notes and world maps go over the same socket; they keep what couldn't go and send it again on reconnecting.
+function sendIfOpen(message: NetMessage): boolean {
   if (socket?.readyState !== WebSocket.OPEN) return false
   send(message)
   return true
-})
+}
+setNoteSender(sendIfOpen)
+setWorldSender(sendIfOpen)
 
 function claims(): Record<string, string | null> {
   const you: Record<string, string | null> = {}
@@ -762,6 +766,7 @@ function sendMark(kind: MarkKind, mark: TableMark | null): void {
 /** Messages every seat handles the same way. */
 function handleSharedMessage(message: NetMessage): boolean {
   if (useNotesStore.getState().receive(message)) return true
+  if (useWorldStore.getState().receive(message, useSessionStore.getState().role === 'host')) return true
   if (message.type === 'travel') {
     useTravelStore.getState().receive(message.clientId, message.fromHost, message.playerId, message.travel)
     return true

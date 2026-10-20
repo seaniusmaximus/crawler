@@ -1,5 +1,6 @@
+import { useState, type ReactNode } from 'react'
 import { FOCUS_INSET } from '../../app/layout.ts'
-import { initiativeLeader, initiativeOf, sortByInitiative, turnTokenIds } from '../../model/combat.ts'
+import { initiativeLeader, initiativeOf, nextTurnPlayerId, sortByInitiative, turnTokenIds } from '../../model/combat.ts'
 import { characterNameOf, companionOwner, monsterMembers, partyMembers, playerStatuses } from '../../model/players.ts'
 import { hpRatio, normalizeStats } from '../../model/stats.ts'
 import { STATUS_EFFECTS } from '../../model/status.ts'
@@ -31,46 +32,105 @@ function useOrderedTokens(): Player[] {
   return sortByInitiative(tokens).filter((token) => tokenShown(token, floors, tokens, viewMode))
 }
 
-export function PartyCard() {
+/**
+ * Everyone on the map in one panel: the initiative bar, then the party, then the
+ * foes, each a section that folds away. One row of buttons adds any kind of token.
+ */
+export function TokensCard() {
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
+  const floors = useDungeonStore((state) => state.dungeon.floors)
   const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
   const viewMode = useEditorStore((state) => state.viewMode)
   const role = useSessionStore((state) => state.role)
-  const party = partyMembers(useOrderedTokens())
-  const canRun = role !== 'guest' && viewMode !== 'player'
+  const ordered = useOrderedTokens()
+  const party = partyMembers(ordered)
+  const foes = monsterMembers(ordered)
+  const allFoes = monsterMembers(tokens)
+  const dm = viewMode !== 'player'
+  const canRun = role !== 'guest' && dm
   const onTurn = turnTokenIds(tokens, turnPlayerId)
+  // In combat, who Next turn hands to (with any companions acting on their turn).
+  const nextId = turnPlayerId ? nextTurnPlayerId(tokens, turnPlayerId) : null
+  const upNext = nextId && nextId !== turnPlayerId ? turnTokenIds(tokens, nextId) : new Set<string>()
+  const hidden = allFoes.filter((foe) => foeSight(foe, floors, tokens) !== 'seen').length
+  const unrolledFoes = allFoes.filter((foe) => foe.initiativeRoll == null)
+  const [closed, setClosed] = useState<{ party: boolean; foes: boolean }>({ party: false, foes: false })
 
   function addPlayer(): void {
     const id = useDungeonStore.getState().addPlayer(getActiveFloor().id)
     if (id) useEditorStore.getState().selectPlayer(id)
   }
 
+  // Players only hear of foes they can see.
+  const showFoes = dm || foes.length > 0
+
   return (
-    <section className="panel token-card is-party scroll-v" aria-label="Party">
+    <section className="panel token-card scroll-v" aria-label="Tokens">
       <header className="panel-head">
         <h2 className="panel-title">
           <Diamond />
-          <span>The Party</span>
+          <span>Tokens</span>
         </h2>
       </header>
 
       {canRun && tokens.length > 0 ? <InitiativeBar tokens={tokens} turnPlayerId={turnPlayerId} /> : null}
 
       <div className="token-list">
-        {party.length === 0 ? (
-          <p className="panel-empty">
-            {viewMode === 'player' ? 'No visible players' : 'Add a player, then drag their token onto a floor tile'}
-          </p>
-        ) : (
-          party.map((player) => <TokenRow key={player.id} player={player} turn={onTurn.has(player.id)} />)
-        )}
+        <TokenSection
+          title="Party"
+          count={party.length}
+          closed={closed.party}
+          onToggle={() => setClosed({ ...closed, party: !closed.party })}
+        >
+          {party.length === 0 ? (
+            <p className="panel-empty">
+              {dm ? 'Add a player, then drag their token onto a floor tile' : 'No visible players'}
+            </p>
+          ) : (
+            party.map((player) => (
+              <TokenRow key={player.id} player={player} turn={onTurn.has(player.id)} next={upNext.has(player.id)} />
+            ))
+          )}
+        </TokenSection>
+
+        {showFoes ? (
+          <TokenSection
+            title="Foes"
+            foe
+            count={foes.length}
+            closed={closed.foes}
+            onToggle={() => setClosed({ ...closed, foes: !closed.foes })}
+            meta={dm && allFoes.length > 0 ? `${allFoes.length - hidden} seen · ${hidden} hidden` : undefined}
+            action={
+              canRun && unrolledFoes.length > 0 && unrolledFoes.length < allFoes.length ? (
+                <button
+                  type="button"
+                  className="text-btn token-section-action"
+                  onClick={() => rollInitiativeFor(unrolledFoes)}
+                  title="Roll initiative for every monster that has not rolled yet"
+                >
+                  <Icon id="d20" size={13} />
+                  Roll {unrolledFoes.length}
+                </button>
+              ) : null
+            }
+          >
+            {foes.length === 0 ? (
+              <p className="panel-empty">Add a monster — it starts Invisible; clear that and players see it once they can see into its room</p>
+            ) : dm ? (
+              foes.map((foe) => <TokenRow key={foe.id} player={foe} turn={turnPlayerId === foe.id} next={upNext.has(foe.id)} />)
+            ) : (
+              foes.map((foe) => <FoeGlimpse key={foe.id} foe={foe} turn={turnPlayerId === foe.id} next={upNext.has(foe.id)} />)
+            )}
+          </TokenSection>
+        ) : null}
       </div>
 
       {canRun ? (
-        <div className="panel-foot is-pair">
-          <button type="button" className="dashed-btn" onClick={addPlayer}>
-            <Icon id="plus" size={15} />
-            <span className="btn-label">Add player</span>
+        <div className="panel-foot token-add">
+          {/* Dashed, like every add button here; three in a row leave no room for plus signs. */}
+          <button type="button" className="dashed-btn" onClick={addPlayer} title="A player character">
+            <span className="btn-label">Player</span>
           </button>
           <button
             type="button"
@@ -78,12 +138,50 @@ export function PartyCard() {
             onClick={addCompanion}
             title="A familiar, beast or other ally with its own stat block; its owner can run it too"
           >
-            <Icon id="plus" size={15} />
-            <span className="btn-label">Add companion</span>
+            <span className="btn-label">Companion</span>
+          </button>
+          <button type="button" className="dashed-btn is-foe" onClick={addMonster} title="A monster from your library or a blank stat block">
+            <span className="btn-label">Monster</span>
           </button>
         </div>
       ) : null}
     </section>
+  )
+}
+
+/** One kind of token under a heading that folds it away, like a notes folder. */
+function TokenSection({
+  title,
+  foe = false,
+  count,
+  closed,
+  onToggle,
+  meta,
+  action,
+  children,
+}: {
+  title: string
+  foe?: boolean
+  count: number
+  closed: boolean
+  onToggle: () => void
+  meta?: string
+  action?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className={`token-section${foe ? ' is-foe' : ''}`}>
+      <div className="token-section-head">
+        <button type="button" className="token-section-toggle" aria-expanded={!closed} onClick={onToggle}>
+          <Icon id={closed ? 'chevronRight' : 'chevronDown'} size={13} />
+          <span className="kicker">{title}</span>
+          {closed && count > 0 ? <span className="token-section-count">{count}</span> : null}
+        </button>
+        {meta ? <span className="panel-meta">{meta}</span> : null}
+        {action}
+      </div>
+      {closed ? null : <div className="token-section-rows">{children}</div>}
+    </div>
   )
 }
 
@@ -164,71 +262,7 @@ function InitiativeBar({ tokens, turnPlayerId }: { tokens: readonly Player[]; tu
   )
 }
 
-export function FoesCard() {
-  const viewMode = useEditorStore((state) => state.viewMode)
-  const role = useSessionStore((state) => state.role)
-  const turnPlayerId = useDungeonStore((state) => state.dungeon.combat?.turnPlayerId ?? null)
-  const tokens = useDungeonStore((state) => state.dungeon.players)
-  const floors = useDungeonStore((state) => state.dungeon.floors)
-  const allFoes = monsterMembers(tokens ?? [])
-  const foes = monsterMembers(useOrderedTokens())
-  const dm = viewMode !== 'player'
-  const canRun = role !== 'guest' && dm
-  const hidden = allFoes.filter((foe) => foeSight(foe, floors, tokens ?? []) !== 'seen').length
-  const unrolledFoes = allFoes.filter((foe) => foe.initiativeRoll == null)
-
-  if (!dm && foes.length === 0) return null
-
-  return (
-    <section className="panel token-card is-foes scroll-v" aria-label="Foes">
-      <header className="panel-head">
-        <h2 className="panel-title is-foe">
-          <Diamond />
-          <span>Foes</span>
-        </h2>
-        {dm && allFoes.length > 0 ? (
-          <span className="panel-meta">
-            {allFoes.length - hidden} seen · {hidden} hidden
-          </span>
-        ) : null}
-      </header>
-
-      <div className="token-list">
-        {foes.length === 0 ? (
-          <p className="panel-empty">Add a monster — it starts Invisible; clear that and players see it once they can see into its room</p>
-        ) : dm ? (
-          foes.map((foe) => <TokenRow key={foe.id} player={foe} turn={turnPlayerId === foe.id} />)
-        ) : (
-          foes.map((foe) => <FoeGlimpse key={foe.id} foe={foe} turn={turnPlayerId === foe.id} />)
-        )}
-      </div>
-
-      {canRun ? (
-        <div className="panel-foot is-pair">
-          <button type="button" className="dashed-btn" onClick={addMonster}>
-            <Icon id="plus" size={15} />
-            <span className="btn-label">Add monster</span>
-          </button>
-          {unrolledFoes.length > 0 ? (
-            <button
-              type="button"
-              className="dashed-btn"
-              onClick={() => rollInitiativeFor(unrolledFoes)}
-              title="Roll initiative for every monster that has not rolled yet"
-            >
-              <Icon id="d20" size={15} />
-              <span className="btn-label">
-                {unrolledFoes.length < allFoes.length ? `Roll ${unrolledFoes.length} more` : 'Roll initiative'}
-              </span>
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-    </section>
-  )
-}
-
-function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
+function TokenRow({ player, turn, next }: { player: Player; turn: boolean; next: boolean }) {
   const open = useEditorStore((state) => state.sheetPlayerId === player.id)
   const hovered = useEditorStore((state) => state.hoverPlayerId === player.id)
   const viewMode = useEditorStore((state) => state.viewMode)
@@ -258,7 +292,7 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
 
   return (
     <div
-      className={`token-row${open ? ' is-open' : ''}${hovered ? ' is-hovered' : ''}${mine || myCompanion ? ' is-mine' : ''}${leader ? ' is-follower' : ''}`}
+      className={`token-row${open ? ' is-open' : ''}${hovered ? ' is-hovered' : ''}${mine || myCompanion ? ' is-mine' : ''}${leader ? ' is-follower' : ''}${next ? ' is-next' : ''}`}
       onPointerEnter={() => useEditorStore.getState().setHoverPlayer(player.id)}
       onPointerLeave={() => useEditorStore.getState().setHoverPlayer(null)}
     >
@@ -275,7 +309,10 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
         >
           {leader ? <Icon id="link" size={12} /> : (initiative ?? '—')}
         </span>
-        <Avatar player={player} turn={turn} dim={dm && faded} />
+        <span className="token-avatar">
+          <Avatar player={player} turn={turn} dim={dm && faded} />
+          {next ? <NextChip /> : null}
+        </span>
         <span className={`token-copy${dm && faded ? ' is-dim' : ''}`}>
           <span className="token-line">
             <span className="token-name-wrap">
@@ -342,14 +379,26 @@ function TokenRow({ player, turn }: { player: Player; turn: boolean }) {
 }
 
 /** Players see a foe's name and how hurt it looks, never its numbers. */
-function FoeGlimpse({ foe, turn }: { foe: Player; turn: boolean }) {
+function FoeGlimpse({ foe, turn, next }: { foe: Player; turn: boolean; next: boolean }) {
   const stats = normalizeStats(foe.stats)
   const wound = woundLabel(stats.hp, stats.hpMax)
   return (
     <div className="token-row is-glimpse">
-      <Avatar player={foe} size={34} turn={turn} />
+      <span className="token-avatar">
+        <Avatar player={foe} size={34} turn={turn} />
+        {next ? <NextChip /> : null}
+      </span>
       <span className="token-name">{characterNameOf(foe)}</span>
       {wound ? <span className={`wound is-${wound.toLowerCase()}`}>{wound}</span> : null}
     </div>
+  )
+}
+
+/** Whose turn comes after this one (what Next turn will hand the turn to), on the bottom of their portrait. */
+function NextChip() {
+  return (
+    <span className="next-chip" title="Up next in initiative">
+      Next
+    </span>
   )
 }

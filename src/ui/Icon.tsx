@@ -138,6 +138,23 @@ const PATHS: Record<string, ReactNode> = {
     </>
   ),
   star: <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z" />,
+  /** A folded map: the campaign's world maps. */
+  world: (
+    <>
+      <path d="M3 6.5l6-2.5 6 2.5 6-2.5v13.5l-6 2.5-6-2.5-6 2.5z" />
+      <path d="M9 4v13.5M15 6.5V20" />
+    </>
+  ),
+  /** Lettering laid on a world map. */
+  label: <path d="M5 6V4.5h14V6M12 4.5v15M9 19.5h6" />,
+  /** A road or journey drawn across a world map. */
+  route: (
+    <>
+      <circle cx="5.5" cy="18.5" r="2" />
+      <circle cx="18.5" cy="5.5" r="2" />
+      <path d="M7.5 18.5h6a3 3 0 000-6h-3a3 3 0 010-6h6" strokeDasharray="2.2 2" />
+    </>
+  ),
   image: (
     <>
       <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />

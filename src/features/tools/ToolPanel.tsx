@@ -13,7 +13,6 @@ import { useObjectLibraryStore } from '../../state/objectLibraryStore.ts'
 import { areaOwner, useSessionStore } from '../../state/sessionStore.ts'
 import { roomsWithOwnTileset, TILESETS, tilesetById } from '../../tiles/sets/index.ts'
 import { Icon } from '../../ui/Icon.tsx'
-import { NotesTool } from '../notes/NotesPanel.tsx'
 import { Stepper } from '../../ui/Stepper.tsx'
 
 interface ToolDef {
@@ -156,7 +155,6 @@ export function ToolPanel() {
           </>
         )}
       </div>
-      <NotesTool />
       </div>
     </div>
   )

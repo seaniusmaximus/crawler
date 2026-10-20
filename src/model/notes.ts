@@ -76,8 +76,8 @@ const MAX_ID = 64
 /** A note's JSON is at most this long, well under a storage row. */
 export const MAX_NOTE_CHARS = 200_000
 
-/** Images in notes are always the campaign's own uploads (only the DM can add those), never embedded or from elsewhere. */
-const ASSET_SRC = /^\/crawler-sync\/asset\/[a-z0-9]{4,32}\/[0-9a-f]{64}$/
+/** Images in notes (and world maps) are always the campaign's own uploads (only the DM can add those), never embedded or from elsewhere. */
+export const ASSET_SRC = /^\/crawler-sync\/asset\/[a-z0-9]{4,32}\/[0-9a-f]{64}$/
 
 function text(value: unknown, max: number): string {
   return typeof value === 'string' ? value.slice(0, max) : ''

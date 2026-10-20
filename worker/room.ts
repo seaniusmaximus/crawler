@@ -10,6 +10,7 @@ import {
   type NoteOwner,
   type SharedNote,
 } from '../src/model/notes.ts'
+import { MAX_WORLD_CHARS, MAX_WORLDS, normalizeWorld, playerView, type World } from '../src/model/worlds.ts'
 import type { DmLibrary } from './library.ts'
 
 export interface RoomEnv {
@@ -80,6 +81,9 @@ const HOST_SENDS = new Set([
   'noteSave',
   'noteDelete',
   'handout',
+  'worldSave',
+  'worldDelete',
+  'worldShow',
 ])
 const GUEST_SENDS = new Set([
   'noteSave',
@@ -170,6 +174,12 @@ export class TableRoom extends DurableObject<RoomEnv> {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (owner, id)
       );
+      CREATE TABLE IF NOT EXISTS worlds (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        sort INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `)
     if (this.migrated) return
     this.migrated = true
@@ -195,7 +205,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     this.ctx.storage.sql.exec(
       'INSERT INTO maps (id, name, sort, created_at, updated_at) VALUES (?, ?, 0, ?, ?)',
       created,
-      'Map 1',
+      'Battle map 1',
       now,
       now,
     )
@@ -237,7 +247,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     this.ensureTables()
     const live = this.liveMapId()
     const sql = this.ctx.storage.sql
-    if (from && !sql.exec('SELECT 1 FROM maps WHERE id = ?', from).toArray().length) throw new Error('Map not found')
+    if (from && !sql.exec('SELECT 1 FROM maps WHERE id = ?', from).toArray().length) throw new Error('Battle map not found')
     const id = crypto.randomUUID()
     const now = Date.now()
     const sort = sql.exec<{ n: number | null }>('SELECT MAX(sort) AS n FROM maps').one().n ?? 0
@@ -269,7 +279,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
   /** Delete a map that isn't live, with its save points. */
   deleteMap(id: string): void {
     this.ensureTables()
-    if (id === this.liveMapId()) throw new Error("The map the party is on can't be deleted; move them first")
+    if (id === this.liveMapId()) throw new Error("The battle map the party is on can't be deleted; move them first")
     const sql = this.ctx.storage.sql
     this.ctx.storage.transactionSync(() => {
       sql.exec('DELETE FROM map_chunks WHERE map_id = ?', id)
@@ -284,7 +294,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     const live = this.liveMapId()
     const sql = this.ctx.storage.sql
     if (!sql.exec('SELECT 1 FROM maps WHERE id = ?', mapId).toArray().length) {
-      ws.send(JSON.stringify({ type: 'mapError', message: 'That map no longer exists' }))
+      ws.send(JSON.stringify({ type: 'mapError', message: 'That battle map no longer exists' }))
       return
     }
     if (mapId !== live) {
@@ -439,6 +449,90 @@ export class TableRoom extends DurableObject<RoomEnv> {
     }
   }
 
+  // ---------- World maps ----------
+  //
+  // Kept per campaign like notes, so map switches and save points leave them be.
+  // Only the DM's tabs get them whole; players only ever get `playerView` of the
+  // one the DM is showing the table.
+
+  private allWorlds(): World[] {
+    return this.ctx.storage.sql
+      .exec<{ data: string }>('SELECT data FROM worlds ORDER BY sort')
+      .toArray()
+      .map((row) => JSON.parse(row.data) as World)
+  }
+
+  private world(id: string): World | null {
+    const row = this.ctx.storage.sql.exec<{ data: string }>('SELECT data FROM worlds WHERE id = ?', id).toArray()[0]
+    return row ? (JSON.parse(row.data) as World) : null
+  }
+
+  /** What the table is shown, as players may see it. */
+  private shownWorld(): World | null {
+    const id = this.meta('shownWorld')
+    const world = id ? this.world(id) : null
+    return world ? playerView(world) : null
+  }
+
+  /** On connecting: the DM gets every world map, a player the one being shown (if any). */
+  private sendWorlds(ws: WebSocket, seat: Seat): void {
+    const message =
+      seat.role === 'host'
+        ? { type: 'worlds', worlds: this.allWorlds(), shown: this.meta('shownWorld') }
+        : { type: 'worldShown', world: this.shownWorld() }
+    try {
+      ws.send(JSON.stringify(message))
+    } catch {
+      // Going away.
+    }
+  }
+
+  /** Tell everyone what the table is shown now: players see it, the DM's tab learns which one. */
+  private announceShown(): void {
+    this.sendAll(JSON.stringify({ type: 'worldShown', world: this.shownWorld() }))
+  }
+
+  private saveWorld(ws: WebSocket, raw: unknown): void {
+    const world = normalizeWorld(raw)
+    if (!world) return
+    world.updatedAt = Date.now()
+    const data = JSON.stringify(world)
+    if (data.length > MAX_WORLD_CHARS) return this.worldError(ws, 'That world map has too many marks to save')
+    const sql = this.ctx.storage.sql
+    const exists = sql.exec('SELECT 1 FROM worlds WHERE id = ?', world.id).toArray().length > 0
+    if (exists) {
+      sql.exec('UPDATE worlds SET data = ?, updated_at = ? WHERE id = ?', data, world.updatedAt, world.id)
+    } else {
+      const count = sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM worlds').one().n
+      if (count >= MAX_WORLDS) return this.worldError(ws, `A campaign holds up to ${MAX_WORLDS} world maps; delete one first`)
+      const sort = sql.exec<{ n: number | null }>('SELECT MAX(sort) AS n FROM worlds').one().n ?? 0
+      sql.exec('INSERT INTO worlds (id, data, sort, updated_at) VALUES (?, ?, ?, ?)', world.id, data, sort + 1, world.updatedAt)
+    }
+    if (this.meta('shownWorld') === world.id) this.announceShown()
+  }
+
+  private deleteWorld(id: unknown): void {
+    if (typeof id !== 'string') return
+    this.ctx.storage.sql.exec('DELETE FROM worlds WHERE id = ?', id)
+    if (this.meta('shownWorld') !== id) return
+    this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'shownWorld'")
+    this.announceShown()
+  }
+
+  private showWorld(id: unknown): void {
+    if (typeof id === 'string' && this.world(id)) this.setMeta('shownWorld', id)
+    else this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'shownWorld'")
+    this.announceShown()
+  }
+
+  private worldError(ws: WebSocket, message: string): void {
+    try {
+      ws.send(JSON.stringify({ type: 'worldError', message }))
+    } catch {
+      // Going away.
+    }
+  }
+
   private sendAll(message: string): void {
     for (const peer of this.ctx.getWebSockets()) {
       try {
@@ -533,7 +627,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     const save = this.ctx.storage.sql
       .exec<{ name: string }>('SELECT name FROM saves WHERE id = ? AND map_id = ?', id, this.liveMapId())
       .toArray()[0]
-    if (!save) throw new Error('Save point not found on this map')
+    if (!save) throw new Error('Save point not found on this battle map')
     this.ctx.storage.transactionSync(() => {
       if (this.hasSnapshot()) this.copyCurrent(`Before restoring “${save.name}”`, 'restore')
       this.ctx.storage.sql.exec('DELETE FROM snapshot')
@@ -674,6 +768,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
     const snapshot = this.loadSnapshot()
     if (snapshot) ws.send(snapshot)
     this.sendNotebook(ws, { role, id })
+    this.sendWorlds(ws, { role, id })
     this.broadcastPresence()
     return new Response(null, { status: 101, webSocket: pair[0] })
   }
@@ -694,6 +789,7 @@ export class TableRoom extends DurableObject<RoomEnv> {
       you?: unknown
       note?: unknown
       id?: unknown
+      world?: unknown
     }
     try {
       parsed = JSON.parse(message)
@@ -724,6 +820,19 @@ export class TableRoom extends DurableObject<RoomEnv> {
     }
     if (type === 'noteDelete') {
       this.deleteNote(ws, seat, parsed.id)
+      return
+    }
+    // World maps: only the DM sends these (see HOST_SENDS); they're kept here, never relayed as sent.
+    if (type === 'worldSave') {
+      this.saveWorld(ws, parsed.world)
+      return
+    }
+    if (type === 'worldDelete') {
+      this.deleteWorld(parsed.id)
+      return
+    }
+    if (type === 'worldShow') {
+      this.showWorld(parsed.id)
       return
     }
     // The DM's map says who holds which token, which decides whose notebook each player opens.

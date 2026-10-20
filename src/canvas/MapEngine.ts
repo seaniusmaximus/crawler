@@ -6,6 +6,7 @@ import { hitNotePin, notePins, type NotePin } from './notePins.ts'
 import { anchorLabel } from '../model/noteMap.ts'
 import type { NoteAnchor } from '../model/notes.ts'
 import { useNotesStore } from '../state/notesStore.ts'
+import { useWorldStore } from '../state/worldStore.ts'
 import { INSTANT_AREA_MS, rollCast } from '../features/areas/castRolls.ts'
 import { sameLink } from '../model/links.ts'
 import { normalizeRect, rectContains, resizeRect, topmostRoomAt, translateRect } from '../model/rect.ts'
@@ -2111,6 +2112,8 @@ export class MapEngine {
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
+    // A world map covers the battle map: its keys are the world map's.
+    if (useWorldStore.getState().viewingId) return
     const blocked = useEditorStore.getState()
     if ((blocked.stairsPrompt || blocked.stairUse) && event.code !== 'Escape') return
     if (import.meta.env.DEV && event.code === 'Backquote' && !isTyping(event.target)) {

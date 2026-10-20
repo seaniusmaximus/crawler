@@ -65,106 +65,123 @@ export function DiceTray() {
   return (
     <div className="dice-dock" data-dice-tray="1">
       {open ? (
-        <section className="panel dice-panel scroll-v" aria-label="Dice">
-          <header className="panel-head">
-            <h2 className="panel-title">
-              <Diamond />
-              <span>Dice</span>
-              <span
-                className={`bridge-pip${bridge === 'connected' ? ' is-on' : ''}`}
-                title={bridge === 'connected' ? 'D&D Beyond bridge connected' : 'D&D Beyond bridge not connected'}
-              />
-            </h2>
-            {graceOver && !bridgeSeen ? (
-              <a
-                className="bridge-link"
-                href={EXTENSION_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Install the Crawler Dice Bridge extension to send D&D Beyond rolls here"
-              >
-                <img className="bridge-icon" src={bridgeIcon} width={16} height={16} alt="" />
-                Get Bridge
-                <Icon id="external" size={12} />
-              </a>
-            ) : (
-              <span className="panel-meta">Rolls sync to the table</span>
-            )}
-          </header>
-
-          <div className="die-grid" role="group" aria-label="Die">
-            {DIE_FACES.map((face) => (
-              <button
-                key={face}
-                type="button"
-                className={`die-pick${face === faces ? ' is-active' : ''}`}
-                aria-pressed={face === faces}
-                onClick={() => setFaces(face)}
-              >
-                <Icon id={`d${face}`} size={24} strokeWidth={1.4} />
-                <span>d{face}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="dice-steppers">
-            <Stepper
-              label="Count"
-              value={`${count}`}
-              onDown={() => dice.setCount(count - 1)}
-              onUp={() => dice.setCount(count + 1)}
-              downDisabled={count <= 1}
-              upDisabled={count >= MAX_DIE_COUNT}
-            />
-            <Stepper
-              label="Mod"
-              value={formatModifier(modifier) || '0'}
-              onDown={() => dice.setModifier(modifier - 1)}
-              onUp={() => dice.setModifier(modifier + 1)}
-            />
-          </div>
-
-          <button type="button" className="roll-btn" onClick={() => dice.roll(faces, who)}>
-            ROLL {formula}
-          </button>
-
-          <label className="dice-physical">
-            <input type="checkbox" checked={physical} onChange={(event) => dice.setPhysical(event.target.checked)} />
-            Throw dice on the table
-          </label>
-
-          {rolls.length > 0 ? (
-            <>
-              <Divider />
-              <div className="dice-log-head">
-                <span className="kicker">Recent</span>
-                <button type="button" className="text-btn" onClick={() => dice.clear()}>
-                  Clear
+        // Dressed like the Maps and Save chests' panels, opening in the same place above the row.
+        <section className="panel save-panel chest-panel dice-panel" aria-label="Dice">
+          <div className="panel-body dice-panel-body">
+            <header className="panel-head">
+              <h2 className="panel-title">
+                <Diamond />
+                <span>Dice</span>
+                <span
+                  className={`bridge-pip${bridge === 'connected' ? ' is-on' : ''}`}
+                  title={bridge === 'connected' ? 'D&D Beyond bridge connected' : 'D&D Beyond bridge not connected'}
+                />
+              </h2>
+              <span className="dice-head-end">
+                {graceOver && !bridgeSeen ? (
+                  <a
+                    className="bridge-link"
+                    href={EXTENSION_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Install the Crawler Dice Bridge extension to send D&D Beyond rolls here"
+                  >
+                    <img className="bridge-icon" src={bridgeIcon} width={16} height={16} alt="" />
+                    Get Bridge
+                    <Icon id="external" size={12} />
+                  </a>
+                ) : (
+                  <span className="panel-meta">Rolls sync to the table</span>
+                )}
+                <button type="button" className="icon-btn is-boxed" aria-label="Close" onClick={() => dice.setOpen(false)}>
+                  <Icon id="close" size={15} />
                 </button>
-              </div>
-              <ol className="dice-log">
-                {rolls.map((roll) => (
-                  <RollRow key={roll.id} roll={roll} />
-                ))}
-              </ol>
-            </>
-          ) : (
-            <p className="panel-empty">Roll here, or from a D&amp;D Beyond sheet</p>
-          )}
+              </span>
+            </header>
+
+            <div className="die-grid" role="group" aria-label="Die">
+              {DIE_FACES.map((face) => (
+                <button
+                  key={face}
+                  type="button"
+                  className={`die-pick${face === faces ? ' is-active' : ''}`}
+                  aria-pressed={face === faces}
+                  onClick={() => setFaces(face)}
+                >
+                  <Icon id={`d${face}`} size={24} strokeWidth={1.4} />
+                  <span>d{face}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="dice-steppers">
+              <Stepper
+                label="Count"
+                value={`${count}`}
+                onDown={() => dice.setCount(count - 1)}
+                onUp={() => dice.setCount(count + 1)}
+                downDisabled={count <= 1}
+                upDisabled={count >= MAX_DIE_COUNT}
+              />
+              <Stepper
+                label="Mod"
+                value={formatModifier(modifier) || '0'}
+                onDown={() => dice.setModifier(modifier - 1)}
+                onUp={() => dice.setModifier(modifier + 1)}
+              />
+            </div>
+
+            <button type="button" className="roll-btn" onClick={() => dice.roll(faces, who)}>
+              ROLL {formula}
+            </button>
+
+            <label className="dice-physical">
+              <input type="checkbox" checked={physical} onChange={(event) => dice.setPhysical(event.target.checked)} />
+              Throw dice on the table
+            </label>
+
+            {rolls.length > 0 ? (
+              <>
+                <Divider />
+                <div className="dice-log-head">
+                  <span className="kicker">Recent</span>
+                  <button type="button" className="text-btn" onClick={() => dice.clear()}>
+                    Clear
+                  </button>
+                </div>
+                <ol className="dice-log">
+                  {rolls.map((roll) => (
+                    <RollRow key={roll.id} roll={roll} />
+                  ))}
+                </ol>
+              </>
+            ) : (
+              <p className="panel-empty">Roll here, or from a D&amp;D Beyond sheet</p>
+            )}
+          </div>
         </section>
       ) : null}
 
       <button
         type="button"
-        className={`panel dice-fab chest${open ? ' is-open' : ''}`}
+        className={`panel chest-fab chest${open ? ' is-open' : ''}`}
         onClick={() => dice.setOpen(!open)}
         aria-expanded={open}
         aria-label={open ? 'Close dice tray' : 'Open dice tray'}
         title="Dice tray"
       >
-        <Icon id="d20" size={26} strokeWidth={1.3} className="is-gold" />
-        {viewMode === 'player' || guest ? <span>Roll</span> : null}
-        {!open && latest ? <RollResult roll={latest} className="dice-fab-total" compact /> : null}
+        <Icon id="d20" size={24} strokeWidth={1.3} className="is-gold" />
+        <span className="chest-fab-copy">
+          <span className="chest-fab-state">Dice</span>
+          {/* The latest roll at a glance; until there is one, what the chest is for. */}
+          {latest ? (
+            <span className="chest-fab-name">
+              Last roll: <RollResult roll={latest} className="dice-fab-total" compact />
+            </span>
+          ) : (
+            <span className="chest-fab-name">Roll</span>
+          )}
+        </span>
       </button>
     </div>
   )

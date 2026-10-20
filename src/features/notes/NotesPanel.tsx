@@ -4,23 +4,23 @@ import { noteMatches, notePreview, noteTitle, sortNotes, type Note, type NoteAnc
 import { useDungeonStore } from '../../state/dungeonStore.ts'
 import { sharedKey, useNotesStore, type NotesTab } from '../../state/notesStore.ts'
 import { useSessionStore } from '../../state/sessionStore.ts'
-import { Diamond, Icon } from '../../ui/Icon.tsx'
+import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
 import { NoteEditor } from './NoteEditor.tsx'
 import { ImageLightbox, NoteBlocks } from './NoteBlocks.tsx'
 import { goToAnchor, lookAtRoom, useAnchorLabel, useAuthorName, useIsDm } from './noteHooks.ts'
 
-/** The notes tool at the end of the toolbar: its button, and its panel dropping down beneath like the other tools'. */
+/** Notes, a chest in the bottom-left row: its panel opens above the row, like the other chests'. */
 export function NotesTool() {
   const open = useNotesStore((state) => state.open)
   return (
-    <div className="notes-tool-block">
-      <NotesButton />
+    <div className="notes-dock">
       {open ? <Panel /> : null}
+      <NotesButton />
     </div>
   )
 }
 
-/** The notebook button that opens and closes the panel. */
+/** The notebook chest that opens and closes the panel; the gold count is newly shared notes. */
 function NotesButton() {
   const open = useNotesStore((state) => state.open)
   const unread = useNotesStore((state) => state.unread.length)
@@ -29,13 +29,19 @@ function NotesButton() {
   return (
     <button
       type="button"
-      className={`panel notes-tool${open ? ' is-active' : ''}`}
-      aria-pressed={open}
+      className={`panel chest-fab chest${open ? ' is-open' : ''}`}
+      aria-expanded={open}
       aria-label={unread ? `${label} (${unread} newly shared)` : label}
       title={label}
       onClick={() => (open ? useNotesStore.getState().closePanel() : useNotesStore.getState().openPanel())}
     >
-      <Icon id="notebook" size={19} />
+      <Icon id="notebook" size={22} className="is-gold" />
+      <span className="chest-fab-copy">
+        <span className="chest-fab-state">Notes</span>
+        <span className={`chest-fab-name${unread ? ' is-news' : ''}`}>
+          {unread ? `${unread} new` : dm ? 'Campaign' : 'Notebook'}
+        </span>
+      </span>
       {unread > 0 ? <span className="notes-dot">{unread > 9 ? '9+' : unread}</span> : null}
     </button>
   )
@@ -69,10 +75,13 @@ function Panel() {
     { id: 'table', label: 'Shared', count: shared.length },
   ]
   if (dm) tabs.push({ id: 'reminders', label: 'Reminders' })
+  const [query, setQuery] = useState('')
+  // Search and New belong to the list of this seat's notes, not to a note open or the other tabs.
+  const listing = ready && tab === 'mine' && !selected
 
   return (
     <aside
-      className="panel notes-panel scroll-v"
+      className="panel save-panel chest-panel notes-panel"
       aria-label="Notes"
       // Typing here never reaches the map's shortcuts.
       onKeyDown={(event: KeyboardEvent) => event.stopPropagation()}
@@ -107,6 +116,26 @@ function Panel() {
           </button>
         ))}
       </div>
+      {/* Like the dice tray: controls on top, a gold rule, and only what's beneath it scrolls. */}
+      <div className="panel-split">
+        {listing ? (
+          <div className="notes-toolbar">
+            <input
+              className="field"
+              type="search"
+              placeholder="Search notes"
+              aria-label="Search notes"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <button type="button" className="chip-btn is-gold notes-new" onClick={() => useNotesStore.getState().create()}>
+              <Icon id="plus" size={14} />
+              New
+            </button>
+          </div>
+        ) : null}
+        <Divider />
+      </div>
       <div className="notes-body">
         {tab === 'reminders' && dm ? (
           <Reminders />
@@ -121,7 +150,7 @@ function Panel() {
         ) : selected ? (
           <NoteEditor key={selected.id} note={selected} />
         ) : (
-          <NoteList notes={notes} />
+          <NoteList notes={notes} query={query} />
         )}
       </div>
     </aside>
@@ -140,9 +169,8 @@ function NotReady() {
   return <p className="panel-empty">{text}</p>
 }
 
-function NoteList({ notes }: { notes: readonly Note[] }) {
+function NoteList({ notes, query }: { notes: readonly Note[]; query: string }) {
   const dm = useIsDm()
-  const [query, setQuery] = useState('')
   const closed = useNotesStore((state) => state.closedFolders)
   const searching = query.trim() !== ''
 
@@ -152,20 +180,6 @@ function NoteList({ notes }: { notes: readonly Note[] }) {
 
   return (
     <div className="notes-list-view">
-      <div className="notes-toolbar">
-        <input
-          className="field"
-          type="search"
-          placeholder="Search notes"
-          aria-label="Search notes"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <button type="button" className="chip-btn is-gold notes-new" onClick={() => useNotesStore.getState().create()}>
-          <Icon id="plus" size={14} />
-          New
-        </button>
-      </div>
       {notes.length === 0 ? (
         <p className="panel-empty">
           {dm

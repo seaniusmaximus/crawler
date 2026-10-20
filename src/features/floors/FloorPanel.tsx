@@ -10,6 +10,7 @@ import { useEditorStore } from '../../state/editorStore.ts'
 import { Avatar } from '../../ui/Avatar.tsx'
 import { Diamond, Divider, Icon } from '../../ui/Icon.tsx'
 import { tokenShown } from '../party/tokenInfo.ts'
+import { WorldMapButton } from '../worlds/WorldMapButton.tsx'
 import { FloorStack } from './FloorStack.tsx'
 
 const CHIPS_SHOWN = 2
@@ -56,26 +57,6 @@ export function FloorDock() {
 }
 
 /**
- * Publish the collapsed tower's height as --floor-tower-height on the bottom-centre
- * dock, so neighbours (the save bubble) can match it. It keeps the last value
- * while the drawer is open.
- */
-function useShareTowerHeight() {
-  const ref = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const el = ref.current
-    const dock = el?.closest<HTMLElement>('.hud-bottom-center')
-    if (!el || !dock) return
-    const observer = new ResizeObserver(() => {
-      dock.style.setProperty('--floor-tower-height', `${el.offsetHeight}px`)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-  return ref
-}
-
-/**
  * The collapsed list shows three floors and scrolls past that; keep the floor in
  * view scrolled into sight when it changes (from the map, the stack or stairs).
  */
@@ -103,14 +84,13 @@ function FloorTower({
   const tokens = useDungeonStore((state) => state.dungeon.players ?? [])
   const viewMode = useEditorStore((state) => state.viewMode)
   const setActiveFloor = useEditorStore((state) => state.setActiveFloor)
-  const tower = useShareTowerHeight()
   const list = useRef<HTMLDivElement>(null)
   useKeepActiveInView(list, activeId)
   const dm = viewMode !== 'player'
   const [renaming, setRenaming] = useState<string | null>(null)
 
   return (
-    <section ref={tower} className="panel floor-tower scroll-h" aria-label="Floors">
+    <section className="panel floor-tower scroll-h" aria-label="Floors">
       <FloorStack floors={floors} activeId={activeId} width={140} height={stackHeight(floors.length, 132)} />
       {floors.length === 0 ? (
         <p className="panel-empty">No revealed rooms</p>
@@ -174,15 +154,19 @@ function FloorTower({
       )}
       <div className="floor-tower-tools">
         {dm ? <FloorEdit floors={floors} activeId={activeId} layout="column" /> : null}
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={onExpand}
-          aria-label="Open floors and rooms"
-          title="Open floors and rooms"
-        >
-          <Icon id="chevronUp" size={17} />
-        </button>
+        <div className="floor-tower-nav">
+          {/* Only when a world map's pin leads to this battle map. */}
+          <WorldMapButton />
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onExpand}
+            aria-label="Open floors and rooms"
+            title="Open floors and rooms"
+          >
+            <Icon id="chevronUp" size={17} />
+          </button>
+        </div>
       </div>
     </section>
   )

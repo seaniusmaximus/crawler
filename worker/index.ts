@@ -178,10 +178,10 @@ async function maps(request: Request, room: DurableObjectStub<TableRoom>, rest: 
       if (request.method === 'POST') {
         const body = await jsonBody(request)
         const from = typeof body.from === 'string' ? body.from : null
-        return Response.json({ map: await room.createMap(cleanName(body.name, 'New map'), from) }, { status: 201 })
+        return Response.json({ map: await room.createMap(cleanName(body.name, 'New battle map'), from) }, { status: 201 })
       }
     } else if (request.method === 'PATCH') {
-      await room.renameMap(mapId, cleanName((await jsonBody(request)).name, 'Map'))
+      await room.renameMap(mapId, cleanName((await jsonBody(request)).name, 'Battle map'))
       return new Response(null, { status: 204 })
     } else if (request.method === 'DELETE') {
       await room.deleteMap(mapId)
