@@ -1,6 +1,6 @@
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { readPortraitFile } from '../../model/portrait.ts'
-import { initiativeLeader } from '../../model/combat.ts'
+import { initiativeLeader, initiativeOf } from '../../model/combat.ts'
 import { characterNameOf, companionOwner, isCharacter, playerStatuses } from '../../model/players.ts'
 import { formatSigned, initiativeBonus, normalizeStats, type CharacterStats } from '../../model/stats.ts'
 import { STATUS_EFFECTS } from '../../model/status.ts'
@@ -187,7 +187,9 @@ function StatBlock({ player }: { player: Player }) {
   const { editing, setEditing, commit } = useStatEditing(player)
   const companion = player.kind === 'companion'
   const dm = viewMode !== 'player' && role !== 'guest'
-  const leader = initiativeLeader(player, tokens ?? [])
+  // A companion on its owner's turn goes on their roll; a monster shares its kind's, which it can roll or set for them all.
+  const leader = companion ? initiativeLeader(player, tokens ?? []) : undefined
+  const initiative = initiativeOf(player, tokens ?? [])
 
   return (
     <aside
@@ -253,6 +255,7 @@ function StatBlock({ player }: { player: Player }) {
             editing={editing === 'initiativeRoll'}
             setEditing={setEditing}
             leader={leader}
+            rolled={initiative}
           />
           <StatTile label="Speed" unit={stats.speed != null ? 'ft' : undefined}>
             <EditableValue
@@ -288,12 +291,12 @@ function StatBlock({ player }: { player: Player }) {
               <button
                 type="button"
                 className="outline-btn"
-                disabled={!editable || player.initiativeRoll != null}
-                title={player.initiativeRoll != null ? `Rolled ${player.initiativeRoll}` : undefined}
-                onClick={() => rollInitiativeFor([player])}
+                disabled={!editable || initiative != null}
+                title={initiative != null ? `Rolled ${initiative}` : undefined}
+                onClick={() => rollInitiativeFor([initiativeLeader(player, tokens ?? []) ?? player])}
               >
                 <Icon id="d20" size={15} />
-                {player.initiativeRoll != null ? `Initiative ${player.initiativeRoll}` : 'Roll initiative'}
+                {initiative != null ? `Initiative ${initiative}` : 'Roll initiative'}
               </button>
             )}
             {/* Like a character, a companion is the DM's to remove. */}
@@ -501,6 +504,7 @@ function InitTile({
   editing,
   setEditing,
   leader,
+  rolled: shared,
 }: {
   player: Player
   stats: CharacterStats
@@ -509,8 +513,10 @@ function InitTile({
   setEditing: (key: 'initiativeRoll' | null) => void
   /** Whose turn a following companion takes; it goes on their roll. */
   leader?: Player
+  /** The count it goes on when that isn't its own roll, as for a monster sharing its kind's. */
+  rolled?: number | null
 }) {
-  const rolled = player.initiativeRoll
+  const rolled = shared !== undefined ? shared : player.initiativeRoll
   const bonus = initiativeBonus(stats)
   if (leader) {
     return (

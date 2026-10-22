@@ -154,11 +154,51 @@ export function tokenForRoll(
   )
 }
 
+/** "Goblin 3" is a Goblin, spawned third; a name with no number is the first. */
+function spawnParts(token: Player): { base: string; number: number } {
+  const name = nameOf(token).trim().replace(/\s+/g, ' ')
+  const match = /^(.*\S)\s+(\d+)$/.exec(name)
+  return match ? { base: match[1].toLowerCase(), number: Number(match[2]) } : { base: name.toLowerCase(), number: 1 }
+}
+
 /**
- * The party member a companion takes its turn with: its owner, while it follows
- * one still on the map. Undefined for everyone else, who rolls their own.
+ * What kind of monster a token is, going by its name without the spawn number,
+ * so every Goblin shares one; null for anything else. Blank "Monster 1"s are
+ * left apart, since they are yet to be made into anything.
+ */
+function monsterType(token: Player): string | null {
+  if (token.kind !== 'monster') return null
+  const { base } = spawnParts(token)
+  return base && base !== 'monster' ? base : null
+}
+
+/**
+ * Every monster of `token`'s kind, the one holding the group's turn first: one
+ * that has rolled, then the earliest spawned. Just the token when it has no kind.
+ */
+export function initiativeGroup(token: Player, tokens: readonly Player[]): Player[] {
+  const type = monsterType(token)
+  if (!type) return [token]
+  const members = tokens.filter((item) => monsterType(item) === type)
+  if (!members.some((item) => item.id === token.id)) members.push(token)
+  return members.sort(
+    (left, right) =>
+      Number(left.initiativeRoll == null) - Number(right.initiativeRoll == null) ||
+      spawnParts(left).number - spawnParts(right).number ||
+      left.id.localeCompare(right.id),
+  )
+}
+
+/**
+ * Whose turn a token takes instead of its own: a companion's owner, while it
+ * follows one still on the map, or the first of a monster's kind, since monsters
+ * of a kind all go on one count. Undefined for everyone else, who rolls their own.
  */
 export function initiativeLeader(token: Player, tokens: readonly Player[]): Player | undefined {
+  if (token.kind === 'monster') {
+    const leader = initiativeGroup(token, tokens)[0]
+    return leader && leader.id !== token.id ? leader : undefined
+  }
   if (token.kind !== 'companion' || !token.followsOwner || !token.ownerId) return undefined
   return tokens.find((item) => item.id === token.ownerId && item.kind !== 'monster' && item.kind !== 'companion')
 }
@@ -180,20 +220,21 @@ function byInitiative(left: Player, right: Player): number {
   return nameOf(left).localeCompare(nameOf(right))
 }
 
-/** Highest initiative first; a following companion sits right after its owner. */
+/** Highest initiative first; a following companion sits right after its owner, a monster after the first of its kind. */
 export function sortByInitiative(players: readonly Player[]): Player[] {
-  const followers = players.filter((token) => initiativeLeader(token, players))
+  const leaders = new Map(players.map((token) => [token.id, initiativeLeader(token, players)?.id]))
+  const followers = players.filter((token) => leaders.get(token.id))
   const ordered = players.filter((token) => !followers.includes(token)).sort(byInitiative)
   if (followers.length === 0) return ordered
   return ordered.flatMap((token) => [
     token,
     ...followers
-      .filter((follower) => follower.ownerId === token.id)
-      .sort((left, right) => nameOf(left).localeCompare(nameOf(right))),
+      .filter((follower) => leaders.get(follower.id) === token.id)
+      .sort((left, right) => nameOf(left).localeCompare(nameOf(right), undefined, { numeric: true })),
   ])
 }
 
-/** Who shares the turn: the token whose turn it is, and any companions that follow it. */
+/** Who shares the turn: the token whose turn it is, and any companions or monsters of its kind that go with it. */
 export function turnTokenIds(players: readonly Player[], turnPlayerId: string | null): Set<string> {
   const ids = new Set<string>()
   if (!turnPlayerId) return ids
@@ -204,14 +245,14 @@ export function turnTokenIds(players: readonly Player[], turnPlayerId: string | 
   return ids
 }
 
-/** Whose turn is next; following companions never hold the turn themselves. */
+/** Whose turn is next; following companions and monsters never hold the turn themselves. */
 export function nextTurnPlayerId(
   players: readonly Player[],
   currentId: string | null,
 ): string | null {
   const ordered = sortByInitiative(players).filter((token) => !initiativeLeader(token, players))
   if (ordered.length === 0) return null
-  // A companion that just started following hands the turn on from its owner's place.
+  // A token that just started following hands the turn on from its leader's place.
   const current = players.find((token) => token.id === currentId)
   const at = (current && initiativeLeader(current, players)?.id) ?? currentId
   const index = ordered.findIndex((player) => player.id === at)

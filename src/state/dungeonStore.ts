@@ -43,6 +43,7 @@ import {
 import {
   addMoved,
   emptyCombat,
+  initiativeGroup,
   nextTurnPlayerId,
   normalizeCombat,
   roundAfter,
@@ -1495,8 +1496,13 @@ export const useDungeonStore = create<DungeonState>((set, get) => ({
 
   setInitiativeRoll: (playerId, total) => {
     const dungeon = get().dungeon
-    const players = (dungeon.players ?? []).map((player) =>
-      player.id === playerId ? { ...player, initiativeRoll: normalizeInitiativeRoll(total) } : player,
+    const tokens = dungeon.players ?? []
+    const token = tokens.find((player) => player.id === playerId)
+    if (!token) return
+    // Monsters of a kind go on one roll, so it lands on all of them.
+    const group = new Set(initiativeGroup(token, tokens).map((player) => player.id))
+    const players = tokens.map((player) =>
+      group.has(player.id) ? { ...player, initiativeRoll: normalizeInitiativeRoll(total) } : player,
     )
     set({ dungeon: { ...dungeon, players: sortByInitiative(players) } })
   },

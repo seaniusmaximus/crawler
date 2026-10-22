@@ -53,7 +53,9 @@ export function TokensCard() {
   const nextId = turnPlayerId ? nextTurnPlayerId(tokens, turnPlayerId) : null
   const upNext = nextId && nextId !== turnPlayerId ? turnTokenIds(tokens, nextId) : new Set<string>()
   const hidden = allFoes.filter((foe) => foeSight(foe, floors, tokens) !== 'seen').length
-  const unrolledFoes = allFoes.filter((foe) => foe.initiativeRoll == null)
+  // Monsters of a kind go on one roll, so only the first of each counts.
+  const rollingFoes = allFoes.filter((foe) => !initiativeLeader(foe, tokens))
+  const unrolledFoes = rollingFoes.filter((foe) => foe.initiativeRoll == null)
   const [closed, setClosed] = useState<{ party: boolean; foes: boolean }>({ party: false, foes: false })
 
   function addPlayer(): void {
@@ -102,7 +104,7 @@ export function TokensCard() {
             onToggle={() => setClosed({ ...closed, foes: !closed.foes })}
             meta={dm && allFoes.length > 0 ? `${allFoes.length - hidden} seen · ${hidden} hidden` : undefined}
             action={
-              canRun && unrolledFoes.length > 0 && unrolledFoes.length < allFoes.length ? (
+              canRun && unrolledFoes.length > 0 && unrolledFoes.length < rollingFoes.length ? (
                 <button
                   type="button"
                   className="text-btn token-section-action"
@@ -118,9 +120,9 @@ export function TokensCard() {
             {foes.length === 0 ? (
               <p className="panel-empty">Add a monster — it starts Invisible; clear that and players see it once they can see into its room</p>
             ) : dm ? (
-              foes.map((foe) => <TokenRow key={foe.id} player={foe} turn={turnPlayerId === foe.id} next={upNext.has(foe.id)} />)
+              foes.map((foe) => <TokenRow key={foe.id} player={foe} turn={onTurn.has(foe.id)} next={upNext.has(foe.id)} />)
             ) : (
-              foes.map((foe) => <FoeGlimpse key={foe.id} foe={foe} turn={turnPlayerId === foe.id} next={upNext.has(foe.id)} />)
+              foes.map((foe) => <FoeGlimpse key={foe.id} foe={foe} turn={onTurn.has(foe.id)} next={upNext.has(foe.id)} />)
             )}
           </TokenSection>
         ) : null}
@@ -278,7 +280,8 @@ function TokenRow({ player, turn, next }: { player: Player; turn: boolean; next:
   const monster = player.kind === 'monster'
   const companion = player.kind === 'companion'
   const owner = companion ? companionOwner(player, tokens ?? []) : undefined
-  const leader = initiativeLeader(player, tokens ?? [])
+  // A monster going with the rest of its kind shows their shared count; only a companion is linked and tucked under its owner.
+  const leader = companion ? initiativeLeader(player, tokens ?? []) : undefined
   const initiative = initiativeOf(player, tokens ?? [])
   const visible = player.visible === true
   const dm = viewMode !== 'player'
